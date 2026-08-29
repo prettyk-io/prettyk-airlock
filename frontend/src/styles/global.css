@@ -1,0 +1,81 @@
+/* ── COS-020: CSS Style Boundaries — Global CSS Variables ──
+ *
+ * Обе поверхности (Control Station + Web IDE) читают ОДНИ CSS-переменные.
+ * Preflight ОТКЛЮЧЕН глобально — включается точечно в scoped-файлах.
+ *
+ * Meta Light — дефолтная тема для Control Station.
+ * Meta Dark — переключаемый режим (toggle в CosmoThemeProvider).
+ */
+
+:root {
+  /* ── Typography ── */
+  --cosmo-font: 'Golos UI', 'Inter', system-ui, sans-serif;
+  --cosmo-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* ── Meta Light (default) ── */
+  --cosmo-bg-primary: #FFFFFF;
+  --cosmo-bg-secondary: #F8FAFC;
+  --cosmo-bg-tertiary: #F1F5F9;
+  --cosmo-text-primary: #0F172A;
+  --cosmo-text-secondary: #475569;
+  --cosmo-text-tertiary: #94A3B8;
+  --cosmo-accent: #0EA5E9;
+  --cosmo-accent-hover: #0284C7;
+  --cosmo-success: #22C55E;
+  --cosmo-warning: #F59E0B;
+  --cosmo-error: #EF4444;
+  --cosmo-border: #E2E8F0;
+  --cosmo-divider: #CBD5E1;
+
+  /* ── Meta Dark palette ── */
+  --cosmo-dark-bg: #0F172A;
+  --cosmo-dark-bg-secondary: #1E293B;
+  --cosmo-dark-bg-tertiary: #334155;
+  --cosmo-dark-text: #E2E8F0;
+  --cosmo-dark-text-secondary: #94A3B8;
+  --cosmo-dark-border: #334155;
+
+  /* ── IDE Dark palette ── */
+  --ide-bg: #070B14;
+  --ide-bg-secondary: #0A0E1A;
+  --ide-bg-tertiary: #111827;
+  --ide-text: #E2E8F0;
+  --ide-text-secondary: #94A3B8;
+  --ide-accent: #22D3EE;
+  --ide-accent-hover: #06B6D4;
+  --ide-border: #1E293B;
+  --ide-border-active: #334155;
+
+  /* ── PK Status Tokens (shared) ── */
+  --pk-status-passed: #10B981;
+  --pk-status-failed: #EF4444;
+  --pk-status-blocked: #F59E0B;
+  --pk-status-running: #06B6D4;
+  --pk-status-draft: #94A3B8;
+
+  /* ── Surface Canvas Tokens ── */
+  --pk-bg-canvas-light: #F8FAFC;
+  --pk-bg-surface-light: #FFFFFF;
+  --pk-border-subtle-light: #CBD5E1;
+  --pk-bg-canvas-dark: #090D16;
+  --pk-bg-surface-dark: #111827;
+  --pk-border-subtle-dark: #1F2937;
+}
+
+/* ── Minimal global reset (БЕЗ Preflight) ── */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  font-family: var(--cosmo-font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--cosmo-bg-primary);
+  color: var(--cosmo-text-primary);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}

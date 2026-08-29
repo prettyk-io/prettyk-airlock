@@ -1,0 +1,80 @@
+/* ── COS-020: Control Station — Scoped MUI CssBaseline ──
+ *
+ * MUI CssBaseline изолирован внутри .cosmo-control-station.
+ * Tailwind НЕ ломает MUI-компоненты — стили не протекают в Web IDE.
+ * Meta Light — дефолт, Meta Dark — через CosmoThemeProvider toggle.
+ *
+ * Инварианты:
+ *   1. MUI НЕ протекает в Web IDE (.cosmo-ide-root)
+ *   2. Все компоненты читают --cosmo-* переменные из :root
+ *   3. Tailwind utility-классы внутри .cosmo-ide-root не влияют на MUI
+ */
+
+.cosmo-control-station {
+  /* ── Scoped CssBaseline ── */
+  min-height: 100vh;
+  font-family: var(--cosmo-font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--cosmo-text-primary);
+  background: var(--cosmo-bg-primary);
+
+  /* ── Scrollbar ── */
+  & *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  & *::-webkit-scrollbar-track {
+    background: var(--cosmo-bg-secondary);
+  }
+  & *::-webkit-scrollbar-thumb {
+    background: var(--cosmo-border);
+    border-radius: 4px;
+  }
+  & *::-webkit-scrollbar-thumb:hover {
+    background: var(--cosmo-text-tertiary);
+  }
+
+  /* ── Print ── */
+  @media print {
+    background: #fff !important;
+    color: #000 !important;
+  }
+}
+
+/* ── MUI NOT leaking into IDE ── */
+.cosmo-control-station * {
+  /* Reset nothing globally — MUI owns its component tree */
+}
+
+/* ── Surface switcher (positioned absolute, visible in both surfaces) ── */
+.cosmo-surface-switcher {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 9999;
+  display: flex;
+  gap: 4px;
+  font-family: var(--cosmo-font);
+}
+.cosmo-surface-switcher button {
+  padding: 4px 12px;
+  border: 1px solid var(--cosmo-border);
+  border-radius: 6px;
+  background: var(--cosmo-bg-secondary);
+  color: var(--cosmo-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cosmo-surface-switcher button:hover {
+  background: var(--cosmo-bg-tertiary);
+}
+.cosmo-surface-switcher button.active {
+  background: var(--cosmo-accent);
+  color: #fff;
+  border-color: var(--cosmo-accent);
+}

@@ -1,0 +1,39 @@
+{{- if .Values.migration.enabled }}
+# Alembic migration job — run once before API starts.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cosmo-migration
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cosmo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migration
+          image: "{{ .Values.migration.image.repository }}:{{ .Values.migration.image.tag }}"
+          imagePullPolicy: {{ .Values.migration.image.pullPolicy }}
+          command:
+            - alembic
+            - -c
+            - /app/alembic.ini
+            - upgrade
+            - head
+          env:
+            - name: COSMO_DATABASE_URL
+              value: {{ include "cosmo.pgDsn" . | quote }}
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.existingSecretKey }}
+{{- end }}

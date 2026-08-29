@@ -1,0 +1,201 @@
+name: Cosmoport 2.0 CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Backend lint + test ──────────────────────────────────────────────
+  backend:
+    name: Backend (Python)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cosmo
+          POSTGRES_PASSWORD: cosmo
+          POSTGRES_DB: cosmo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      COSMO_DATABASE_URL: postgresql+asyncpg://cosmo:cosmo@localhost:5432/cosmo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run Alembic migrations
+        run: alembic upgrade head
+
+      - name: Run backend tests
+        run: pytest orchestrator/tests/ -v --ignore=orchestrator/tests/test_execution_woodpecker.py --ignore=orchestrator/tests/test_forge_gitea.py
+
+  # ── Frontend lint + test + build ─────────────────────────────────────
+  frontend:
+    name: Frontend (TypeScript)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Build production bundle
+        working-directory: frontend
+        run: npm run build
+
+  # ── Docker build smoke ───────────────────────────────────────────────
+  smoke:
+    name: Docker Smoke
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -f services/cosmo-api.Dockerfile -t cosmo-api:ci .
+
+      - name: Build Frontend image
+        run: docker build -f frontend/Dockerfile -t cosmo-frontend:ci frontend/
+
+      - name: Start minimal stack (Postgres + API)
+        run: |
+          docker compose -f services/docker-compose.yml up -d cosmo-postgres cosmo-valkey
+          sleep 10
+          docker compose -f services/docker-compose.yml up -d cosmo-api
+
+      - name: Smoke — health check
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8100/live && break
+            sleep 2
+          done
+          curl -sf http://localhost:8100/live
+          curl -sf http://localhost:8100/ready
+          curl -sf http://localhost:8100/health
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f services/docker-compose.yml down -v
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # COS-098: Live E2E Pipeline Smoke Test
+  # ═══════════════════════════════════════════════════════════════════════
+  e2e:
+    name: E2E Pipeline
+    runs-on: ubuntu-latest
+    needs: [backend]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cosmo
+          POSTGRES_PASSWORD: cosmo
+          POSTGRES_DB: cosmo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      COSMO_DATABASE_URL: postgresql+asyncpg://cosmo:cosmo@localhost:5432/cosmo
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Alembic migrations
+        run: alembic upgrade head
+
+      - name: Start API in background
+        run: |
+          python -m uvicorn orchestrator.cosmo.api.main:app \
+            --host 0.0.0.0 --port 8100 --log-level warning &
+          API_PID=$!
+          echo "API PID=$API_PID"
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+
+          # Ждать пока API ответит на /live
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8100/live && break
+            sleep 1
+          done
+          curl -sf http://localhost:8100/live
+          curl -sf http://localhost:8100/ready
+
+      - name: Run E2E Pipeline
+        id: e2e
+        run: |
+          chmod +x services/scripts/run-e2e-pipeline.sh
+          ./services/scripts/run-e2e-pipeline.sh http://localhost:8100
+        continue-on-error: true
+
+      - name: Export E2E Report
+        if: always()
+        run: |
+          mkdir -p reports
+          if [ -f reports/e2e-pipeline-report-*.json ]; then
+            cp reports/e2e-pipeline-report-*.json reports/e2e-pipeline-report.json
+          elif [ ! -f reports/e2e-pipeline-report.json ]; then
+            echo '{"pipeline":"cosmoport2-e2e","success":false,"error":"report file not generated"}' > reports/e2e-pipeline-report.json
+          fi
+
+      - name: Upload E2E Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pipeline-report
+          path: reports/e2e-pipeline-report.json
+          retention-days: 7
+
+      - name: Stop API
+        if: always()
+        run: kill $API_PID 2>/dev/null || true

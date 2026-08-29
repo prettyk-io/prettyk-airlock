@@ -1,0 +1,119 @@
+# Cosmoport 2.0 — Helm chart values
+
+# ── Namespace ──
+namespace: cosmo-system
+
+# ── Global labels ──
+global:
+  labels:
+    app.kubernetes.io/part-of: cosmoport
+
+# ── API (FastAPI) ──
+api:
+  enabled: true
+  replicas: 2
+  image:
+    repository: cosmo-api
+    tag: local
+    pullPolicy: IfNotPresent
+  service:
+    port: 8100
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+  env:
+    PK_DEPLOY_PROFILE: production
+    PK_MINIO_URL: http://cosmo-minio:9000
+  health:
+    livenessPath: /live
+    readinessPath: /ready
+    port: 8100
+
+# ── Frontend (nginx SPA) ──
+frontend:
+  enabled: true
+  replicas: 2
+  image:
+    repository: cosmo-frontend
+    tag: local
+    pullPolicy: IfNotPresent
+  service:
+    port: 80
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 200m
+
+# ── Ingress / Caddy ──
+ingress:
+  enabled: true
+  host: cosmoport.local
+  tls:
+    enabled: false
+    secretName: cosmo-tls
+
+# ── Postgres (external reference) ──
+postgres:
+  host: cosmo-postgres.cosmo-infra.svc.cluster.local
+  port: 5432
+  user: cosmo
+  database: cosmo
+  # Password from secret reference — never plaintext in values.
+  existingSecret: cosmo-postgres-credentials
+  existingSecretKey: password
+
+# ── Valkey (external reference) ──
+valkey:
+  host: cosmo-valkey.cosmo-infra.svc.cluster.local
+  port: 6379
+
+# ── MinIO (external reference) ──
+minio:
+  endpoint: cosmo-minio.cosmo-infra.svc.cluster.local
+  port: 9000
+  existingSecret: cosmo-minio-credentials
+  existingSecretKey:
+    accessKey: accesskey
+    secretKey: secretkey
+
+# ── Migration job ──
+migration:
+  enabled: true
+  image:
+    repository: cosmo-api
+    tag: local
+  backoffLimit: 3
+
+# ── Network policy ──
+networkPolicy:
+  enabled: true
+  # Разрешён только трафик внутри cosmo-system + ingress от контроллера.
+  ingressNamespaces:
+    - ingress-nginx
+    - kube-system
+
+# ── Service account ──
+serviceAccount:
+  create: true
+  name: cosmo-controller
+
+# ── RBAC ──
+rbac:
+  create: true
+
+# ── ConfigMap — общие переменные окружения ──
+configmap:
+  PK_DEPLOY_PROFILE: production
+  PK_MINIO_URL: http://cosmo-minio:9000
+
+# ── Node selector / tolerations ──
+nodeSelector: {}
+tolerations: []
+affinity: {}

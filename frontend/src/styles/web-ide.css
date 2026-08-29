@@ -1,0 +1,158 @@
+/* ── COS-020: Web IDE — Scoped Tailwind Preflight ──
+ *
+ * Tailwind Preflight изолирован внутри .cosmo-ide-root.
+ * MUI НЕ протекает в Web IDE — стили заперты внутри этого scope.
+ * Обе поверхности читают --cosmo-* переменные из :root.
+ *
+ * Инварианты:
+ *   1. Tailwind Preflight НЕ ломает MUI (preflight только внутри .cosmo-ide-root)
+ *   2. MUI НЕ протекает в Web IDE
+ *   3. IDE-специфичные цвета — только через --ide-* переменные
+ */
+
+.cosmo-ide-root {
+  /* ── Tailwind Preflight (scoped) ── */
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  -moz-tab-size: 4;
+  tab-size: 4;
+  font-family: var(--cosmo-font);
+  font-feature-settings: normal;
+  font-variation-settings: normal;
+  min-height: 100vh;
+  background: var(--ide-bg);
+  color: var(--ide-text);
+}
+
+/* ── Preflight: block-level elements ── */
+.cosmo-ide-root hr {
+  height: 0;
+  color: inherit;
+  border-top-width: 1px;
+}
+
+.cosmo-ide-root abbr[title] {
+  text-decoration: underline dotted;
+}
+
+.cosmo-ide-root h1,
+.cosmo-ide-root h2,
+.cosmo-ide-root h3,
+.cosmo-ide-root h4,
+.cosmo-ide-root h5,
+.cosmo-ide-root h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.cosmo-ide-root a {
+  color: inherit;
+  text-decoration: inherit;
+}
+
+.cosmo-ide-root b,
+.cosmo-ide-root strong {
+  font-weight: bolder;
+}
+
+.cosmo-ide-root small {
+  font-size: 80%;
+}
+
+.cosmo-ide-root sub,
+.cosmo-ide-root sup {
+  font-size: 75%;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+.cosmo-ide-root sub { bottom: -0.25em; }
+.cosmo-ide-root sup { top: -0.5em; }
+
+/* ── Preflight: media ── */
+.cosmo-ide-root img,
+.cosmo-ide-root svg,
+.cosmo-ide-root video,
+.cosmo-ide-root canvas,
+.cosmo-ide-root audio,
+.cosmo-ide-root iframe,
+.cosmo-ide-root embed,
+.cosmo-ide-root object {
+  display: block;
+  vertical-align: middle;
+}
+
+/* ── Preflight: forms ── */
+.cosmo-ide-root input,
+.cosmo-ide-root button,
+.cosmo-ide-root textarea,
+.cosmo-ide-root select {
+  font: inherit;
+  color: inherit;
+}
+
+.cosmo-ide-root ::placeholder {
+  opacity: 1;
+  color: var(--ide-text-secondary);
+}
+
+.cosmo-ide-root button,
+.cosmo-ide-root [role="button"] {
+  cursor: pointer;
+}
+
+.cosmo-ide-root :disabled {
+  cursor: default;
+}
+
+/* ── Preflight: lists ── */
+.cosmo-ide-root ol,
+.cosmo-ide-root ul,
+.cosmo-ide-root menu {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── IDE-specific base styles ── */
+.cosmo-ide-root {
+  /* Контейнер IDE: флекс, без скролла на body */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cosmo-ide-root code,
+.cosmo-ide-root pre,
+.cosmo-ide-root kbd,
+.cosmo-ide-root samp {
+  font-family: var(--cosmo-font-mono);
+  font-size: 1em;
+}
+
+.cosmo-ide-root pre {
+  margin: 0;
+  overflow: auto;
+}
+
+.cosmo-ide-root table {
+  text-indent: 0;
+  border-collapse: collapse;
+  border-color: inherit;
+}
+
+/* ── Scrollbar (dark) ── */
+.cosmo-ide-root *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.cosmo-ide-root *::-webkit-scrollbar-track {
+  background: var(--ide-bg-secondary);
+}
+.cosmo-ide-root *::-webkit-scrollbar-thumb {
+  background: var(--ide-border);
+  border-radius: 4px;
+}
+.cosmo-ide-root *::-webkit-scrollbar-thumb:hover {
+  background: var(--ide-border-active);
+}

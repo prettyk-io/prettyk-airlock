@@ -1,0 +1,16 @@
+apiVersion: v2
+name: cosmo
+description: Cosmoport 2.0 — Sovereign Run Control Plane (Helm chart)
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+keywords:
+  - cosmoport
+  - ci-cd
+  - security
+  - pipeline
+  - airgap
+home: https://prettyk.io
+maintainers:
+  - name: PrettyK Team
+    email: dev@prettyk.io

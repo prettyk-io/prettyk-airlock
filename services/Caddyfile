@@ -1,0 +1,121 @@
+# Cosmoport 2.0 — Caddy reverse proxy with rate limiting
+#
+# Single entry point :80. All upstream services are internal DNS (cosmo-net).
+# WebSocket and SSE passthrough — preserved for telemetry streams.
+#
+# Rate Limiting (COS-067):
+#   - Health probes (/live, /ready, /health) + /metrics: UNLIMITED
+#   - /api/*: 100 req/min per client IP → HTTP 429
+#   - Frontend + Forge + Artifacts: UNLIMITED
+#
+# Profiles:
+#   local:        HTTP on :80
+#   production:   real hostname, ACME/internal CA per customer policy
+#   airgap:       pre-issued certificate or internal CA, no ACME external
+
+# ── Ordering contract (ЖЕЛЕЗОБЕТОН) ────────────────────────────────────
+# Route blocks are evaluated top-to-bottom. Health/metrics MUST be first
+# so they skip the rate-limited /api/* block below.
+
+# ── Local dev profile (HTTP) ──────────────────────────────────────────
+
+:80 {
+    # ── Health endpoints (NO rate limit) ────────────────────────────
+    handle /live {
+        reverse_proxy cosmo-api:8100
+    }
+    handle /ready {
+        reverse_proxy cosmo-api:8100
+    }
+    handle /health {
+        reverse_proxy cosmo-api:8100
+    }
+
+    # ── Metrics (NO rate limit — Prometheus scrapes) ────────────────
+    handle /metrics {
+        reverse_proxy cosmo-api:8100
+    }
+
+    # ── API: /api* → cosmo-api:8100 (RATE-LIMITED: 100 req/min/IP) ─
+    # COS-067: Caddy built-in rate_limit with zone per remote_host.
+    # Health/metrics are handled above, so they never reach this block.
+    # Using handle (not handle_path): preserve full /api/v1/... path for FastAPI.
+    handle /api* {
+        rate_limit {
+            zone api-rate {
+                key {remote_host}
+                events 100
+                window 1m
+            }
+        }
+
+        reverse_proxy cosmo-api:8100 {
+            header_up X-Forwarded-Proto http
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # ── /forge/* → Gitea (strip prefix: /forge → /) ────────────────
+    handle /forge/* {
+        uri strip_prefix /forge
+        reverse_proxy cosmo-gitea:3000 {
+            header_up X-Forwarded-Proto http
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # ── /artifacts/* → MinIO S3 API (strip prefix) ──────────────────
+    handle /artifacts/* {
+        uri strip_prefix /artifacts
+        reverse_proxy cosmo-minio:9000 {
+            header_up X-Forwarded-Proto http
+        }
+    }
+
+    # ── /* → Cosmo Frontend (SPA) ────────────────────────────────────
+    handle {
+        reverse_proxy cosmo-frontend:80 {
+            header_up X-Forwarded-Proto http
+            header_up X-Forwarded-Host {host}
+        }
+    }
+}
+
+# ── Production profile — uncomment and set real hostname ────────────────
+# prettyk.io {
+#     # Health + Metrics (unlimited)
+#     handle /live          { reverse_proxy cosmo-api:8100 }
+#     handle /ready         { reverse_proxy cosmo-api:8100 }
+#     handle /health        { reverse_proxy cosmo-api:8100 }
+#     handle /metrics       { reverse_proxy cosmo-api:8100 }
+#
+#     # API (rate-limited)
+#     handle /api* {
+#         rate_limit { zone api-rate { key {remote_host}; events 100; window 1m } }
+#         reverse_proxy cosmo-api:8100
+#     }
+#
+#     handle /forge/*      { uri strip_prefix /forge; reverse_proxy cosmo-gitea:3000 }
+#     handle /artifacts/*  { uri strip_prefix /artifacts; reverse_proxy cosmo-minio:9000 }
+#     handle               { reverse_proxy cosmo-frontend:80 }
+# }
+
+# ── Airgap profile — pre-issued cert, no ACME ───────────────────────────
+# :443 {
+#     tls /etc/caddy/certs/cosmo.crt /etc/caddy/certs/cosmo.key
+#     # Health + Metrics (unlimited)
+#     handle /live          { reverse_proxy cosmo-api:8100 }
+#     handle /ready         { reverse_proxy cosmo-api:8100 }
+#     handle /health        { reverse_proxy cosmo-api:8100 }
+#     handle /metrics       { reverse_proxy cosmo-api:8100 }
+#
+#     # API (rate-limited)
+#     handle /api* {
+#         rate_limit { zone api-rate { key {remote_host}; events 100; window 1m } }
+#         reverse_proxy cosmo-api:8100
+#     }
+#
+#     handle /forge/*      { uri strip_prefix /forge; reverse_proxy cosmo-gitea:3000 }
+#     handle /artifacts/*  { uri strip_prefix /artifacts; reverse_proxy cosmo-minio:9000 }
+#     handle               { reverse_proxy cosmo-frontend:80 }
+# }

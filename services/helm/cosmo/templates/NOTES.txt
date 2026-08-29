@@ -1,0 +1,45 @@
+=== Cosmoport 2.0 Helm Chart ===
+
+Version: {{ .Chart.Version }}
+App:     {{ .Chart.AppVersion }}
+
+1. Установить:
+
+    helm upgrade --install cosmo ./services/helm/cosmo \
+      --namespace cosmo-system \
+      --create-namespace
+
+2. Проверить статус:
+
+    kubectl get pods -n cosmo-system
+    kubectl get svc -n cosmo-system
+    kubectl get ingress -n cosmo-system
+
+3. Миграции выполняются автоматически (pre-install/pre-upgrade hook).
+
+4. После деплоя:
+
+    curl http://{{ .Values.ingress.host }}/api/live
+    curl http://{{ .Values.ingress.host }}/api/ready
+
+5. Secrets (создать до helm install):
+
+    kubectl create secret generic {{ .Values.postgres.existingSecret }} \
+      --from-literal={{ .Values.postgres.existingSecretKey }}=<password> \
+      -n cosmo-system
+
+    kubectl create secret generic {{ .Values.minio.existingSecret }} \
+      --from-literal={{ .Values.minio.existingSecretKey.accessKey }}=<key> \
+      --from-literal={{ .Values.minio.existingSecretKey.secretKey }}=<secret> \
+      -n cosmo-system
+
+6. Airgap (образы загружены в закрытый реестр):
+
+    helm upgrade --install cosmo ./services/helm/cosmo \
+      --namespace cosmo-system \
+      --set api.image.repository=registry.airgap.local/cosmo-api \
+      --set api.image.tag=0.2.0 \
+      --set frontend.image.repository=registry.airgap.local/cosmo-frontend \
+      --set frontend.image.tag=0.2.0 \
+      --set migration.image.repository=registry.airgap.local/cosmo-api \
+      --set migration.image.tag=0.2.0

@@ -1,0 +1,92 @@
+/* ── COS-020: CSS Style Boundaries ──
+ *
+ * Two-surface isolation in one SPA:
+ *   .cosmo-control-station → MUI CssBaseline (Meta Light/Dark)
+ *   .cosmo-ide-root          → Tailwind Preflight (dark IDE default)
+ *
+ * Preflight ОТКЛЮЧЕН глобально — включен только внутри .cosmo-ide-root.
+ * CSS-переменные --cosmo-* доступны в обоих контекстах.
+ */
+
+/* ── Корень: сброс по минимуму, без полного Preflight ── */
+:root {
+  --cosmo-font: 'Golos UI', 'Inter', system-ui, sans-serif;
+  --cosmo-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Meta Light palette (default) */
+  --cosmo-bg-primary: #FFFFFF;
+  --cosmo-bg-secondary: #F8FAFC;
+  --cosmo-bg-tertiary: #F1F5F9;
+  --cosmo-text-primary: #0F172A;
+  --cosmo-text-secondary: #475569;
+  --cosmo-text-tertiary: #94A3B8;
+  --cosmo-accent: #0EA5E9;
+  --cosmo-accent-hover: #0284C7;
+  --cosmo-success: #22C55E;
+  --cosmo-warning: #F59E0B;
+  --cosmo-error: #EF4444;
+  --cosmo-border: #E2E8F0;
+  --cosmo-divider: #CBD5E1;
+
+  /* Meta Dark palette */
+  --cosmo-dark-bg: #0F172A;
+  --cosmo-dark-bg-secondary: #1E293B;
+  --cosmo-dark-text: #E2E8F0;
+
+  /* IDE dark palette */
+  --ide-bg: #070B14;
+  --ide-bg-secondary: #0A0E1A;
+  --ide-text: #E2E8F0;
+  --ide-text-secondary: #94A3B8;
+  --ide-accent: #22D3EE;
+  --ide-border: #1E293B;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  font-family: var(--cosmo-font);
+  background: var(--cosmo-bg-primary);
+  color: var(--cosmo-text-primary);
+}
+
+/* ── Control Station: MUI CssBaseline — НЕ сбрасывает Preflight ── */
+.cosmo-control-station {
+  min-height: 100vh;
+  font-family: var(--cosmo-font);
+}
+
+/* ── Web IDE root: Tailwind Preflight + dark default ── */
+.cosmo-ide-root {
+  min-height: 100vh;
+  font-family: var(--cosmo-font);
+  background: var(--ide-bg);
+  color: var(--ide-text);
+}
+
+/* ── Surface switcher ── */
+.cosmo-surface-switcher {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 9999;
+  display: flex;
+  gap: 4px;
+}
+.cosmo-surface-switcher button {
+  padding: 4px 12px;
+  border: 1px solid var(--cosmo-border);
+  border-radius: 6px;
+  background: var(--cosmo-bg-secondary);
+  color: var(--cosmo-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cosmo-surface-switcher button.active {
+  background: var(--cosmo-accent);
+  color: #fff;
+  border-color: var(--cosmo-accent);
+}

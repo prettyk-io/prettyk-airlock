@@ -1,0 +1,40 @@
+{{- if .Values.ingress.enabled }}
+# Cosmo Ingress — Caddy (сохраняет WebSocket + SSE).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cosmo-ingress
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cosmo.labels" . | nindent 4 }}
+  annotations:
+    # Caddy ingress annotations
+    caddy.ingress.kubernetes.io/rewrite-to: /
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: cosmo-api
+                port:
+                  number: {{ .Values.api.service.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cosmo-frontend
+                port:
+                  number: {{ .Values.frontend.service.port }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+{{- end }}

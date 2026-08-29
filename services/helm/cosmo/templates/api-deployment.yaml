@@ -1,0 +1,77 @@
+# Cosmo API deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cosmo-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cosmo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  replicas: {{ .Values.api.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "cosmo.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "cosmo.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.api.service.port }}
+              name: http
+          env:
+            - name: PK_DEPLOY_PROFILE
+              value: {{ .Values.api.env.PK_DEPLOY_PROFILE | quote }}
+            - name: PK_MINIO_URL
+              value: {{ .Values.api.env.PK_MINIO_URL | quote }}
+            - name: PK_VALKEY_HOST
+              value: {{ .Values.valkey.host | quote }}
+            - name: PK_VALKEY_PORT
+              value: {{ .Values.valkey.port | quote }}
+            - name: COSMO_DATABASE_URL
+              value: {{ include "cosmo.pgDsn" . | quote }}
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.existingSecretKey }}
+            - name: PK_MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.minio.existingSecret }}
+                  key: {{ .Values.minio.existingSecretKey.accessKey }}
+            - name: PK_MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.minio.existingSecret }}
+                  key: {{ .Values.minio.existingSecretKey.secretKey }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.api.health.livenessPath }}
+              port: {{ .Values.api.health.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.api.health.readinessPath }}
+              port: {{ .Values.api.health.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10

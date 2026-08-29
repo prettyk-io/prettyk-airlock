@@ -1,0 +1,1 @@
+export { CosmoThemeProvider, useCosmoTheme } from './CosmoThemeProvider';

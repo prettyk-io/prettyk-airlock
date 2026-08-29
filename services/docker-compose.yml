@@ -1,0 +1,274 @@
+# Cosmoport 2.0 — Docker Compose (10 services)
+#
+# Отдельный Cosmo-контур. Сеть cosmo-net, собственные инстансы PG/Valkey/MinIO.
+# НЕ зависит от Pure Box pk-net и не разделяет с ним инфраструктуру.
+#
+# Порты (local/dev profile):
+#   5432 — cosmo-postgres    (диагностика)
+#   6379 — cosmo-valkey       (диагностика)
+#   8200 — cosmo-openbao      (диагностика)
+#   9000 — cosmo-minio S3     (API)
+#   9001 — cosmo-minio Console (управление, не публиковать в prod)
+#   3000 — cosmo-gitea        (forge)
+#   8000 — cosmo-woodpecker   (CI server)
+#   8100 — cosmo-api          (FastAPI)
+#   5173 — cosmo-frontend     (Vite dev / built SPA)
+#   443  — cosmo-caddy        (HTTP/3 reverse proxy, single entry point)
+#
+# В production наружу — только :443.
+#
+# Запуск:
+#   docker compose -f docker-compose.yml up -d
+
+services:
+  # ── Infra (Persistence layer) ────────────────────────────────────────
+
+  cosmo-postgres:
+    image: postgres:16-alpine
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${COSMO_PG_USER:-cosmo}
+      POSTGRES_PASSWORD: ${COSMO_PG_PASSWORD:-cosmo}
+      POSTGRES_DB: ${COSMO_PG_DB:-cosmo}
+    volumes:
+      - cosmo_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${COSMO_PG_USER:-cosmo} -d ${COSMO_PG_DB:-cosmo}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  cosmo-valkey:
+    image: valkey/valkey:8-alpine
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-valkey
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: valkey-server --save 60 1 --loglevel warning
+    volumes:
+      - cosmo_valkey:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  cosmo-openbao:
+    image: openbao/openbao:2.2
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-openbao
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${COSMO_BAO_ROOT_TOKEN:-cosmo-bao-root-dev}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://0.0.0.0:8200
+    volumes:
+      - cosmo_openbao:/vault/data
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  cosmo-minio:
+    image: minio/minio:RELEASE.2025-03-12T18-04-18Z
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${COSMO_MINIO_USER:-cosmo}
+      MINIO_ROOT_PASSWORD: ${COSMO_MINIO_PASSWORD:-cosmo-minio-dev}
+    volumes:
+      - cosmo_minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Forge + CI ────────────────────────────────────────────────────────
+
+  cosmo-gitea:
+    image: gitea/gitea:1.22.6
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-gitea
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: cosmo-postgres
+      GITEA__database__NAME: cosmo_gitea
+      GITEA__database__USER: ${COSMO_PG_USER:-cosmo}
+      GITEA__database__PASSWD: ${COSMO_PG_PASSWORD:-cosmo}
+    volumes:
+      - cosmo_gitea:/data
+    depends_on:
+      cosmo-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/version"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  cosmo-woodpecker:
+    image: woodpeckerci/woodpecker-server:v3.5
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-woodpecker
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      WOODPECKER_OPEN: "true"
+      WOODPECKER_GITEA: "true"
+      WOODPECKER_GITEA_URL: http://cosmo-gitea:3000
+      WOODPECKER_HOST: http://cosmo-woodpecker:8000
+      WOODPECKER_DATABASE_DRIVER: postgres
+      WOODPECKER_DATABASE_DATASOURCE: postgres://${COSMO_PG_USER:-cosmo}:${COSMO_PG_PASSWORD:-cosmo}@cosmo-postgres:5432/cosmo_woodpecker?sslmode=disable
+    volumes:
+      - cosmo_woodpecker:/var/lib/woodpecker
+    depends_on:
+      cosmo-postgres:
+        condition: service_healthy
+      cosmo-gitea:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  cosmo-woodpecker-agent:
+    image: woodpeckerci/woodpecker-agent:v3.5
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-woodpecker-agent
+    restart: unless-stopped
+    environment:
+      WOODPECKER_SERVER: cosmo-woodpecker:9000
+      WOODPECKER_AGENT_SECRET: ${COSMO_WOODPECKER_AGENT_SECRET:-dev-agent-secret-change-me}
+      WOODPECKER_MAX_WORKFLOWS: "4"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      cosmo-woodpecker:
+        condition: service_healthy
+
+  # ── Application layer ──────────────────────────────────────────────────
+
+  cosmo-api:
+    build:
+      context: ..
+      dockerfile: services/cosmo-api.Dockerfile
+    image: cosmo-api:local
+    container_name: cosmo-api
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+    environment:
+      PK_DEPLOY_PROFILE: local
+      COSMO_DATABASE_URL: postgresql+asyncpg://${COSMO_PG_USER:-cosmo}:${COSMO_PG_PASSWORD:-cosmo}@cosmo-postgres:5432/${COSMO_PG_DB:-cosmo}
+      PK_PG_DSN: postgresql+asyncpg://${COSMO_PG_USER:-cosmo}:${COSMO_PG_PASSWORD:-cosmo}@cosmo-postgres:5432/${COSMO_PG_DB:-cosmo}
+      PK_VALKEY_HOST: cosmo-valkey
+      PK_VALKEY_PORT: "6379"
+      PK_GITEA_URL: http://cosmo-gitea:3000
+      PK_WOODPECKER_URL: http://cosmo-woodpecker:8000
+      PK_MINIO_URL: http://cosmo-minio:9000
+      PK_MINIO_ACCESS_KEY: ${COSMO_MINIO_USER:-cosmo}
+      PK_MINIO_SECRET_KEY: ${COSMO_MINIO_PASSWORD:-cosmo-minio-dev}
+    depends_on:
+      cosmo-postgres:
+        condition: service_healthy
+      cosmo-valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  cosmo-frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    image: cosmo-frontend:local
+    container_name: cosmo-frontend
+    restart: unless-stopped
+    ports:
+      - "5174:80"
+    depends_on:
+      cosmo-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── Edge ────────────────────────────────────────────────────────────────
+
+  cosmo-caddy:
+    build:
+      context: .
+      dockerfile: cosmo-caddy.Dockerfile
+    image: cosmo-caddy:local
+    # digest-pin: sha256 зафиксировать при production freeze
+    container_name: cosmo-caddy
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - cosmo_caddy_data:/data
+      - cosmo_caddy_config:/config
+    depends_on:
+      cosmo-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:80/api/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# ── Volumes ──────────────────────────────────────────────────────────────
+
+volumes:
+  cosmo_postgres:
+  cosmo_valkey:
+  cosmo_openbao:
+  cosmo_minio:
+  cosmo_gitea:
+  cosmo_woodpecker:
+  cosmo_caddy_data:
+  cosmo_caddy_config:
+
+# ── Network ──────────────────────────────────────────────────────────────
+
+networks:
+  default:
+    name: cosmo-net
+    # cosmo-net belongs to Cosmoport only. Never connect to pk-net.
+    # docker network create cosmo-net — при первом запуске.
+    # external: false означает что compose создаст сеть сам.
