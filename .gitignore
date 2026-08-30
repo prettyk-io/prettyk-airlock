@@ -38,6 +38,8 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 .opencode/node_modules/
+.opencode/
+opencode.json
 
 # Local Artifacts & Backups
 cosmo-artifacts/

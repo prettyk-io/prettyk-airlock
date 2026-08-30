@@ -275,3 +275,207 @@ GateEvaluation.
 - канон только после второго 2FA;
 - Cosmo не запускает субагентов;
 - `prettyk-dev` для Cosmo readonly.
+
+---
+
+## 8. FINDINGS CONTROL STATION — four implementation packages
+
+> **Статус:** next feature wave / first 2FA direction agreed
+> **Цель:** собственная станция Findings и QG Triage поверх реальных результатов
+> PrettyK и scanner adapters.
+
+### Boss — FND-BOSS-001: Findings/QG domain engine
+
+**Оценка:** 22–30 часов
+**Owner:** Boss
+
+Реализовать бизнес-модель:
+
+```text
+Finding
+FindingOccurrence
+TriageDecision
+GateEvaluation
+Baseline
+```
+
+Правила:
+
+- stable fingerprint и dedup;
+- отдельные occurrences по scanner/scan/build/release/digest;
+- immutable triage history;
+- statuses: `detected`, `acknowledged`, `in_progress`, `resolved`, `reopened`;
+- dispositions: `false_positive`, `wont_fix`, `accepted_risk`, `suppressed`, `duplicate`;
+- reason/owner/expiry/approval;
+- `model_suggestion_ref` и model version;
+- baseline для известных findings;
+- new finding отдельно от approved baseline;
+- expired decision → reopen/block;
+- changed finding → reopen;
+- QG effect отдельно от Finding status;
+- explanation object с blockers, baseline и missing approvals.
+
+QWEN только предлагает. Разработчик triage/propose. Critical/High approval
+определяется policy. Cosmoport получает QG verdict и не пересчитывает findings.
+
+**DoD:** 40+ business/core tests, deterministic dedup, baseline/new/expired
+cases, QG explanation object, no scanner-specific business branching.
+
+### Luna — FND-LUNA-001: Findings persistence and intake API
+
+**Оценка:** 22–30 часов
+**Owner:** Luna
+
+Реализовать PostgreSQL/API:
+
+- Finding/Occurrence/Decision/GateEvaluation/Baseline persistence;
+- внешний PrettyK intake contract;
+- SARIF/JSON import;
+- CycloneDX linkage;
+- raw report/evidence references;
+- idempotent import;
+- external scan id/fingerprint;
+- build/run/release/artifact digest linkage;
+- provider/tool/ruleset version;
+- `PASS/FAIL/ERROR/UNAVAILABLE`;
+- query/filter/pagination;
+- triage/approval API;
+- QG response с объяснением.
+
+Минимальный PrettyK payload:
+
+```text
+scan_id
+build_id
+run_id
+commit_sha
+artifact_digest
+scanner
+findings[]
+evidence_refs[]
+qwen_suggestion
+verdict
+act_ref
+```
+
+Raw reports и attachments идут в object storage references, не в secret refs и не
+в бесконтрольное поле PostgreSQL.
+
+**DoD:** 40+ API/integration tests, clean Alembic migration, idempotent intake,
+fresh-session recovery, no internal PrettyK imports, no external aggregator dependency.
+
+### Flash — FND-FLASH-001: Findings Control Station UI
+
+**Оценка:** 22–32 часа
+**Owner:** Flash
+
+Сделать Minimal UI/Data Grid:
+
+#### Findings Registry
+
+- project/application;
+- release/build;
+- scanner/source;
+- severity;
+- new/known baseline;
+- disposition;
+- owner;
+- expiry;
+- QG effect;
+- filters/server-side pagination.
+
+#### Finding Detail
+
+- description/location;
+- occurrences;
+- artifact digest;
+- commit/build/release;
+- source scanner;
+- Evidence;
+- QWEN suggestion;
+- triage history;
+- approval;
+- expiry;
+- related issue/commit.
+
+#### QG Explanation
+
+Показывать причину решения:
+
+```text
+New Critical: 1
+New High: 2
+Approved baseline: 16 Critical
+Expired decisions: 1
+Missing approval: 1
+Ready for transfer: false
+```
+
+Разработчик должен уметь acknowledge, in progress, resolved, propose
+false-positive/wont-fix, comment и link commit.
+
+**DoD:** 40+ UI/contract tests, real API errors, loading/empty/error states,
+Minimal UI/Data Grid, no synthetic findings, no React Flow as primary findings UI.
+
+### Buddy — FND-BUDDY-001: Findings runtime and evidence fabric
+
+**Оценка:** 20–28 часов
+**Owner:** Buddy
+
+Подготовить runtime слой:
+
+- object storage layout для raw SARIF/JSON/screenshots/logs/Act;
+- immutable evidence references;
+- upload/download permissions;
+- retention policy;
+- checksums;
+- health/readiness;
+- PrettyK event delivery;
+- callback retry/dead-letter semantics;
+- offline/GAP operation;
+- MinIO/S3 config;
+- Prometheus metrics;
+- Compose/Helm hooks;
+- Caddy route без конфликта с `8080`;
+- D: cache/runtime paths.
+
+Разделение:
+
+```text
+raw report/evidence → object storage
+normalized findings → PostgreSQL
+QG verdict          → API contract
+```
+
+Сразу микросервис не выделять. Внешний API boundary спроектировать так, чтобы
+позже слой можно было вынести без переписывания контракта.
+
+**DoD:** 25+ runtime/integration tests, evidence survives restart, checksums
+verified, callback retry proven, GAP blocks external dependencies, no raw secrets,
+no fake PrettyK events.
+
+### Joint acceptance
+
+```text
+PrettyK scan
+→ intake
+→ raw evidence object
+→ normalize
+→ Finding + Occurrence
+→ QWEN suggestion
+→ developer triage
+→ Admin IB approval for Critical/High
+→ baseline/new comparison
+→ GateEvaluation
+→ QG explanation
+→ Cosmoport Release readiness
+```
+
+Обязательно доказать:
+
+- известные Critical не создают вечную сирену;
+- новый Critical блокирует;
+- expired `wont_fix` снова блокирует;
+- QWEN не принимает решение сам;
+- duplicate occurrences не плодят findings;
+- raw report и Evidence не теряются.
