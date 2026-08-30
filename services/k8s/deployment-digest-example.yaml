@@ -1,0 +1,98 @@
+# OWN-BUDDY-001: Kubernetes Deployment с immutable digest
+#
+# Канонический пример: деплой по digest, НЕ по mutable tag (latest запрещён).
+# image: cosmo-api@sha256:abc123... — неизменяемый идентификатор.
+#
+# Применение:
+#   kubectl apply -f services/k8s/deployment-digest-example.yaml
+#
+# Образ ДОЛЖЕН быть предварительно запушен в Artifact Registry:
+#   docker tag cosmo-api:local localhost:5100/cosmoport/zr/cosmo-api:0.3.0
+#   docker push localhost:5100/cosmoport/zr/cosmo-api:0.3.0
+#   DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' localhost:5100/cosmoport/zr/cosmo-api:0.3.0)
+#   # DIGEST = localhost:5100/cosmoport/zr/cosmo-api@sha256:...
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cosmo-api-digest
+  namespace: cosmo-system
+  labels:
+    app.kubernetes.io/part-of: cosmoport
+    app.kubernetes.io/component: api
+    cosmoport.provider: nexus
+  annotations:
+    cosmoport.io/registry-provider: "nexus"
+    cosmoport.io/registry-zone: "zr"
+    cosmoport.io/immutable-digest: "true"
+    cosmoport.io/slsa-level: "4"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: cosmoport
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: cosmoport
+        app.kubernetes.io/component: api
+      annotations:
+        cosmoport.io/digest-check: "required"
+    spec:
+      # OWN-BUDDY-001: imagePullSecret для закрытого registry
+      imagePullSecrets:
+        - name: cosmo-registry-pull-secret
+
+      serviceAccountName: cosmo-controller
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: api
+          # ═══ IMMUTABLE DIGEST — НЕ mutable tag ═══
+          # Замени на актуальный digest после docker push:
+          image: "localhost:5100/cosmoport/zr/cosmo-api@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          imagePullPolicy: Always   # digest гарантирует identical bytes, Always допустим
+
+          ports:
+            - containerPort: 8100
+              name: http
+
+          env:
+            - name: COSMO_REGISTRY_PROVIDER
+              value: "nexus"
+            - name: COSMO_REGISTRY_ZONE
+              value: "zr"
+            - name: COSMO_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cosmo-postgres-credentials
+                  key: dsn
+            - name: PK_DEPLOY_PROFILE
+              value: "production"
+
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 1Gi
+              cpu: 1000m
+
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8100
+            initialDelaySeconds: 10
+            periodSeconds: 15
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8100
+            initialDelaySeconds: 5
+            periodSeconds: 10

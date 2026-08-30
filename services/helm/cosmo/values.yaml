@@ -8,6 +8,36 @@ global:
   labels:
     app.kubernetes.io/part-of: cosmoport
 
+# ─────────────────────────────────────────────────────────────────────────────
+# OWN-BUDDY-001: Artifact Registry — pull by immutable digest
+# ─────────────────────────────────────────────────────────────────────────────
+registry:
+  # Провайдер: local-oci (dev), nexus (staging), t1_sfera (UNKNOWN)
+  provider: "local-oci"
+
+  # Создать imagePullSecret (kubernetes.io/dockerconfigjson)
+  createPullSecret: true
+  pullSecretName: "cosmo-registry-pull-secret"
+
+  # dockerconfigjson — base64-кодированный JSON с credentials
+  # Генерация: kubectl create secret docker-registry <name> --dry-run=client -o json | jq '.data[".dockerconfigjson"]'
+  # НИКОГДА не хардкодить plaintext пароль здесь.
+  dockerConfigJson: ""
+
+  # Зона, из которой pull (zr по умолчанию)
+  pullZone: "zr"
+
+  # Endpoint registry — внешний (host) или внутренний (Docker/K8s DNS)
+  # Хост: localhost:5100
+  # Docker: cosmo-registry-zr:5000
+  # K8s:   cosmo-registry-zr.cosmo-system.svc.cluster.local:5000
+  endpoint: "localhost:5100"
+
+  # Использовать immutable digest вместо mutable tag для образов
+  # При true — image: "repo/image@sha256:digest"
+  # При false — image: "repo/image:tag"
+  useDigest: false
+
 # ── API (FastAPI) ──
 api:
   enabled: true
@@ -15,6 +45,7 @@ api:
   image:
     repository: cosmo-api
     tag: local
+    digest: ""            # OWN-BUDDY-001: sha256:... при useDigest=true
     pullPolicy: IfNotPresent
   service:
     port: 8100
@@ -40,6 +71,7 @@ frontend:
   image:
     repository: cosmo-frontend
     tag: local
+    digest: ""            # OWN-BUDDY-001
     pullPolicy: IfNotPresent
   service:
     port: 80
@@ -65,7 +97,6 @@ postgres:
   port: 5432
   user: cosmo
   database: cosmo
-  # Password from secret reference — never plaintext in values.
   existingSecret: cosmo-postgres-credentials
   existingSecretKey: password
 
@@ -89,12 +120,12 @@ migration:
   image:
     repository: cosmo-api
     tag: local
+    digest: ""            # OWN-BUDDY-001
   backoffLimit: 3
 
 # ── Network policy ──
 networkPolicy:
   enabled: true
-  # Разрешён только трафик внутри cosmo-system + ingress от контроллера.
   ingressNamespaces:
     - ingress-nginx
     - kube-system
@@ -108,7 +139,7 @@ serviceAccount:
 rbac:
   create: true
 
-# ── ConfigMap — общие переменные окружения ──
+# ── ConfigMap ──
 configmap:
   PK_DEPLOY_PROFILE: production
   PK_MINIO_URL: http://cosmo-minio:9000

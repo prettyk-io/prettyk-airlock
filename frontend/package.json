@@ -16,6 +16,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@mui/icons-material": "^9.3.1",
     "@mui/material": "^9.3.1",
+    "@mui/x-data-grid": "^9.12.0",
     "@xterm/xterm": "^5.5.0",
     "@xyflow/react": "^12.11.5",
     "lucide-react": "^0.556.0",

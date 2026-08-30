@@ -27,6 +27,10 @@ from orchestrator.cosmo.api.routes.evidence import router as evidence_router
 from orchestrator.cosmo.api.routes.notifications import router as notifications_router
 from orchestrator.cosmo.api.routes.artifacts import router as artifacts_router
 from orchestrator.cosmo.api.routes.findings import router as findings_router
+from orchestrator.cosmo.api.routes.builds import router as builds_router
+from orchestrator.cosmo.api.routes.deployments import router as deployments_router
+from orchestrator.cosmo.api.routes.projects import router as projects_router, kits_router
+from orchestrator.cosmo.api.routes.release_batches import router as release_batches_router
 from orchestrator.cosmo.api.startup import lifespan
 
 app = FastAPI(
@@ -65,3 +69,8 @@ app.include_router(audit_router)
 app.include_router(notifications_router)
 app.include_router(artifacts_router)
 app.include_router(findings_router)
+app.include_router(builds_router)
+app.include_router(deployments_router)
+app.include_router(projects_router)
+app.include_router(kits_router)
+app.include_router(release_batches_router)

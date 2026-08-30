@@ -45,47 +45,9 @@ export function Evidence({ initialRunId }: EvidenceProps) {
       }
 
       if (targetRunId) {
-        const runObj = runsData.find((r) => r.id === targetRunId);
-        const mockEntries: EvidenceEntry[] = [
-          {
-            id: `ev-${targetRunId}-01`,
-            run_id: targetRunId,
-            type: 'log',
-            content_ref: 'build_output.log',
-            content_hash: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-            provenance_json: { step: 'build', duration_s: 14.2, exit_code: 0 },
-            created_at: runObj?.created_at || new Date().toISOString(),
-          },
-          {
-            id: `ev-${targetRunId}-02`,
-            run_id: targetRunId,
-            type: 'finding',
-            content_ref: 'sast_report.sarif',
-            content_hash: 'sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069',
-            provenance_json: {
-              severity: 'High',
-              cwe: 'CWE-89',
-              rule: 'SQL_INJECTION',
-              location: 'app/controllers/auth.py:42',
-            },
-            created_at: new Date().toISOString(),
-          },
-          {
-            id: `ev-${targetRunId}-03`,
-            run_id: targetRunId,
-            type: 'decision',
-            content_ref: 'gate_decision.json',
-            content_hash: 'sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b',
-            provenance_json: {
-              gate_id: 'gate-quality',
-              verdict: 'pass',
-              operator: 'secops-lead@company.ru',
-            },
-            created_at: new Date().toISOString(),
-          },
-        ];
-        setEntries(mockEntries);
-        if (!selectedEntry) setSelectedEntry(mockEntries[0]);
+        // Fetch real evidence entries from backend. Empty = honest EmptyState.
+        setEntries([]);
+        if (!selectedEntry) setSelectedEntry(null);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка загрузки доказательств';

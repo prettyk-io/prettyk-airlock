@@ -72,6 +72,15 @@
         }
     }
 
+    # ── /registry/* → Artifact Registry ЗР (strip prefix: /registry → /v2) ──
+    # OWN-BUDDY-001: single canonical edge. Registry доступен через Caddy.
+    handle /registry/* {
+        uri strip_prefix /registry
+        reverse_proxy {$REGISTRY_ZR_HOST:cosmo-registry-zr:5000} {
+            header_up X-Forwarded-Proto http
+        }
+    }
+
     # ── /* → Cosmo Frontend (SPA) ────────────────────────────────────
     handle {
         reverse_proxy cosmo-frontend:80 {

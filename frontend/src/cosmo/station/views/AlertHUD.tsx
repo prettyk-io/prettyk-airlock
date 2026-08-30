@@ -42,7 +42,7 @@ function generateAlertsFromData(runs: Run[], gates: Gate[]): AlertEvent[] {
   runs.filter((r) => r.status === 'failed').forEach((r) => {
     alerts.push({
       id: `alert-run-fail-${r.id}`,
-      timestamp: Date.now() - Math.floor(Math.random() * 3600000),
+      timestamp: Date.now(),
       severity: 'critical',
       type: 'run_failed',
       title: `Прогон #${r.id} завершился с ошибкой`,
@@ -59,7 +59,7 @@ function generateAlertsFromData(runs: Run[], gates: Gate[]): AlertEvent[] {
   gates.filter((g) => g.decision === 'block').forEach((g) => {
     alerts.push({
       id: `alert-gate-block-${g.id}`,
-      timestamp: Date.now() - Math.floor(Math.random() * 1800000),
+      timestamp: Date.now(),
       severity: 'critical',
       type: 'gate_blocked',
       title: `Security Gate «${g.id}» заблокирован`,
@@ -76,7 +76,7 @@ function generateAlertsFromData(runs: Run[], gates: Gate[]): AlertEvent[] {
   runs.filter((r) => r.status === 'succeeded').slice(0, 2).forEach((r) => {
     alerts.push({
       id: `alert-run-ok-${r.id}`,
-      timestamp: Date.now() - Math.floor(Math.random() * 7200000),
+      timestamp: Date.now(),
       severity: 'info',
       type: 'run_succeeded',
       title: `Прогон #${r.id} успешно завершен`,
@@ -87,36 +87,6 @@ function generateAlertsFromData(runs: Run[], gates: Gate[]): AlertEvent[] {
       deepLinkParams: { run_id: r.id },
       read: false,
     });
-  });
-
-  // Simulated transfer events
-  alerts.push({
-    id: 'alert-transfer-1',
-    timestamp: Date.now() - 1800000,
-    severity: 'info',
-    type: 'transfer_completed',
-    title: 'Релиз «rel-cbr-2026-q3» переведен в Зону Тестирования',
-    message: 'Все Pre-Flight Checks пройдены. Трансфер завершен успешно.',
-    resourceId: 'rel-cbr-2026-q3',
-    resourceType: 'release',
-    deepLinkView: 'releases',
-    deepLinkParams: {},
-    read: false,
-  });
-
-  // Simulated vulnerability alerts
-  alerts.push({
-    id: 'alert-vuln-1',
-    timestamp: Date.now() - 3600000,
-    severity: 'warning',
-    type: 'vulnerability_found',
-    title: 'Обнаружена новая CWE-89 (SQL Injection)',
-    message: 'SAST сканер зафиксировал критическую уязвимость в app/auth/login.py:42.',
-    resourceId: 'CWE-89',
-    resourceType: 'finding',
-    deepLinkView: 'evidence',
-    deepLinkParams: {},
-    read: false,
   });
 
   return alerts.sort((a, b) => b.timestamp - a.timestamp).slice(0, 12);
@@ -187,7 +157,7 @@ export function AlertHUD({ onNavigateToView }: AlertHUDProps) {
     fetchAlertData();
   }, [fetchAlertData]);
 
-  // Simulated SSE polling (every 15 seconds)
+  // Poll for new alerts (every 15 seconds)
   useEffect(() => {
     pollTimer.current = setInterval(() => {
       fetchAlertData();

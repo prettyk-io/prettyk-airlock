@@ -18,7 +18,7 @@ from orchestrator.cosmo.adapters.sonar_normalizer import (
     extract_cwe,
     normalize_sonar_hotspots,
     normalize_sonar_issues,
-    _severity_to_appsechub,
+    _normalize_severity,
     _build_location,
     _normalize_text_range,
     _extract_file_path,
@@ -372,13 +372,13 @@ class TestSeverityMapper:
         (None, "Medium"),
         ("garbage", "Medium"),
     ])
-    def test_appsechub(self, inp, expected):
-        assert _severity_to_appsechub(inp) == expected
+    def test_normalize_severity(self, inp, expected):
+        assert _normalize_severity(inp) == expected
 
     def test_hotspot_probability(self):
-        assert _severity_to_appsechub(probability="HIGH") == "High"
-        assert _severity_to_appsechub(probability="MEDIUM") == "Medium"
-        assert _severity_to_appsechub(probability="LOW") == "Low"
+        assert _normalize_severity(probability="HIGH") == "High"
+        assert _normalize_severity(probability="MEDIUM") == "Medium"
+        assert _normalize_severity(probability="LOW") == "Low"
 
 
 # ══════════════════════════════════════════════════════════════════

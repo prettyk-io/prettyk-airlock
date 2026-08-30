@@ -1,0 +1,45 @@
+# BRG-005: Registry configuration hooks — Zone ЗР (Development)
+#
+# Подключается к registry-zr в docker-compose.registry.yml
+# Разделение PureK lab / Cosmoport — через отдельные registry namespace.
+version: 0.1
+
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry-zr
+  delete:
+    enabled: true
+
+http:
+  addr: 0.0.0.0:5000
+  headers:
+    X-Content-Type-Options: [nosniff]
+    Access-Control-Allow-Origin: ["*"]
+    Access-Control-Allow-Methods: ["GET", "HEAD", "PUT", "DELETE"]
+    Access-Control-Allow-Headers: ["Authorization", "Content-Type"]
+
+# Health check
+health:
+  storagedriver:
+    enabled: true
+    interval: 10s
+    threshold: 3
+
+# OCI compatibility + garbage collection
+compatibility:
+  schema1:
+    enabled: false    # только OCI v2
+
+validation:
+  manifests:
+    referencelimit: 1000
+    payloadsizelimit: 104857600  # 100 MB
+
+# ── Separation: Cosmoport ⇔ PureK ─────────────────────────────────
+# PureK lab использует отдельный registry или namespace.
+# Здесь — только cosmoport/ namespace.
+log:
+  accesslog:
+    disabled: false
+  level: info
+  formatter: json

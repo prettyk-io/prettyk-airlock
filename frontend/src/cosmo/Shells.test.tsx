@@ -191,7 +191,7 @@ describe('COS-024: Deep-Linking', () => {
     // Press '?' to open help overlay
     fireEvent.keyDown(window, { key: '?' });
     expect(screen.getByText('Справка по горячим клавишам (Keyboard Shortcuts)')).toBeTruthy();
-    expect(screen.getByText('Обзор / Домены')).toBeTruthy();
+    expect(screen.getAllByText('Обзор / Домены').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Приложения').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Новый прогон (New Run)')).toBeTruthy();
 

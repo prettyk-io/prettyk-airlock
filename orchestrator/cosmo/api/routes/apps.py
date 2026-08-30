@@ -12,7 +12,8 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_capability
+from orchestrator.cosmo.domain.rbac import Action
 from orchestrator.cosmo.db.models import (
     Application as ApplicationModel,
     RepositoryBinding as RepoBindingModel,
@@ -92,6 +93,7 @@ async def list_applications(
 async def create_application(
     body: CreateApplicationRequest,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.BRICK_MANAGE)),
 ) -> Application:
     """Create a new application with repository binding."""
     # Check domain exists
@@ -180,6 +182,7 @@ async def update_application(
     app_id: str,
     body: UpdateApplicationRequest,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.BRICK_MANAGE)),
 ) -> Application:
     """Update application attributes."""
     stmt = (
@@ -265,6 +268,7 @@ async def update_repo_binding(
 async def delete_application(
     app_id: str,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.BRICK_MANAGE)),
 ) -> None:
     """Delete application and its repo bindings."""
     app_model = await db.get(ApplicationModel, app_id)
@@ -389,3 +393,47 @@ async def delete_group(
         )
     await db.delete(g)
     await db.commit()
+
+
+# ── SAN-014: Lifecycle Config Endpoints ───────────────────────────────
+
+@router.get("/api/v1/apps/{app_id}/lc-config")
+async def get_lifecycle_config(app_id: str):
+    """Get 8-step lifecycle configuration for an application."""
+    from orchestrator.cosmo.control_plane.lifecycle_resolver import (
+        LifecycleResolver, LCStepConfig, CANONICAL_8_STEPS,
+        BuildBatch, StaticScanBatch, DeployBatch,
+    )
+    # For now, return canonical defaults + any app-level overrides
+    resolver = LifecycleResolver()
+    steps = resolver.resolve_as_list()
+    batches = resolver.generate_batches()
+    coverage = resolver.validate_required_coverage()
+    return {
+        "app_id": app_id,
+        "steps": [s.model_dump() for s in steps],
+        "batches": batches,
+        "coverage": coverage,
+    }
+
+
+@router.put("/api/v1/apps/{app_id}/lc-config")
+async def update_lifecycle_config(app_id: str, body: dict):
+    """Update lifecycle config overrides for an application.
+
+    Body: {"overrides": {"build": {"step_enabled": false}, ...}}
+    Required steps cannot be disabled.
+    """
+    from orchestrator.cosmo.control_plane.lifecycle_resolver import (
+        LifecycleResolver, CANONICAL_8_STEPS,
+    )
+    overrides = body.get("overrides", {})
+    resolver = LifecycleResolver(app_overrides=overrides)
+    steps = resolver.resolve_as_list()
+    coverage = resolver.validate_required_coverage()
+    return {
+        "app_id": app_id,
+        "overrides_applied": list(overrides.keys()),
+        "steps": [s.model_dump() for s in steps],
+        "coverage": coverage,
+    }

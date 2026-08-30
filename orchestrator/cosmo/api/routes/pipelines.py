@@ -13,7 +13,8 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_capability
+from orchestrator.cosmo.domain.rbac import Action
 from orchestrator.cosmo.db.models import (
     PipelineBrick as BrickModel,
     PipelinePlan as PlanModel,
@@ -280,6 +281,7 @@ async def create_plan(
 async def compile_plan(
     body: CompilePlanRequest,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.PIPELINE_CONFIGURE)),
 ) -> PipelinePlanSchema:
     """Compile application pipeline plan using PlanCompiler and persist batches."""
     app = await db.get(ApplicationModel, body.app_id)

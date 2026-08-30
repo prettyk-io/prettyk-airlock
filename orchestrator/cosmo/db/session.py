@@ -13,7 +13,7 @@ class Base(DeclarativeBase):
 
 DATABASE_URL = os.getenv(
     "COSMO_DATABASE_URL",
-    "postgresql+asyncpg://prettyk:prettyk@localhost:5432/cosmo",
+    "postgresql+asyncpg://cosmo:cosmo@localhost:5432/cosmo",
 )
 
 _engine: AsyncEngine | None = None

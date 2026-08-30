@@ -1,0 +1,101 @@
+# BRG-004 / OWN-BUDDY-001: Registry per zone — Local OCI Smoke + Health
+#
+# ТОЛЬКО registry контейнеры. Caddy — единый (main compose, порт 8180).
+# Registry routes: main Caddyfile, handle /registry/* → cosmo-registry-zr:5000
+#
+# НЕ Nexus, НЕ Artifactory — distribution:3.1.0 = local-oci dev smoke.
+
+x-registry-common: &registry-common
+  restart: unless-stopped
+  networks:
+    - cosmo-net
+
+x-registry-health: &registry-health
+  test: ["CMD", "curl", "-sf", "http://localhost:5000/v2/"]
+  interval: 15s
+  timeout: 5s
+  retries: 3
+  start_period: 10s
+
+services:
+  # ═════════════════════════════════════════════════════════════════════
+  # Registry ЗР (Development Zone)
+  # ═════════════════════════════════════════════════════════════════════
+  registry-zr:
+    <<: *registry-common
+    image: distribution/distribution:3.1.0
+    container_name: cosmo-registry-zr
+    ports:
+      - "5100:5000"
+    environment:
+      REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry-zr
+      REGISTRY_HTTP_HEADERS_Access-Control-Allow-Origin: "['*']"
+      REGISTRY_HTTP_HEADERS_Access-Control-Allow-Methods: "['GET','HEAD','PUT','DELETE']"
+    volumes:
+      - cosmo_registry_zr_data:/var/lib/registry-zr
+      - ./registry/config-zr.yml:/etc/docker/registry/config.yml:ro
+    healthcheck: *registry-health
+    labels:
+      - "cosmoport.zone=zr"
+      - "cosmoport.role=artifact-registry"
+      - "cosmoport.provider=local-oci"
+
+  # ═════════════════════════════════════════════════════════════════════
+  # Registry ЗТ (Testing Zone)
+  # ═════════════════════════════════════════════════════════════════════
+  registry-zt:
+    <<: *registry-common
+    image: distribution/distribution:3.1.0
+    container_name: cosmo-registry-zt
+    ports:
+      - "5200:5000"
+    environment:
+      REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry-zt
+    volumes:
+      - cosmo_registry_zt_data:/var/lib/registry-zt
+    healthcheck: *registry-health
+    deploy:
+      replicas: 0   # disabled until ЗТ is active
+    labels:
+      - "cosmoport.zone=zt"
+      - "cosmoport.role=artifact-registry"
+
+  # ═════════════════════════════════════════════════════════════════════
+  # Health Probe (sidecar для мониторинга всех registry)
+  # ═════════════════════════════════════════════════════════════════════
+  registry-health:
+    <<: *registry-common
+    image: alpine:3.21
+    container_name: cosmo-registry-health
+    entrypoint: |
+      /bin/sh -c '
+      apk add --no-cache curl jq;
+      while true; do
+        echo "=== $$(date -u +%Y-%m-%dT%H:%M:%SZ) ===";
+        for zone in zr zt; do
+          if curl -sf http://cosmo-registry-$$zone:5000/v2/ >/dev/null 2>&1; then
+            echo "[OK]  registry-$$zone :5000 reachable";
+          else
+            echo "[FAIL] registry-$$zone :5000 unreachable";
+          fi;
+        done;
+        sleep 30;
+      done'
+    healthcheck:
+      test: ["CMD", "pgrep", "sleep"]
+      interval: 30s
+
+volumes:
+  cosmo_registry_zr_data:
+    name: cosmo_registry_zr_data
+  cosmo_registry_zt_data:
+    name: cosmo_registry_zt_data
+  cosmo_caddy_data:
+    name: cosmo_caddy_data
+
+networks:
+  cosmo-net:
+    external: true
+    name: cosmo-net

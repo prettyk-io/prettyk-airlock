@@ -1,4 +1,4 @@
-/**
+﻿/**
  * COS-029 / COS-047: Release Management View.
  *
  * Release creation, composition graph (nodes + edges), JSON manifest import/export,
@@ -19,106 +19,20 @@ import {
 } from '@mui/icons-material';
 import {
   api, type Release, type ReleaseZone, type ReleaseNode,
-  type ReleaseEdge, type ReleaseManifest, type Domain, type Application,
+  type ReleaseEdge, type ReleaseManifest, type Application
 } from '../api';
 import { ErrorBoundary } from '../../shared/ErrorBoundary';
 import { EmptyState } from '../../shared/EmptyState';
 import { toast } from '../../shared/toast';
 import { ReleaseTransferWizard } from './ReleaseTransferWizard';
 
-const DEFAULT_RELEASES: Release[] = [
-  {
-    id: 'rel-cbr-2026-q3',
-    version: 'v2.4.0-rc1',
-    name: 'Цифровой Рубль — Релиз Q3 2026',
-    domain_id: 'cbr',
-    zone: 'ЗТ',
-    status: 'validating',
-    created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
-    manifest: {
-      release_id: 'rel-cbr-2026-q3',
-      version: 'v2.4.0-rc1',
-      domain_id: 'cbr',
-      zone: 'ЗТ',
-      created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
-      created_by: 'lead-architect@cbr.ru',
-      nodes: [
-        { id: 'node-app-wallet', name: 'Digital Wallet API', type: 'service', version: '2.4.0', repo: 'cbr/wallet-api', commit: 'a1b2c3d' },
-        { id: 'node-app-ledger', name: 'Settlement Ledger', type: 'service', version: '2.4.0', repo: 'cbr/settlement-core', commit: 'e5f6g7h' },
-        { id: 'node-lib-crypto', name: 'GOST Crypto Provider', type: 'library', version: '1.2.0', repo: 'cbr/gost-crypto', commit: '99aa88b' },
-        { id: 'node-cfg-gates', name: 'Security Policy Config', type: 'config', version: '3.0.1', repo: 'cbr/policies', commit: '1234567' },
-      ],
-      edges: [
-        { from: 'node-app-wallet', to: 'node-lib-crypto', relation: 'depends_on' },
-        { from: 'node-app-ledger', to: 'node-lib-crypto', relation: 'depends_on' },
-        { from: 'node-app-wallet', to: 'node-cfg-gates', relation: 'verifies' },
-      ],
-      metadata: { target_environment: 'stage-banking', compliance_level: 'GOST-57580' },
-      signature: 'sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069',
-    },
-    history: [
-      {
-        from_zone: 'ЗР',
-        to_zone: 'ЗТ',
-        timestamp: new Date(Date.now() - 86400000).toISOString(),
-        operator: 'devops-lead@cbr.ru',
-        signature: 'sig-sha256-zr-to-zt-88f2b',
-      },
-    ],
-  },
-  {
-    id: 'rel-pay-2026-v1',
-    version: 'v1.1.0',
-    name: 'Платежный Шлюз FastPay',
-    domain_id: 'payments',
-    zone: 'ЗПЭ',
-    status: 'deployed',
-    created_at: new Date(Date.now() - 86400000 * 7).toISOString(),
-    manifest: {
-      release_id: 'rel-pay-2026-v1',
-      version: 'v1.1.0',
-      domain_id: 'payments',
-      zone: 'ЗПЭ',
-      created_at: new Date(Date.now() - 86400000 * 7).toISOString(),
-      created_by: 'lead@payments.io',
-      nodes: [
-        { id: 'node-pay-gateway', name: 'Payment Gateway', type: 'service', version: '1.1.0', repo: 'payments/gateway', commit: 'fa482c1' },
-        { id: 'node-auth-core', name: 'OAuth2 Core', type: 'service', version: '1.0.4', repo: 'payments/auth', commit: 'bc89012' },
-      ],
-      edges: [
-        { from: 'node-pay-gateway', to: 'node-auth-core', relation: 'depends_on' },
-      ],
-      metadata: { pci_dss_certified: true },
-      signature: 'sha256:4a5b6c7d8e9f0123456789abcdef0123456789abcdef0123456789abcdef',
-    },
-    history: [
-      {
-        from_zone: 'ЗР',
-        to_zone: 'ЗТ',
-        timestamp: new Date(Date.now() - 86400000 * 5).toISOString(),
-        operator: 'ci-runner',
-        signature: 'sig-sha256-zr-zt-pay',
-      },
-      {
-        from_zone: 'ЗТ',
-        to_zone: 'ЗПЭ',
-        timestamp: new Date(Date.now() - 86400000 * 2).toISOString(),
-        operator: 'security-officer@payments.io',
-        signature: 'sig-sha256-zt-zpe-final-signed',
-      },
-    ],
-  },
-];
-
 interface ReleasesProps {
-  selectedDomain?: string;
   onNavigateToIDE?: (ctx: { repo: string; file: string; line?: number }) => void;
 }
 
-export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesProps) {
-  const [releases, setReleases] = useState<Release[]>(DEFAULT_RELEASES);
-  const [selectedRelease, setSelectedRelease] = useState<Release | null>(DEFAULT_RELEASES[0]);
-  const [domains, setDomains] = useState<Domain[]>([]);
+export function Releases({ onNavigateToIDE }: ReleasesProps) {
+  const [releases, setReleases] = useState<Release[]>([]);
+  const [selectedRelease, setSelectedRelease] = useState<Release | null>(null);
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,7 +45,7 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
   const [newRelId, setNewRelId] = useState('');
   const [newRelVersion, setNewRelVersion] = useState('');
   const [newRelName, setNewRelName] = useState('');
-  const [newRelDomain, setNewRelDomain] = useState('');
+  const [newRelProjectId, setNewRelProjectId] = useState('');
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([]);
 
   // Import Manifest Dialog
@@ -142,29 +56,21 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
     setLoading(true);
     setError(null);
     try {
-      const [remoteReleases, domainsData, appsData] = await Promise.all([
-        api.getReleases(selectedDomain),
-        api.getDomains(),
-        api.getApps(selectedDomain),
+      const [remoteReleases, appsData] = await Promise.all([
+        api.getReleases(),
+        api.getApps(),
+        api.getApps(),
       ]);
-      setDomains(domainsData || []);
       setApps(appsData || []);
-      if (domainsData.length > 0 && !newRelDomain) {
-        setNewRelDomain(domainsData[0].id);
+      if (appsData.length > 0 && !newRelProjectId) {
+        setNewRelProjectId(appsData[0].id);
       }
 
       if (remoteReleases && remoteReleases.length > 0) {
         setReleases(remoteReleases);
         if (!selectedRelease) setSelectedRelease(remoteReleases[0]);
       } else {
-        const filtered =
-          selectedDomain === 'all'
-            ? DEFAULT_RELEASES
-            : DEFAULT_RELEASES.filter((r) => r.domain_id === selectedDomain);
-        setReleases(filtered);
-        if (filtered.length > 0 && !selectedRelease) {
-          setSelectedRelease(filtered[0]);
-        }
+        setReleases([]);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка загрузки релизов';
@@ -173,7 +79,7 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
     } finally {
       setLoading(false);
     }
-  }, [selectedDomain, newRelDomain, selectedRelease]);
+  }, [newRelProjectId, selectedRelease]);
 
   useEffect(() => {
     fetchReleasesAndMetadata();
@@ -192,7 +98,7 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
   };
 
   const handleCreateRelease = async () => {
-    if (!newRelId.trim() || !newRelVersion.trim() || !newRelName.trim() || !newRelDomain) return;
+    if (!newRelId.trim() || !newRelVersion.trim() || !newRelName.trim() || !newRelProjectId) return;
 
     const chosenApps = apps.filter((a) => selectedAppIds.includes(a.id));
     const nodes: ReleaseNode[] = chosenApps.map((a) => ({
@@ -212,7 +118,7 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
     const newManifest: ReleaseManifest = {
       release_id: newRelId.trim(),
       version: newRelVersion.trim(),
-      domain_id: newRelDomain,
+      domain_id: newRelProjectId,
       zone: 'ЗР',
       created_at: new Date().toISOString(),
       created_by: 'operator@cosmo.local',
@@ -226,7 +132,7 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
       id: newRelId.trim(),
       version: newRelVersion.trim(),
       name: newRelName.trim(),
-      domain_id: newRelDomain,
+      domain_id: newRelProjectId,
       zone: 'ЗР',
       status: 'draft',
       created_at: new Date().toISOString(),
@@ -700,14 +606,14 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
             <TextField
               select
               label="Домен / КИТС"
-              value={newRelDomain}
-              onChange={(e) => setNewRelDomain(e.target.value)}
+              value={newRelProjectId}
+              onChange={(e) => setNewRelProjectId(e.target.value)}
               fullWidth
               size="small"
             >
-              {domains.map((d) => (
+              {apps.map((d) => (
                 <MenuItem key={d.id} value={d.id}>
-                  {d.label} ({d.id})
+                  {d.id} ({d.id})
                 </MenuItem>
               ))}
             </TextField>
@@ -740,7 +646,7 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
             <Button
               onClick={handleCreateRelease}
               variant="contained"
-              disabled={!newRelId || !newRelVersion || !newRelName || !newRelDomain}
+              disabled={!newRelId || !newRelVersion || !newRelName || !newRelProjectId}
             >
               Создать релиз
             </Button>
@@ -757,7 +663,7 @@ export function Releases({ selectedDomain = 'all', onNavigateToIDE }: ReleasesPr
             <TextField
               multiline
               rows={8}
-              placeholder={`{\n  "release_id": "rel-custom-01",\n  "version": "v1.0.0",\n  "domain_id": "cbr",\n  "nodes": [],\n  "edges": []\n}`}
+              placeholder={`{\n  "release_id": "rel-custom-01",\n  "version": "v1.0.0",\n  "project_id": "your-kits",\n  "nodes": [],\n  "edges": []\n}`}
               value={importJsonText}
               onChange={(e) => setImportJsonText(e.target.value)}
               fullWidth

@@ -13,7 +13,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_current_principal, get_db, require_capability
+from orchestrator.cosmo.api.domain_guard import require_domain, verify_ownership
+from orchestrator.cosmo.domain.rbac import Action, PrincipalContext
 from orchestrator.cosmo.db.models import (
     Gate as GateModel,
     PipelinePlan as PlanModel,
@@ -85,14 +87,40 @@ async def list_gates(
 async def create_gate(
     body: CreateGateRequest,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(get_current_principal),
 ) -> Gate:
-    """Create a security gate for a plan."""
+    """Create a security gate for a plan.
+
+    CLN-007: Separation of Duties — автор релиза не может создавать гейт к своему же плану.
+    """
     plan = await db.get(PlanModel, body.plan_id)
     if plan is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Plan '{body.plan_id}' not found",
         )
+
+    # CLN-007: SoD — release author cannot create gates for own release plan
+    if principal and principal.user_id and principal.user_id != "system":
+        from orchestrator.cosmo.db.models import Release as ReleaseModel, Run as RunModel
+
+        release_stmt = select(ReleaseModel).where(ReleaseModel.plan_id == body.plan_id)
+        release_res = await db.execute(release_stmt)
+        releases = release_res.scalars().all()
+
+        for rel in releases:
+            run_ids = rel.run_ids or []
+            if run_ids:
+                run_stmt = select(RunModel).where(RunModel.id.in_(run_ids))
+                run_res = await db.execute(run_stmt)
+                runs = run_res.scalars().all()
+                for run in runs:
+                    initiator = run.initiator_user_id or "system"
+                    if initiator == principal.user_id:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=f"SoD violation: release author '{initiator}' cannot create gates for own release plan '{body.plan_id}'. Release: {rel.id}, Run: {run.id}",
+                        )
 
     existing = await db.get(GateModel, body.id)
     if existing is not None:
@@ -160,6 +188,7 @@ async def record_gate_decision(
     gate_id: str,
     body: GateDecisionRequest,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.GATE_DECIDE)),
 ) -> Gate:
     """Record a manual or automated gate decision."""
     gate = await db.get(GateModel, gate_id)
@@ -180,6 +209,43 @@ async def record_gate_decision(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Automatic gate cannot have 'manual_required' decision",
         )
+
+    # SAN-008 / CLN-007: Separation of Duties — gate decider cannot be the release initiator
+    principal_id = getattr(_guard, "user_id", None) if _guard else None
+    decider = body.decided_by or principal_id
+    if decider and gate.plan_id:
+        from orchestrator.cosmo.db.models import Release as ReleaseModel, Run as RunModel
+        release_stmt = select(ReleaseModel).where(ReleaseModel.plan_id == gate.plan_id)
+        release_res = await db.execute(release_stmt)
+        releases = release_res.scalars().all()
+
+        for rel in releases:
+            rel_author = getattr(rel, "initiator_user_id", None)
+            if rel_author and (rel_author == decider or (principal_id and rel_author == principal_id)):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"SoD violation: release author '{rel_author}' "
+                        f"cannot approve own gate decision for gate '{gate_id}'. "
+                        f"Release: {rel.id}"
+                    ),
+                )
+            run_ids = rel.run_ids or []
+            if run_ids:
+                run_stmt = select(RunModel).where(RunModel.id.in_(run_ids))
+                run_res = await db.execute(run_stmt)
+                runs = run_res.scalars().all()
+                for run in runs:
+                    initiator = run.initiator_user_id or "system"
+                    if initiator == decider or (principal_id and initiator == principal_id):
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=(
+                                f"SoD violation: release author '{initiator}' "
+                                f"cannot approve own gate decision for gate '{gate_id}'. "
+                                f"Release: {rel.id}, Run: {run.id}"
+                            ),
+                        )
 
     gate.decision = body.decision
     gate.decided_by = body.decided_by

@@ -236,12 +236,16 @@ services:
     # digest-pin: sha256 зафиксировать при production freeze
     container_name: cosmo-caddy
     restart: unless-stopped
+    # Cosmoport 2.0 — single canonical edge: 8180 (main Caddy).
+    # 8080 reserved for PureK / ZAP Demon — NEVER use for Cosmoport.
     ports:
-      - "8080:80"
+      - "8180:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - cosmo_caddy_data:/data
       - cosmo_caddy_config:/config
+    environment:
+      REGISTRY_ZR_HOST: "cosmo-registry-zr:5000"
     depends_on:
       cosmo-api:
         condition: service_started

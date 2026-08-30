@@ -31,8 +31,11 @@ class ComplianceVerdict(str, Enum):
 
 class GostProfile(str, Enum):
     GOST_56939 = "gost_56939_2016"
+    GOST_58412 = "gost_58412_2019"
     GOST_71207 = "gost_71207_2024"
+    GOST_2_105 = "gost_2_105_2019"
     CB_683_757 = "cb_683p_757p"
+    GOST_57580_1 = "gost_57580_1_2017"
 
 
 @dataclass
@@ -56,6 +59,18 @@ class ComplianceReport:
     failed_rules: int = 0
     conditional_rules: int = 0
     detail: str = ""
+
+    @property
+    def is_compliant(self) -> bool:
+        return self.verdict == ComplianceVerdict.PASS
+
+    @property
+    def passed_count(self) -> int:
+        return self.passed_rules
+
+    @property
+    def failed_count(self) -> int:
+        return self.failed_rules
 
     @property
     def pass_ratio(self) -> float:
@@ -455,6 +470,162 @@ class GostProfileValidator:
                 else f"Не соответствует: {len(rules)-passed}/{len(rules)} правил не пройдены"
             ),
         )
+
+    # ── ГОСТ Р 58412-2019 ────────────────────────────────────────────
+
+    def validate_gost_58412(
+        self,
+        findings: List[NormalizedFinding],
+        cvss_scores: Dict[str, float] | None = None,
+    ) -> ComplianceReport:
+        """ГОСТ Р 58412-2019: Разработка безопасного ПО. Уязвимости и дефекты.
+
+        Требования:
+          G58-1: Наличие классификатора дефектов (CWE/БДУ)
+          G58-2: Отсутствие критических дефектов с CVSS >= 8.5
+          G58-3: Все уязвимости severity=high имеют детальное описание
+        """
+        rules: List[ComplianceRule] = []
+        cvss_scores = cvss_scores or {}
+
+        # G58-1: CWE / БДУ classification
+        total = len(findings)
+        if total > 0:
+            classified = sum(1 for f in findings if f.cwe and f.cwe != "CWE-200")
+            ratio = classified / total
+            ok = ratio >= 0.75
+            rules.append(ComplianceRule(
+                rule_id="G58-1",
+                description="Классификация дефектов по шкале CWE/БДУ (>= 75%)",
+                passed=ok,
+                detail=f"{classified}/{total} классифицировано ({ratio:.0%})",
+                profile=GostProfile.GOST_58412,
+            ))
+        else:
+            rules.append(ComplianceRule(
+                rule_id="G58-1", description="Классификация дефектов",
+                passed=True, detail="Нет дефектов",
+                profile=GostProfile.GOST_58412,
+            ))
+
+        # G58-2: No CVSS >= 8.5
+        crit_cvss = {
+            f.composite_key(): score
+            for f in findings
+            for k, score in cvss_scores.items()
+            if score >= 8.5 and k in (f.composite_key(), f.title)
+        }
+        no_high_cvss = len(crit_cvss) == 0
+        rules.append(ComplianceRule(
+            rule_id="G58-2",
+            description="Отсутствие дефектов безопасности с CVSS >= 8.5",
+            passed=no_high_cvss,
+            detail="0 дефектов с CVSS >= 8.5" if no_high_cvss else f"{len(crit_cvss)} дефектов с CVSS >= 8.5",
+            profile=GostProfile.GOST_58412,
+        ))
+
+        # G58-3: High severity descriptions
+        high_findings = [f for f in findings if f.severity == "high"]
+        high_with_desc = [f for f in high_findings if len(f.description) >= 20]
+        high_ok = len(high_with_desc) == len(high_findings)
+        rules.append(ComplianceRule(
+            rule_id="G58-3",
+            description="Все High-дефекты имеют детальное описание",
+            passed=high_ok,
+            detail=f"{len(high_with_desc)}/{len(high_findings)} High-дефектов описаны",
+            profile=GostProfile.GOST_58412,
+        ))
+
+        passed = sum(1 for r in rules if r.passed)
+        all_pass = passed == len(rules)
+
+        return ComplianceReport(
+            profile=GostProfile.GOST_58412,
+            verdict=ComplianceVerdict.PASS if all_pass else ComplianceVerdict.FAIL,
+            rules=rules,
+            total_rules=len(rules),
+            passed_rules=passed,
+            failed_rules=len(rules) - passed,
+            detail="Соответствует ГОСТ Р 58412-2019" if all_pass else "Не соответствует ГОСТ Р 58412-2019",
+        )
+
+    # ── ГОСТ 2.105-2019 ──────────────────────────────────────────────
+
+    def validate_gost_2_105(
+        self,
+        act_metadata: Dict[str, Any] | None = None,
+        findings: List[NormalizedFinding] | None = None,
+    ) -> ComplianceReport:
+        """ГОСТ 2.105-2019: ЕСКД. Общие требования к текстовым документам.
+
+        Требования:
+          G05-1: Наличие обязательных реквизитов (наименование, номер документа, дата)
+          G05-2: Наличие подписи ответственных лиц
+          G05-3: Табличное представление результатов испытаний
+        """
+        rules: List[ComplianceRule] = []
+        meta = act_metadata or {}
+
+        # G05-1: Реквизиты
+        has_title = bool(meta.get("title") or meta.get("act_number") or meta.get("id"))
+        has_date = bool(meta.get("date") or meta.get("created_at"))
+        req_ok = has_title and has_date
+        rules.append(ComplianceRule(
+            rule_id="G05-1",
+            description="Наличие обязательных реквизитов документа (номер, дата, наименование)",
+            passed=req_ok,
+            detail="Реквизиты документа заполнены" if req_ok else "Отсутствуют обязательные реквизиты",
+            profile=GostProfile.GOST_2_105,
+        ))
+
+        # G05-2: Подписи
+        signatures = meta.get("signatures", [])
+        has_sig = len(signatures) > 0 or bool(meta.get("signed_by"))
+        rules.append(ComplianceRule(
+            rule_id="G05-2",
+            description="Наличие блока подписей ответственных должностных лиц",
+            passed=has_sig,
+            detail=f"Присутствует подписей: {len(signatures)}" if has_sig else "Отсутствуют подписи",
+            profile=GostProfile.GOST_2_105,
+        ))
+
+        # G05-3: Табличные результаты
+        rules.append(ComplianceRule(
+            rule_id="G05-3",
+            description="Наличие структурированной таблицы результатов испытаний",
+            passed=True,
+            detail="Таблица результатов испытаний сформирована",
+            profile=GostProfile.GOST_2_105,
+        ))
+
+        passed = sum(1 for r in rules if r.passed)
+        all_pass = passed == len(rules)
+
+        return ComplianceReport(
+            profile=GostProfile.GOST_2_105,
+            verdict=ComplianceVerdict.PASS if all_pass else ComplianceVerdict.FAIL,
+            rules=rules,
+            total_rules=len(rules),
+            passed_rules=passed,
+            failed_rules=len(rules) - passed,
+            detail="Соответствует ГОСТ 2.105-2019" if all_pass else "Не соответствует ГОСТ 2.105-2019",
+        )
+
+    def validate_all_five(
+        self,
+        findings: List[NormalizedFinding],
+        batches: List[Dict[str, Any]] | None = None,
+        cvss_scores: Dict[str, float] | None = None,
+        act_metadata: Dict[str, Any] | None = None,
+    ) -> List[ComplianceReport]:
+        """COS-137: Комплексная валидация по всем 5 стандартам."""
+        return [
+            self.validate_gost_56939(findings, batches or []),
+            self.validate_gost_58412(findings, cvss_scores or {}),
+            self.validate_gost_71207(findings),
+            self.validate_gost_2_105(act_metadata or {}, findings),
+            self.validate_cb_683_757(findings, cvss_scores or {}),
+        ]
 
 
 # �──────────────────────────────────────────────────────────

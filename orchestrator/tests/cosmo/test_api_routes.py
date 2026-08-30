@@ -100,7 +100,7 @@ async def test_domains_crud(pg_client: AsyncClient):
 async def test_apps_and_groups_crud(pg_client: AsyncClient):
     await pg_client.post("/api/v1/domains", json={
         "id": "dom-app-test", "label": "App Test Domain",
-        "forge_binding": {"forge_type": "gitea", "url": "http://gitea.local", "token_ref": "TOK"},
+        "forge_binding": {"forge_type": "gitea", "url": "http://gitea.local", "token_ref": "vault:secret/data/token"},
     })
 
     # 1. Create Group
@@ -114,7 +114,7 @@ async def test_apps_and_groups_crud(pg_client: AsyncClient):
     res_app = await pg_client.post("/api/v1/apps", json={
         "id": "app-auth", "domain_id": "dom-app-test", "level": 1, "group_id": "grp-core",
         "repo_binding": {"forge_id": "gitea", "repo_path": "dom-app-test/auth-service", "default_branch": "develop"},
-    })
+    }, headers={"X-Cosmo-Domain": "dom-app-test"})
     assert res_app.status_code == 201
     assert res_app.json()["repo_binding"]["repo_path"] == "dom-app-test/auth-service"
 
@@ -122,7 +122,7 @@ async def test_apps_and_groups_crud(pg_client: AsyncClient):
     res_lib = await pg_client.post("/api/v1/apps", json={
         "id": "lib-crypto", "domain_id": "dom-app-test", "level": 0,
         "repo_binding": {"forge_id": "gitea", "repo_path": "dom-app-test/crypto-lib"},
-    })
+    }, headers={"X-Cosmo-Domain": "dom-app-test"})
     assert res_lib.status_code == 201
 
     # 4. Get AppGraph
@@ -152,7 +152,7 @@ async def test_apps_and_groups_crud(pg_client: AsyncClient):
 async def test_pipeline_bricks_and_plan_compilation(pg_client: AsyncClient):
     await pg_client.post("/api/v1/domains", json={
         "id": "dom-pipe", "label": "Pipeline Domain",
-        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "T"},
+        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "vault:secret/data/token"},
     })
     await pg_client.post("/api/v1/apps", json={
         "id": "app-pipe", "domain_id": "dom-pipe", "level": 1,
@@ -176,7 +176,7 @@ async def test_pipeline_bricks_and_plan_compilation(pg_client: AsyncClient):
     res_compile = await pg_client.post("/api/v1/plans/compile", json={
         "plan_id": "plan-pipe-1", "app_id": "app-pipe",
         "brick_ids": ["b-build", "b-sast", "b-dast"],
-    })
+    }, headers={"X-Cosmo-Domain": "dom-pipe"})
     assert res_compile.status_code == 201
     plan = res_compile.json()
     assert plan["id"] == "plan-pipe-1"
@@ -195,7 +195,7 @@ async def test_runs_and_batches_lifecycle(pg_client: AsyncClient):
     # Setup
     await pg_client.post("/api/v1/domains", json={
         "id": "dom-run", "label": "Run Domain",
-        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "T"},
+        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "vault:secret/data/token"},
     })
     await pg_client.post("/api/v1/apps", json={
         "id": "app-run", "domain_id": "dom-run", "level": 1,
@@ -213,7 +213,7 @@ async def test_runs_and_batches_lifecycle(pg_client: AsyncClient):
     res_run = await pg_client.post("/api/v1/runs", json={
         "id": "run-101", "plan_id": "plan-run-1", "trigger": "scheduled",
         "initiator_user_id": "cron-service", "initiator_role": "system", "domain_id": "dom-run",
-    })
+    }, headers={"X-Cosmo-Domain": "dom-run"})
     assert res_run.status_code == 201
     assert res_run.json()["status"] == "pending"
 
@@ -234,8 +234,11 @@ async def test_runs_and_batches_lifecycle(pg_client: AsyncClient):
     await pg_client.post("/api/v1/runs", json={
         "id": "run-102", "plan_id": "plan-run-1", "trigger": "manual",
         "initiator_user_id": "operator-1", "domain_id": "dom-run",
-    })
-    res_cancel = await pg_client.post("/api/v1/runs/run-102/cancel")
+    }, headers={"X-Cosmo-Domain": "dom-run"})
+    res_cancel = await pg_client.post(
+        "/api/v1/runs/run-102/cancel",
+        headers={"X-Cosmo-Domain": "dom-run"},
+    )
     assert res_cancel.status_code == 200
     assert res_cancel.json()["status"] == "cancelled"
 
@@ -246,12 +249,12 @@ async def test_runs_and_batches_lifecycle(pg_client: AsyncClient):
 async def test_gates_and_decisions(pg_client: AsyncClient):
     await pg_client.post("/api/v1/domains", json={
         "id": "dom-gate", "label": "Gate Domain",
-        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "T"},
+        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "vault:secret/data/token"},
     })
     await pg_client.post("/api/v1/apps", json={
         "id": "app-gate", "domain_id": "dom-gate", "level": 1,
         "repo_binding": {"forge_id": "gitea", "repo_path": "dom-gate/app"},
-    })
+    }, headers={"X-Cosmo-Domain": "dom-gate"})
     await pg_client.post("/api/v1/plans", json={
         "id": "plan-gate-1", "app_id": "app-gate", "brick_ids": [],
     })
@@ -263,23 +266,24 @@ async def test_gates_and_decisions(pg_client: AsyncClient):
             {"finding_type": "Critical", "action": "block"},
             {"finding_type": "High", "action": "warn", "max_count": 3},
         ]},
-    })
+    }, headers={"X-Cosmo-Domain": "dom-gate"})
     assert res_auto.status_code == 201
 
     # 2. Create manual gate + decide
     await pg_client.post("/api/v1/gates", json={
         "id": "gate-manual", "plan_id": "plan-gate-1", "type": "manual", "position": 1,
         "policy": {"rules": [{"finding_type": "Critical", "action": "block"}]},
-    })
+    }, headers={"X-Cosmo-Domain": "dom-gate"})
 
     res_dec = await pg_client.post("/api/v1/gates/gate-manual/decision", json={
         "decision": "pass", "decided_by": "secops-lead@company.ru", "signature": "sig-sha256-verified",
-    })
+    }, headers={"X-Cosmo-Domain": "dom-gate"})
     assert res_dec.status_code == 200
     dec = res_dec.json()
     assert dec["decision"] == "pass"
     assert dec["decided_by"] == "secops-lead@company.ru"
 
     # 3. Manual gate requires decided_by — reject
-    res_bad = await pg_client.post("/api/v1/gates/gate-manual/decision", json={"decision": "block"})
+    res_bad = await pg_client.post("/api/v1/gates/gate-manual/decision", json={"decision": "block"},
+                                   headers={"X-Cosmo-Domain": "dom-gate"})
     assert res_bad.status_code == 400

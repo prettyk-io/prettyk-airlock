@@ -1,0 +1,36 @@
+# STACK-BUDDY-001: Gitleaks Secrets Scanner Job
+# Pinned image: zricethezav/gitleaks@sha256:...
+# Built-in rules + optional custom .gitleaks.toml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scanner-gitleaks
+  namespace: cosmo-system
+  labels:
+    cosmoport.role: scanner-job
+    cosmoport.scanner: gitleaks
+    cosmoport.phase: pre-scan
+    cosmoport.gap-mode: "false"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        cosmoport.scanner: gitleaks
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: scanner-gitleaks
+          image: zricethezav/gitleaks@sha256:0000000000000000000000000000000000000000000000000000000000000003
+          imagePullPolicy: IfNotPresent
+          args: ["detect", "--source", "/workspace", "--report-path", "/reports/gitleaks.sarif", "--report-format", "sarif"]
+          resources:
+            requests: { memory: "256Mi", cpu: "250m" }
+            limits:   { memory: "512Mi", cpu: "500m" }
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+            - { name: reports,   mountPath: /reports }
+      volumes:
+        - { name: workspace, persistentVolumeClaim: { claimName: cosmo-workspace } }
+        - { name: reports,   emptyDir: {} }

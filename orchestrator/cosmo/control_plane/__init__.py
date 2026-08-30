@@ -18,6 +18,18 @@ from orchestrator.cosmo.control_plane.executor import (
 from orchestrator.cosmo.control_plane.gate_engine import (
     GatePolicyEngine,
 )
+from orchestrator.cosmo.control_plane.build_modes import (
+    BuildMode,
+    BuildModeEngine,
+    BuildProfile,
+    CodeQLPolicy,
+    DebugSymbols,
+    ProvenanceCapability,
+    SBOMFormat,
+    ScanProfile,
+    ScanProfileEngine,
+    ScanTool,
+)
 
 __all__ = [
     "RunControlPlane",
@@ -32,4 +44,15 @@ __all__ = [
     "PipelineHandle",
     # COS-055
     "GatePolicyEngine",
+    # STACK-BOSS-001
+    "BuildMode",
+    "BuildModeEngine",
+    "BuildProfile",
+    "CodeQLPolicy",
+    "DebugSymbols",
+    "ProvenanceCapability",
+    "SBOMFormat",
+    "ScanProfile",
+    "ScanProfileEngine",
+    "ScanTool",
 ]

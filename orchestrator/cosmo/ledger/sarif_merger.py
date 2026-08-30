@@ -29,7 +29,7 @@ _SEVERITY_RANK = {
 
 
 def _severity_rank(sev: str) -> int:
-    """Compute severity rank from any format (SARIF level or AppSecHub severity)."""
+    """Compute severity rank from any format (SARIF level or normalized severity)."""
     s = (sev or "").upper()
     rank = _SEVERITY_RANK.get(s)
     if rank is not None:

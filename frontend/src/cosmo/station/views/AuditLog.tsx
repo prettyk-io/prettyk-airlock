@@ -25,87 +25,6 @@ import { ErrorBoundary } from '../../shared/ErrorBoundary';
 import { EmptyState } from '../../shared/EmptyState';
 import { toast } from '../../shared/toast';
 
-const FALLBACK_EVENTS: AuditEvent[] = [
-  {
-    id: 'aud-001',
-    timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
-    user_id: 'operator@cosmo.local',
-    role: 'secops-lead',
-    action: 'gate_decision',
-    resource_type: 'gate',
-    resource_id: 'gate-qg',
-    status: 'success',
-    ip_address: '192.168.1.104',
-    details_json: {
-      decision: 'pass',
-      signature: 'sig-sha256-verified-8890',
-      reason: 'Все SAST/DAST проверки пройдены без блокирующих замечаний',
-    },
-  },
-  {
-    id: 'aud-002',
-    timestamp: new Date(Date.now() - 45 * 60000).toISOString(),
-    user_id: 'devops-lead@cbr.ru',
-    role: 'devops',
-    action: 'transfer_zone',
-    resource_type: 'release',
-    resource_id: 'rel-cbr-2026-q3',
-    status: 'success',
-    ip_address: '10.200.4.12',
-    details_json: {
-      from_zone: 'ЗР',
-      to_zone: 'ЗТ',
-      target_env: 'stage-banking',
-    },
-  },
-  {
-    id: 'aud-003',
-    timestamp: new Date(Date.now() - 2 * 3600000).toISOString(),
-    user_id: 'developer@payments.io',
-    role: 'developer',
-    action: 'commit_push',
-    resource_type: 'repo',
-    resource_id: 'payments/api',
-    status: 'success',
-    ip_address: '172.16.0.50',
-    details_json: {
-      branch: 'main',
-      commit: 'fa482c1',
-      file: 'scenarios/auth.wire',
-    },
-  },
-  {
-    id: 'aud-004',
-    timestamp: new Date(Date.now() - 3.2 * 3600000).toISOString(),
-    user_id: 'cron-service',
-    role: 'system',
-    action: 'trigger_run',
-    resource_type: 'run',
-    resource_id: 'run-101',
-    status: 'success',
-    ip_address: '127.0.0.1',
-    details_json: {
-      plan_id: 'plan-steel',
-      trigger: 'scheduled',
-    },
-  },
-  {
-    id: 'aud-005',
-    timestamp: new Date(Date.now() - 5 * 3600000).toISOString(),
-    user_id: 'unknown_attacker',
-    role: 'guest',
-    action: 'login_attempt',
-    resource_type: 'auth',
-    resource_id: 'portal01',
-    status: 'failed',
-    ip_address: '45.142.122.9',
-    details_json: {
-      error: 'invalid_credentials',
-      attempts: 3,
-    },
-  },
-];
-
 const ACTIONS = [
   { value: 'all', label: 'Все действия' },
   { value: 'gate_decision', label: 'Решение Gate' },
@@ -134,7 +53,7 @@ const RESOURCE_TYPES = [
 ];
 
 export function AuditLog() {
-  const [events, setEvents] = useState<AuditEvent[]>(FALLBACK_EVENTS);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -158,23 +77,7 @@ export function AuditLog() {
       if (data && data.length > 0) {
         setEvents(data);
       } else {
-        // Apply in-memory filtering over fallback data
-        let filtered = [...FALLBACK_EVENTS];
-        if (userQuery.trim()) {
-          filtered = filtered.filter((e) =>
-            e.user_id.toLowerCase().includes(userQuery.trim().toLowerCase())
-          );
-        }
-        if (actionFilter !== 'all') {
-          filtered = filtered.filter((e) => e.action === actionFilter);
-        }
-        if (statusFilter !== 'all') {
-          filtered = filtered.filter((e) => e.status === statusFilter);
-        }
-        if (resourceFilter !== 'all') {
-          filtered = filtered.filter((e) => e.resource_type === resourceFilter);
-        }
-        setEvents(filtered);
+        setEvents([]);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка загрузки журнала аудита';

@@ -86,7 +86,6 @@ async def create_domain(
     )
     db.add(db_domain)
     await db.commit()
-    await db.refresh(db_domain)
     return _db_to_domain(db_domain)
 
 

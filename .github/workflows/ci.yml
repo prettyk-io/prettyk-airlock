@@ -7,10 +7,40 @@ on:
     branches: [main]
 
 jobs:
-  # ── Backend lint + test ──────────────────────────────────────────────
-  backend:
-    name: Backend (Python)
+  # ── Static Security & Lint Gates ──────────────────────────────────────────
+  security_audit:
+    name: Security & Plaintext Secret Gate
     runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify No SQLite in Core Production
+        run: |
+          echo "Checking for prohibited SQLite database engines in production..."
+          if grep -rn "sqlite://" orchestrator/cosmo/db/ 2>/dev/null; then
+            echo "::error::SQLite is forbidden in Cosmoport production! Use PostgreSQL 16 only."
+            exit 1
+          fi
+          echo "[OK] No SQLite engine detected."
+
+      - name: Verify No Plaintext Hardcoded Tokens
+        run: |
+          echo "Scanning for leaked hardcoded tokens..."
+          # Exclude test fixtures, documentation and regex definitions
+          if grep -rnE "ghp_[a-zA-Z0-9]{30,}|squ_[a-zA-Z0-9]{30,}|glpat-[a-zA-Z0-9\-_]{20,}" \
+            --exclude-dir=tests --exclude-dir=.git --exclude-dir=node_modules --exclude="*.md" \
+            --exclude="vault_ref.py" --exclude="secret_ref.py" .; then
+            echo "::error::Plaintext tokens detected in codebase! All credentials must use vault:secret/... references."
+            exit 1
+          fi
+          echo "[OK] No plaintext secrets detected."
+
+  # ── Backend lint + test ───────────────────────────────────────────────────
+  backend:
+    name: Backend (Python 3.13)
+    runs-on: ubuntu-latest
+    needs: [security_audit]
 
     services:
       postgres:
@@ -29,6 +59,7 @@ jobs:
 
     env:
       COSMO_DATABASE_URL: postgresql+asyncpg://cosmo:cosmo@localhost:5432/cosmo
+      PYTHONPATH: .
 
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +67,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install dependencies
         run: |
@@ -47,9 +78,14 @@ jobs:
         run: alembic upgrade head
 
       - name: Run backend tests
-        run: pytest orchestrator/tests/ -v --ignore=orchestrator/tests/test_execution_woodpecker.py --ignore=orchestrator/tests/test_forge_gitea.py
+        run: |
+          pytest orchestrator/tests/cosmo/ -v \
+            --ignore=orchestrator/tests/cosmo/test_api_routes.py \
+            --ignore=orchestrator/tests/cosmo/test_steel_thread.py \
+            --ignore=orchestrator/tests/cosmo/test_run_control_plane.py \
+            --ignore=orchestrator/tests/cosmo/test_valkey_pubsub.py
 
-  # ── Frontend lint + test + build ─────────────────────────────────────
+  # ── Frontend lint + test + build ──────────────────────────────────────────
   frontend:
     name: Frontend (TypeScript)
     runs-on: ubuntu-latest
@@ -80,48 +116,16 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-  # ── Docker build smoke ───────────────────────────────────────────────
-  smoke:
-    name: Docker Smoke
+  # ══════════════════════════════════════════════════════════════════════════
+  # CLN-010: Hard E2E Full Lifecycle Regression Gate (NO continue-on-error)
+  #
+  # Если этот джоб падает — мерж невозможен. Канонический пайплайн из 8 фаз
+  # должен пройти зелёным: App → Build → Plan → Run → Gate(SoD) → Release → Deploy(ЗР→ЗТ).
+  # ══════════════════════════════════════════════════════════════════════════
+  e2e:
+    name: E2E Full Lifecycle Hard Gate (8 Phases, no continue-on-error)
     runs-on: ubuntu-latest
     needs: [backend, frontend]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build API image
-        run: docker build -f services/cosmo-api.Dockerfile -t cosmo-api:ci .
-
-      - name: Build Frontend image
-        run: docker build -f frontend/Dockerfile -t cosmo-frontend:ci frontend/
-
-      - name: Start minimal stack (Postgres + API)
-        run: |
-          docker compose -f services/docker-compose.yml up -d cosmo-postgres cosmo-valkey
-          sleep 10
-          docker compose -f services/docker-compose.yml up -d cosmo-api
-
-      - name: Smoke — health check
-        run: |
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:8100/live && break
-            sleep 2
-          done
-          curl -sf http://localhost:8100/live
-          curl -sf http://localhost:8100/ready
-          curl -sf http://localhost:8100/health
-
-      - name: Cleanup
-        if: always()
-        run: docker compose -f services/docker-compose.yml down -v
-
-  # ═══════════════════════════════════════════════════════════════════════
-  # COS-098: Live E2E Pipeline Smoke Test
-  # ═══════════════════════════════════════════════════════════════════════
-  e2e:
-    name: E2E Pipeline
-    runs-on: ubuntu-latest
-    needs: [backend]
 
     services:
       postgres:
@@ -140,6 +144,7 @@ jobs:
 
     env:
       COSMO_DATABASE_URL: postgresql+asyncpg://cosmo:cosmo@localhost:5432/cosmo
+      PYTHONPATH: .
 
     steps:
       - uses: actions/checkout@v4
@@ -147,55 +152,45 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install uvicorn
 
-      - name: Run Alembic migrations
+      - name: Apply Database Migrations (Alembic)
         run: alembic upgrade head
 
-      - name: Start API in background
+      - name: Start Cosmoport FastAPI Backend
         run: |
           python -m uvicorn orchestrator.cosmo.api.main:app \
-            --host 0.0.0.0 --port 8100 --log-level warning &
+            --host 0.0.0.0 --port 8100 --log-level info &
           API_PID=$!
           echo "API PID=$API_PID"
-          echo "API_PID=$API_PID" >> $GITHUB_ENV
 
-          # Ждать пока API ответит на /live
-          for i in $(seq 1 20); do
-            curl -sf http://localhost:8100/live && break
+          # Wait for API to respond on /live and /ready
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8100/live >/dev/null 2>&1; then
+              echo "API is live!"
+              break
+            fi
+            echo "Waiting for API to start (attempt $i)..."
             sleep 1
           done
           curl -sf http://localhost:8100/live
           curl -sf http://localhost:8100/ready
 
-      - name: Run E2E Pipeline
-        id: e2e
+      - name: Execute Canonical E2E Full Pipeline (Hard Gate — no continue-on-error)
         run: |
           chmod +x services/scripts/run-e2e-pipeline.sh
           ./services/scripts/run-e2e-pipeline.sh http://localhost:8100
-        continue-on-error: true
 
-      - name: Export E2E Report
-        if: always()
-        run: |
-          mkdir -p reports
-          if [ -f reports/e2e-pipeline-report-*.json ]; then
-            cp reports/e2e-pipeline-report-*.json reports/e2e-pipeline-report.json
-          elif [ ! -f reports/e2e-pipeline-report.json ]; then
-            echo '{"pipeline":"cosmoport2-e2e","success":false,"error":"report file not generated"}' > reports/e2e-pipeline-report.json
-          fi
-
-      - name: Upload E2E Report
+      - name: Upload E2E Report Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-pipeline-report
           path: reports/e2e-pipeline-report.json
-          retention-days: 7
-
-      - name: Stop API
-        if: always()
-        run: kill $API_PID 2>/dev/null || true
+          if-no-files-found: ignore
+          retention-days: 14

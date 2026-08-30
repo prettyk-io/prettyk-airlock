@@ -1,19 +1,17 @@
 /**
- * COS-021/COS-022/COS-057: Control Station Shell — MUI Minimal UI + Meta Light.
+ * OWN-FLASH-001: Control Station Shell — KITS & Projects workspace.
  *
- * Router views:
- *   - domains / overview -> Overview.tsx
- *   - applications       -> Applications.tsx
- *   - topology           -> AppGraph.tsx
- *   - pipelines          -> PipelineStudio.tsx
- *   - runs               -> RunControl.tsx
- *   - gates              -> Gates.tsx
- *   - releases           -> Releases.tsx
- *   - catalog            -> Catalog.tsx
- *   - audit              -> AuditLog.tsx
- *   - evidence           -> Evidence.tsx
- *
- * COS-057: Breadcrumbs & Global Search (⌘K).
+ * Routes:
+ *   overview           — ProjectsOverview (KITS switcher)
+ *   projects-registry  — ProjectsRegistry (create/manage)
+ *   project-detail     — ProjectDetail (Data Grid + Team)
+ *   project-graph      — ProjectGraph (React Flow)
+ *   flat-apps          — FlatAppsRegistry (filterable)
+ *   release-types      — ReleaseTypeBuilder
+ *   batch-constructor  — BatchConstructor
+ *   release-dashboard  — ProjectReleaseDashboard
+ *   applications       — Applications (legacy)
+ *   pipelines / runs / gates / releases / builds / deployments
  */
 import { useState, useEffect } from 'react';
 import {
@@ -21,26 +19,35 @@ import {
   Divider, Chip, Tooltip, Button,
 } from '@mui/material';
 import {
-  Dashboard, Apps, AccountTree, PlayArrow, Gavel, Store, History, Settings,
-  DarkMode, LightMode, Notifications, Person, RocketLaunch, Hub, Fingerprint, Search, Compare, TrendingUp,
+  Dashboard, Apps, AccountTree, PlayArrow, Gavel,
+  DarkMode, LightMode, Notifications, Person, RocketLaunch, Search,
+  Build, CloudUpload, Folder, Settings,
 } from '@mui/icons-material';
 import { useCosmoTheme } from '../theme';
 import { usePreference } from '../shared/usePreference';
 import type { IDEContext } from '../shared/DeepLinker';
 
-import { Overview } from './views/Overview';
+import { ProjectsOverview } from './views/ProjectsOverview';
+import { ProjectsRegistry } from './views/ProjectsRegistry';
+import { ProjectDetail } from './views/ProjectDetail';
+import { ProjectGraph } from './views/ProjectGraph';
+import { FlatAppsRegistry } from './views/FlatAppsRegistry';
+import { ReleaseTypeBuilder } from './views/ReleaseTypeBuilder';
+import { BatchConstructor } from './views/BatchConstructor';
+import { ProjectReleaseDashboard } from './views/ProjectReleaseDashboard';
+import { ProjectCreateWizard } from './views/ProjectCreateWizard';
+import { CreateStandaloneApp } from './views/CreateStandaloneApp';
+import { CreateLibrary } from './views/CreateLibrary';
 import { Applications } from './views/Applications';
-import { AppGraph } from './views/AppGraph';
 import { PipelineStudio } from './views/PipelineStudio';
 import { RunControl } from './views/RunControl';
 import { RunComparison } from './views/RunComparison';
 import { Gates } from './views/Gates';
 import { Releases } from './views/Releases';
 import { Catalog } from './views/Catalog';
-import { Evidence } from './views/Evidence';
-import { AuditLog } from './views/AuditLog';
-import { Analytics } from './views/Analytics';
 import { GatePolicyBuilder } from './views/GatePolicyBuilder';
+import { BuildsRegistry } from './views/BuildsRegistry';
+import { DeploymentsRegistry } from './views/DeploymentsRegistry';
 import { AlertHUD } from './views/AlertHUD';
 
 import { Breadcrumbs } from '../shared/Breadcrumbs';
@@ -56,59 +63,37 @@ interface ControlStationProps {
 }
 
 const NAV_ITEMS = [
-  { id: 'domains', label: 'Домены', icon: <Dashboard /> },
-  { id: 'applications', label: 'Приложения', icon: <Apps /> },
-  { id: 'topology', label: 'Топология', icon: <Hub /> },
-  { id: 'pipelines', label: 'Пайплайны', icon: <AccountTree /> },
-  { id: 'runs', label: 'Прогоны', icon: <PlayArrow /> },
-  { id: 'compare', label: 'Сравнение', icon: <Compare /> },
-  { id: 'analytics', label: 'Аналитика', icon: <TrendingUp /> },
-  { id: 'gates', label: 'Гейты', icon: <Gavel /> },
-  { id: 'releases', label: 'Релизы', icon: <RocketLaunch /> },
-  { id: 'catalog', label: 'Каталог', icon: <Store /> },
-  { id: 'audit', label: 'Аудит', icon: <History /> },
-  { id: 'evidence', label: 'Доказательства', icon: <Fingerprint /> },
-  { id: 'settings', label: 'Настройки', icon: <Settings /> },
+  { id: 'overview',           label: 'Обзор',        icon: <Dashboard /> },
+  { id: 'projects-registry',  label: 'Проекты',       icon: <Folder /> },
+  { id: 'applications',       label: 'Приложения',    icon: <Apps /> },
+  { id: 'builds',             label: 'Сборки',        icon: <Build /> },
+  { id: 'deployments',        label: 'Деплои',        icon: <CloudUpload /> },
+  { id: 'pipelines',          label: 'Пайплайны',     icon: <AccountTree /> },
+  { id: 'runs',               label: 'Прогоны',       icon: <PlayArrow /> },
+  { id: 'gates',              label: 'Гейты',         icon: <Gavel /> },
+  { id: 'releases',           label: 'Релизы',        icon: <RocketLaunch /> },
 ] as const;
 
 const DRAWER_WIDTH = 240;
 
-const selStyle: React.CSSProperties = {
-  padding: '4px 8px', borderRadius: 6, border: '1px solid #CBD5E1',
-  background: 'transparent', fontSize: 13, fontFamily: 'inherit',
-  color: 'inherit', minWidth: 110, outline: 'none',
-};
-
 export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlStationProps) {
   const { mode, toggleMode } = useCosmoTheme();
   const [nav, setNav] = usePreference('nav');
-  const [domain, setDomain] = usePreference('domain');
-  const [env, setEnv] = usePreference('env');
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [newRunOpen, setNewRunOpen] = useState(false);
+  const [projectId, setProjectId] = useState<string>('');
 
   // COS-099: Global keyboard navigation
   useHotkeys(
-    (targetView) => {
-      setNav(targetView);
-    },
-    () => {
-      setNewRunOpen(true);
-    },
-    () => {
-      setSearchOpen(false);
-      setHelpOpen(false);
-      setNewRunOpen(false);
-    }
+    (targetView) => { setNav(targetView); },
+    () => {},
+    () => { setSearchOpen(false); setHelpOpen(false); }
   );
 
-  // COS-024: синхронизировать nav при deep-link
-  useEffect(() => {
-    if (view) setNav(view);
-  }, [view]);
+  // COS-024
+  useEffect(() => { if (view) setNav(view); }, [view]);
 
-  // COS-057: Глобальный хоткей ⌘K / Ctrl+K
+  // COS-057: ⌘K
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -120,76 +105,78 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // COS-024: Deep-link run context display
-  const deepLinkChip = runId ? (
-    <Chip
-      icon={<PlayArrow />}
-      label={`Run #${runId}`}
-      size="small"
-      color="info"
-      variant="outlined"
-      onDelete={() => { /* clear deep-link */ }}
-      sx={{ fontSize: 11, height: 24 }}
-    />
-  ) : null;
-
-  // COS-024: Transition to Web IDE (e.g., from Gate Inspector → code)
   const openInIDE = (ctx: { repo: string; file: string; line?: number }) => {
-    if (onNavigateToIDE) {
-      onNavigateToIDE(ctx);
-    }
+    onNavigateToIDE?.(ctx);
   };
 
   const handleSearchResultSelect = (targetView: string, params?: Record<string, string>) => {
     setNav(targetView);
-    if (params?.domain_id) {
-      setDomain(params.domain_id);
-    }
+    if (params?.projectId) { setProjectId(params.projectId); setNav('project-detail'); }
+  };
+
+  const handleNavigate = (targetView: string, params?: Record<string, string>) => {
+    if (params?.projectId) { setProjectId(params.projectId); setNav(targetView); return; }
+    setNav(targetView);
   };
 
   const currentViewTitle = NAV_ITEMS.find((n) => n.id === nav)?.label || nav;
 
   const renderCurrentView = () => {
     switch (nav) {
-      case 'domains':
       case 'overview':
-        return <Overview selectedDomain={domain} onNavigateToView={setNav} onNavigateToIDE={openInIDE} />;
-      case 'help':
-        return <Overview selectedDomain={domain} onNavigateToView={setNav} onNavigateToIDE={openInIDE} />;
+        return <ProjectsOverview onNavigate={handleNavigate} />;
+      case 'projects-registry':
+        return <ProjectsRegistry onNavigate={handleNavigate} />;
+      case 'project-detail':
+        return <ProjectDetail projectId={projectId} onBack={() => setNav('overview')} onNavigate={handleNavigate} />;
+      case 'project-graph':
+        return <ProjectGraph projectId={projectId} onBack={() => setNav('project-detail')} />;
+      case 'flat-apps':
+        return <FlatAppsRegistry onNavigate={handleNavigate} />;
+      case 'release-types':
+        return <ReleaseTypeBuilder />;
+      case 'batch-constructor':
+        return <BatchConstructor projectId={projectId} onBack={() => setNav('project-detail')} />;
+      case 'release-dashboard':
+        return <ProjectReleaseDashboard projectId={projectId} onBack={() => setNav('project-detail')} />;
+      case 'project-create':
+        return <ProjectCreateWizard onComplete={() => setNav('overview')} onCancel={() => setNav('projects-registry')} />;
+      case 'app-create-standalone':
+        return <CreateStandaloneApp onComplete={() => setNav('flat-apps')} onCancel={() => setNav('flat-apps')} />;
+      case 'library-create':
+        return <CreateLibrary onComplete={() => setNav('flat-apps')} onCancel={() => setNav('flat-apps')} />;
       case 'applications':
-        return <Applications selectedDomain={domain} onNavigateToIDE={openInIDE} />;
-      case 'topology':
-        return <AppGraph selectedDomain={domain} onNavigateToIDE={openInIDE} />;
+        return <Applications onNavigateToIDE={openInIDE} />;
+      case 'builds':
+        return <BuildsRegistry />;
+      case 'deployments':
+        return <DeploymentsRegistry />;
       case 'pipelines':
         return <PipelineStudio onNavigateToIDE={openInIDE} onNavigateToView={setNav} />;
+      case 'catalog':
+        return <Catalog />;
       case 'runs':
-        return <RunControl selectedDomain={domain} initialRunId={runId} onNavigateToIDE={openInIDE} onNavigateToView={setNav} />;
+        return <RunControl initialRunId={runId} onNavigateToIDE={openInIDE} onNavigateToView={setNav} />;
       case 'compare':
         return <RunComparison />;
-      case 'analytics':
-        return <Analytics selectedDomain={domain} />;
       case 'gates':
         return <Gates onNavigateToIDE={openInIDE} onNavigateToPolicyBuilder={() => setNav('gate-policy-builder')} />;
       case 'gate-policy-builder':
         return <GatePolicyBuilder />;
       case 'releases':
-        return <Releases selectedDomain={domain} onNavigateToIDE={openInIDE} />;
-      case 'catalog':
-        return <Catalog />;
-      case 'audit':
-        return <AuditLog />;
-      case 'evidence':
-        return <Evidence initialRunId={runId} onNavigateToIDE={openInIDE} />;
-      case 'settings':
-        return <Overview selectedDomain={domain} onNavigateToView={setNav} onNavigateToIDE={openInIDE} />;
+        return <Releases onNavigateToIDE={openInIDE} />;
       default:
-        return <Overview selectedDomain={domain} onNavigateToView={setNav} onNavigateToIDE={openInIDE} />;
+        return <ProjectsOverview onNavigate={handleNavigate} />;
     }
   };
 
+  const deepLinkChip = runId ? (
+    <Chip icon={<PlayArrow />} label={`Run #${runId}`} size="small" color="info" variant="outlined"
+      onDelete={() => {}} sx={{ fontSize: 11, height: 24 }} />
+  ) : null;
+
   return (
     <Box className="cosmo-control-station" sx={{ display: 'flex', minHeight: '100vh' }}>
-      {/* Sidebar */}
       <Drawer variant="permanent" sx={{ width: DRAWER_WIDTH, flexShrink: 0, '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' } }}>
         <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ width: 32, height: 32, borderRadius: 1, background: 'linear-gradient(135deg, #0ea5e9, #7c3aed)' }} />
@@ -207,73 +194,31 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
         </List>
       </Drawer>
 
-      {/* Main */}
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        {/* Header */}
         <AppBar position="static" color="transparent" elevation={0} sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Toolbar sx={{ gap: 1.5, minHeight: 48, px: 2 }}>
-            {/* COS-057: Breadcrumbs */}
-            <Breadcrumbs
-              domain={domain}
-              viewTitle={currentViewTitle}
-              onNavigateToView={setNav}
-              onSelectDomain={setDomain}
-            />
+            <Breadcrumbs viewTitle={currentViewTitle} onNavigateToView={setNav} />
 
             <div style={{ flex: 1 }} />
 
-            {/* Global Search Button */}
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Search sx={{ fontSize: 16 }} />}
+            <Button variant="outlined" size="small" startIcon={<Search sx={{ fontSize: 16 }} />}
               onClick={() => setSearchOpen(true)}
-              sx={{
-                textTransform: 'none',
-                fontSize: 12,
-                color: 'text.secondary',
-                borderColor: 'divider',
-                bgcolor: 'action.hover',
-                px: 1.5,
-                py: 0.5,
-                borderRadius: 2,
-                display: { xs: 'none', sm: 'inline-flex' },
-              }}
-            >
+              sx={{ textTransform: 'none', fontSize: 12, color: 'text.secondary', borderColor: 'divider',
+                bgcolor: 'action.hover', px: 1.5, py: 0.5, borderRadius: 2, display: { xs: 'none', sm: 'inline-flex' } }}>
               <span>Поиск по системе...</span>
-              <kbd style={{ marginLeft: 8, padding: '1px 5px', borderRadius: 4, background: 'rgba(0,0,0,0.08)', fontSize: 10, fontFamily: 'monospace' }}>
-                ⌘K
-              </kbd>
+              <kbd style={{ marginLeft: 8, padding: '1px 5px', borderRadius: 4, background: 'rgba(0,0,0,0.08)', fontSize: 10, fontFamily: 'monospace' }}>⌘K</kbd>
             </Button>
 
-            <select value={domain} onChange={(e) => setDomain(e.target.value)} style={selStyle}>
-              <option value="all">Все домены</option>
-              <option value="cbr">Цифровой рубль</option>
-              <option value="payments">Платежи</option>
-            </select>
-            <select value={env} onChange={(e) => setEnv(e.target.value)} style={selStyle}>
-              <option value="dev">dev</option>
-              <option value="test">test</option>
-              <option value="stage">stage</option>
-              <option value="prod">prod</option>
-            </select>
             <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, background: 'rgba(14,165,233,0.1)', color: '#0EA5E9', border: '1px solid rgba(14,165,233,0.2)', fontWeight: 600 }}>Active Control Plane</span>
             {deepLinkChip}
 
             <AlertHUD onNavigateToView={(targetView, params) => {
               setNav(targetView);
-              if (params?.domain_id) setDomain(params.domain_id);
+              if (params?.projectId) setProjectId(params.projectId);
             }} />
             <Tooltip title={mode === 'dark' ? 'Включить светлую тему (Meta Light)' : 'Включить тёмную тему (Meta Dark)'}>
-              <IconButton
-                size="small"
-                onClick={toggleMode}
-                aria-label="theme-toggle"
-                sx={{
-                  color: mode === 'dark' ? '#FBBF24' : 'text.secondary',
-                  transition: 'color 0.2s ease',
-                }}
-              >
+              <IconButton size="small" onClick={toggleMode} aria-label="theme-toggle"
+                sx={{ color: mode === 'dark' ? '#FBBF24' : 'text.secondary', transition: 'color 0.2s ease' }}>
                 {mode === 'dark' ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
               </IconButton>
             </Tooltip>
@@ -283,26 +228,13 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
           </Toolbar>
         </AppBar>
 
-        {/* View container */}
         <Box sx={{ flex: 1, p: 3, overflowY: 'auto' }}>
           {renderCurrentView()}
         </Box>
       </Box>
 
-      {/* COS-057: Global Search Modal */}
-      <GlobalSearch
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onSelectResult={handleSearchResultSelect}
-      />
-
-      {/* COS-099: Keyboard Shortcuts Help Overlay */}
-      <HotkeyOverlay
-        open={helpOpen || nav === 'help'}
-        onClose={() => { setHelpOpen(false); setNav('domains'); }}
-      />
-
-      {/* Toast Notification Container */}
+      <GlobalSearch open={searchOpen} onClose={() => setSearchOpen(false)} onSelectResult={handleSearchResultSelect} />
+      <HotkeyOverlay open={helpOpen || nav === 'help'} onClose={() => { setHelpOpen(false); setNav('overview'); }} />
       <ToastContainer />
     </Box>
   );

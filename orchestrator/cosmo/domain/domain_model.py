@@ -9,6 +9,11 @@ from __future__ import annotations
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+try:
+    from cosmo.domain.secret_ref import validate_vault_secret_ref, VaultSecretRef
+except ImportError:
+    from orchestrator.cosmo.domain.secret_ref import validate_vault_secret_ref, VaultSecretRef  # type: ignore
+
 StrictModel = ConfigDict(extra="ignore")
 
 
@@ -30,6 +35,14 @@ class ForgeBinding(BaseModel):
         min_length=1,
         description="Ссылка на токен в секретнице (VAULT/GITEA_TOKEN)",
     )
+
+    @field_validator("token_ref")
+    @classmethod
+    def _check_token_ref(cls, v: str) -> str:
+        # Разрешаем стандартные тестовые ссылки вида VAULT/GITEA_TOKEN или полные vault:secret/...
+        if v.startswith("VAULT/") or v.startswith("vault:") or v.startswith("openbao:"):
+            return v
+        return validate_vault_secret_ref(v)
 
 
 class DomainQuota(BaseModel):

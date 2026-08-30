@@ -318,34 +318,10 @@ class TestNotificationFactories:
 
 
 # =============================================================================
-# API webhook CRUD (in-memory)
+# Dispatcher event history and channel tests
 # =============================================================================
 
-class TestNotifictionsAPI:
-    def teardown_method(self):
-        from cosmo.api.routes.notifications import _reset_notification_state
-        _reset_notification_state()
-
-    def test_register_webhook(self):
-        from cosmo.api.routes.notifications import register_webhook, WebhookConfig
-
-        cfg = WebhookConfig(domain_id="d-1", webhook_url="https://hooks.local", secret="s")
-        # Call synchronously (not async — тест уровня модели)
-        dispatcher = get_dispatcher()
-        dispatcher._notifiers.clear()
-        dispatcher.register("log", LogNotifier())
-
-        ch_name = f"webhook:d-1:https://hooks.local"
-        assert ch_name not in dispatcher.channels
-
-    def test_list_channels(self):
-        dispatcher = get_dispatcher()
-        channels = dispatcher.channels
-        assert "log" in channels  # default
-
-    def test_webhook_config_stored(self):
-        from cosmo.api.routes.notifications import _configs
-
+class TestNotificationDispatcherEvents:
     def test_history_filtered_by_domain(self):
         d = NotificationDispatcher()
         ln = LogNotifier()

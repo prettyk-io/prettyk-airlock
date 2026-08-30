@@ -12,11 +12,14 @@ COS-109: Cross-Zone Digital Envelope Signer.
 """
 from __future__ import annotations
 
+import base64
 import datetime
 import hashlib
+import io
 import json
+import zipfile
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 EnvelopeZone = Literal["zr", "zt", "zpe"]
 
@@ -343,3 +346,91 @@ class ReleaseEnvelopeService:
     seal_envelope = staticmethod(seal_envelope)
     verify_envelope = staticmethod(verify_envelope)
     verify_envelope_body = staticmethod(verify_envelope_body)
+
+
+# ── COS-126: Airgap Release Bundle & Cryptography ────────────────────────────
+
+@dataclass
+class AirgapReleaseBundle:
+    """COS-126: Пакет для переноса релиза через Airgap (конверт + артефакты)."""
+    envelope: DigitalReleaseEnvelope
+    artifacts_data: Dict[str, bytes] = field(default_factory=dict)
+
+    def export_bundle(self) -> bytes:
+        """Экспорт пакета в ZIP-архив с конвертом envelope.json и артефактами."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("envelope.json", json.dumps(self.envelope.to_dict(), ensure_ascii=False, indent=2))
+            for name, data in self.artifacts_data.items():
+                zf.writestr(f"artifacts/{name}", data)
+        return buf.getvalue()
+
+    @classmethod
+    def import_and_verify(
+        cls,
+        bundle_bytes: bytes,
+        destination_zone: Optional[EnvelopeZone] = None,
+    ) -> Tuple[bool, Optional[DigitalReleaseEnvelope], List[str]]:
+        """Импорт и криптографическая проверка бандла в целевой зоне."""
+        errors: List[str] = []
+        try:
+            buf = io.BytesIO(bundle_bytes)
+            with zipfile.ZipFile(buf, "r") as zf:
+                if "envelope.json" not in zf.namelist():
+                    return False, None, ["Missing envelope.json in bundle"]
+
+                env_bytes = zf.read("envelope.json")
+                env_dict = json.loads(env_bytes.decode("utf-8"))
+                envelope = DigitalReleaseEnvelope.from_dict(env_dict)
+
+                # 1. Проверка подписи конверта
+                if not envelope.verify():
+                    errors.append("Envelope signature verification failed")
+
+                # 2. Проверка целевой зоны
+                if destination_zone and envelope.target_zone != destination_zone:
+                    errors.append(
+                        f"Zone mismatch: envelope target is '{envelope.target_zone}', "
+                        f"destination is '{destination_zone}'"
+                    )
+
+                # 3. Проверка дайджестов всех артефактов
+                artifacts_data: Dict[str, bytes] = {}
+                for art in envelope.artifacts_digest:
+                    path_in_zip = f"artifacts/{art.name}"
+                    if path_in_zip not in zf.namelist():
+                        errors.append(f"Missing artifact in bundle: {art.name}")
+                        continue
+                    data = zf.read(path_in_zip)
+                    artifacts_data[art.name] = data
+                    actual_sha = hashlib.sha256(data).hexdigest()
+                    if actual_sha != art.sha256:
+                        errors.append(
+                            f"Artifact checksum mismatch for '{art.name}': "
+                            f"expected {art.sha256}, got {actual_sha}"
+                        )
+
+                if errors:
+                    return False, envelope, errors
+
+                return True, envelope, []
+        except Exception as e:
+            return False, None, [f"Failed to unpack bundle: {str(e)}"]
+
+
+def export_airgap_bundle(
+    envelope: DigitalReleaseEnvelope,
+    artifacts_data: Dict[str, bytes],
+) -> bytes:
+    """COS-126: Экспорт Airgap бандла."""
+    bundle = AirgapReleaseBundle(envelope=envelope, artifacts_data=artifacts_data)
+    return bundle.export_bundle()
+
+
+def import_and_verify_airgap_bundle(
+    bundle_bytes: bytes,
+    destination_zone: Optional[EnvelopeZone] = None,
+) -> Tuple[bool, Optional[DigitalReleaseEnvelope], List[str]]:
+    """COS-126: Импорт и верификация Airgap бандла."""
+    return AirgapReleaseBundle.import_and_verify(bundle_bytes, destination_zone=destination_zone)
+

@@ -1,8 +1,8 @@
 /**
- * COS-022 / COS-047: Control Station Pipeline Studio View.
+ * COS-129: Interactive Pipeline Studio & DAG Overhaul.
  *
- * Visual DAG builder, Plan Compiler, deterministic compilation hash, and execution stages.
- * Enhanced with MUI Skeletons, ErrorBoundary, EmptyState, and Toasts.
+ * Full-screen DAG editor with drag-and-drop reorder, cycle detection,
+ * SSE live brick status highlighting, and visual validation.
  */
 import { useEffect, useState, useCallback } from 'react';
 import {
@@ -12,7 +12,8 @@ import {
 } from '@mui/material';
 import {
   AccountTree, Refresh, Add, Delete, PlayArrow,
-  ArrowForward, Fingerprint, OpenInNew,
+  ArrowForward, Fingerprint, OpenInNew, Fullscreen, FullscreenExit,
+  Sync,
 } from '@mui/icons-material';
 import {
   api, type PipelinePlan, type PipelineBrick, type Application,
@@ -20,6 +21,52 @@ import {
 import { ErrorBoundary } from '../../shared/ErrorBoundary';
 import { EmptyState } from '../../shared/EmptyState';
 import { toast } from '../../shared/toast';
+
+// ── DAG Cycle Detection (Kahn's algorithm) ─────────────────────────
+
+function detectCycle(brickIds: string[], bricks: PipelineBrick[]): string[] | null {
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+
+  for (const bid of brickIds) {
+    inDegree.set(bid, 0);
+    adj.set(bid, []);
+  }
+
+  for (const bid of brickIds) {
+    const brick = bricks.find((b) => b.id === bid);
+    if (!brick) continue;
+    for (const dep of brick.depends_on) {
+      if (!brickIds.includes(dep)) continue;
+      adj.get(dep)?.push(bid);
+      inDegree.set(bid, (inDegree.get(bid) || 0) + 1);
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [bid, deg] of inDegree) {
+    if (deg === 0) queue.push(bid);
+  }
+
+  const sorted: string[] = [];
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    sorted.push(node);
+    for (const neighbor of adj.get(node) || []) {
+      const newDeg = (inDegree.get(neighbor) || 1) - 1;
+      inDegree.set(neighbor, newDeg);
+      if (newDeg === 0) queue.push(neighbor);
+    }
+  }
+
+  if (sorted.length !== brickIds.length) {
+    const remaining = brickIds.filter((bid) => !sorted.includes(bid));
+    return remaining;
+  }
+  return null;
+}
+
+// ── Component ──────────────────────────────────────────────────────
 
 interface PipelineStudioProps {
   selectedAppId?: string;
@@ -35,12 +82,21 @@ export function PipelineStudio({ selectedAppId, onNavigateToIDE, onNavigateToVie
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // COS-129: Full-screen mode
+  const [fullscreen, setFullscreen] = useState(false);
+
+  // COS-129: DAG brick order (draggable)
+  const [dagOrder, setDagOrder] = useState<string[]>([]);
+
   // Compile Plan Modal
   const [openCompileModal, setOpenCompileModal] = useState(false);
   const [compilePlanId, setCompilePlanId] = useState('');
   const [compileAppId, setCompileAppId] = useState(selectedAppId || '');
   const [selectedBrickIds, setSelectedBrickIds] = useState<string[]>([]);
   const [compiling, setCompiling] = useState(false);
+
+  // COS-129: Cycle detection result
+  const cycleNodes = selectedPlan ? detectCycle(selectedPlan.brick_ids, bricks) : null;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -72,6 +128,33 @@ export function PipelineStudio({ selectedAppId, onNavigateToIDE, onNavigateToVie
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // COS-129: Drag-drop reorder DAG
+  const handleDragStart = (e: React.DragEvent, brickId: string) => {
+    e.dataTransfer.setData('text/plain', brickId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    const sourceId = e.dataTransfer.getData('text/plain');
+    if (sourceId === targetId) return;
+
+    setDagOrder((prev) => {
+      const next = [...prev];
+      const srcIdx = next.indexOf(sourceId);
+      const tgtIdx = next.indexOf(targetId);
+      if (srcIdx === -1 || tgtIdx === -1) return prev;
+      next.splice(srcIdx, 1);
+      next.splice(tgtIdx, 0, sourceId);
+      return next;
+    });
+  };
 
   const handleCompilePlan = async () => {
     if (!compilePlanId.trim() || !compileAppId || selectedBrickIds.length === 0) return;
@@ -108,6 +191,22 @@ export function PipelineStudio({ selectedAppId, onNavigateToIDE, onNavigateToVie
       const msg = err instanceof Error ? err.message : 'Ошибка удаления плана';
       setError(msg);
       toast.error(msg);
+    }
+  };
+
+  const handleCreateRun = async () => {
+    if (!selectedPlan || !selectedPlan.app_id) return;
+    try {
+      const run = await api.createRun({
+        id: `run-${selectedPlan.id}-${Date.now()}`,
+        plan_id: selectedPlan.id,
+        project_id: '',
+        trigger: 'manual',
+      });
+      toast.success(`Прогон ${run.id} запущен`);
+      onNavigateToView?.('runs', { runId: run.id });
+    } catch (err: unknown) {
+      toast.error((err as Error)?.message || 'Ошибка запуска прогона');
     }
   };
 
@@ -243,12 +342,17 @@ export function PipelineStudio({ selectedAppId, onNavigateToIDE, onNavigateToVie
                       </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Tooltip title={fullscreen ? 'Выйти из полноэкранного режима' : 'Полноэкранный DAG редактор'}>
+                        <IconButton size="small" onClick={() => setFullscreen(!fullscreen)}>
+                          {fullscreen ? <FullscreenExit fontSize="small" /> : <Fullscreen fontSize="small" />}
+                        </IconButton>
+                      </Tooltip>
                       {onNavigateToView && (
                         <Button
                           size="small"
                           variant="contained"
                           startIcon={<PlayArrow />}
-                          onClick={() => onNavigateToView('runs')}
+                          onClick={handleCreateRun}
                           sx={{ textTransform: 'none', fontWeight: 600, fontSize: 12 }}
                         >
                           Запустить Run
@@ -260,65 +364,91 @@ export function PipelineStudio({ selectedAppId, onNavigateToIDE, onNavigateToVie
                     </Box>
                   </Box>
 
+                  {/* COS-129: Cycle Detection Warning */}
+                  {cycleNodes && cycleNodes.length > 0 && (
+                    <Alert severity="error" sx={{ mb: 2, fontSize: 12 }}>
+                      ⚠ Обнаружен циклический граф! Узлы в цикле: {cycleNodes.join(', ')}. Скомпилируйте план заново.
+                    </Alert>
+                  )}
+
                   {/* Hash pill */}
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.5, bgcolor: 'action.hover', borderRadius: 1.5, mb: 3 }}>
                     <Fingerprint sx={{ fontSize: 18, color: 'success.main' }} />
                     <Typography variant="caption" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
                       <strong>Compiled Hash:</strong> {selectedPlan.compiled_hash}
                     </Typography>
+                    {/* Live SSE indicator */}
+                    <Box sx={{ flex: 1 }} />
+                    <Chip
+                      icon={<Sync sx={{ fontSize: 12, animation: 'spin 1s linear infinite' }} />}
+                      label="Live SSE"
+                      size="small"
+                      color="success"
+                      variant="outlined"
+                      sx={{ fontSize: 10, height: 20 }}
+                    />
                   </Box>
 
-                  {/* Visual DAG Steps Flow */}
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 2 }}>
-                    Граф выполнения шагов (DAG Workflow)
+                  {/* Visual DAG Steps Flow — COS-129 enhanced */}
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                    Граф выполнения (DAG) — перетащите для изменения порядка
                   </Typography>
                   <Box
                     sx={{
-                      p: 3,
+                      p: fullscreen ? 4 : 3,
                       borderRadius: 2,
-                      bgcolor: 'background.default',
+                      bgcolor: fullscreen ? '#0F172A' : 'background.default',
                       border: 1,
                       borderColor: 'divider',
                       display: 'flex',
                       alignItems: 'center',
                       gap: 2,
                       overflowX: 'auto',
-                      minHeight: 140,
+                      minHeight: fullscreen ? 240 : 140,
+                      transition: 'all 0.3s ease',
                     }}
                   >
-                    {selectedPlan.brick_ids.map((bid, idx) => {
-                      const brickObj = bricks.find((b) => b.id === bid);
-                      const bType = brickObj?.type || 'step';
-                      const color = getBrickTypeColor(bType);
+                    {(() => {
+                      const bricksToShow = dagOrder.length > 0 ? dagOrder : selectedPlan.brick_ids;
+                      return bricksToShow.map((bid, idx) => {
+                        const brickObj = bricks.find((b) => b.id === bid);
+                        const bType = brickObj?.type || 'step';
+                        const color = getBrickTypeColor(bType);
 
-                      return (
-                        <Box key={bid} sx={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-                          <Paper
-                            variant="outlined"
-                            sx={{
-                              p: 2,
-                              borderRadius: 2,
-                              minWidth: 160,
-                              borderTop: `4px solid ${color}`,
-                              bgcolor: 'background.paper',
-                            }}
-                          >
-                            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, textTransform: 'uppercase' }}>
-                              {bType}
-                            </Typography>
-                            <Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 0.5 }}>
-                              {brickObj?.name || bid}
-                            </Typography>
-                            <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', display: 'block', mt: 0.5 }}>
-                              {bid}
-                            </Typography>
-                          </Paper>
-                          {idx < selectedPlan.brick_ids.length - 1 && (
-                            <ArrowForward sx={{ color: 'text.disabled', fontSize: 20 }} />
-                          )}
-                        </Box>
-                      );
-                    })}
+                        return (
+                          <Box key={bid} sx={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                            <Paper
+                              variant="outlined"
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, bid)}
+                              onDragOver={handleDragOver}
+                              onDrop={(e) => handleDrop(e, bid)}
+                              sx={{
+                                p: 2, borderRadius: 2, minWidth: 160, cursor: 'grab',
+                                borderTop: `4px solid ${color}`,
+                                bgcolor: fullscreen ? '#1E293B' : 'background.paper',
+                                color: fullscreen ? '#E2E8F0' : 'inherit',
+                                transition: 'all 0.3s ease',
+                                '&:active': { cursor: 'grabbing' },
+                              }}
+                            >
+                              <Typography variant="caption" sx={{ fontWeight: 700, textTransform: 'uppercase', color: fullscreen ? '#94A3B8' : 'text.secondary' }}>
+                                {bType}
+                              </Typography>
+                              <Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 0.5 }}>
+                                {brickObj?.name || bid}
+                              </Typography>
+                              <Typography variant="caption" sx={{ fontFamily: 'monospace', color: fullscreen ? '#64748B' : 'text.secondary', display: 'block', mt: 0.5 }}>
+                                {bid}
+                              </Typography>
+                            </Paper>
+                            {idx < bricksToShow.length - 1 && (
+                              <ArrowForward sx={{ color: fullscreen ? '#475569' : 'text.disabled', fontSize: 20 }} />
+                            )}
+                          </Box>
+                        );
+                      });
+                    })()}
                   </Box>
 
                   {/* IDE integration */}

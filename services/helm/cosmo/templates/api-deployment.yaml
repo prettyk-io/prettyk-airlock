@@ -1,4 +1,4 @@
-# Cosmo API deployment.
+# Cosmo API deployment (OWN-BUDDY-001: immutable digest support).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,6 +9,8 @@ metadata:
     app.kubernetes.io/component: api
   annotations:
     helm.sh/resource-policy: keep
+    cosmoport.io/registry-provider: {{ .Values.registry.provider | quote }}
+    cosmoport.io/registry-zone: {{ .Values.registry.pullZone | quote }}
 spec:
   replicas: {{ .Values.api.replicas }}
   strategy:
@@ -26,11 +28,22 @@ spec:
         {{- include "cosmo.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
+      # OWN-BUDDY-001: imagePullSecret для закрытого Artifact Registry
+      {{- if .Values.registry.createPullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.registry.pullSecretName | default "cosmo-registry-pull-secret" }}
+      {{- end }}
+
       serviceAccountName: {{ .Values.serviceAccount.name }}
       terminationGracePeriodSeconds: 30
       containers:
         - name: api
+          # OWN-BUDDY-001: use immutable digest when configured
+          {{- if and .Values.registry.useDigest .Values.api.image.digest }}
+          image: "{{ .Values.api.image.repository }}@{{ .Values.api.image.digest }}"
+          {{- else }}
           image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          {{- end }}
           imagePullPolicy: {{ .Values.api.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.api.service.port }}

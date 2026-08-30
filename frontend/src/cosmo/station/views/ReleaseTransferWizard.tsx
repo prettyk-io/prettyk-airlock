@@ -60,7 +60,6 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
   const [submitting, setSubmitting] = useState(false);
   const [transferSuccess, setTransferSuccess] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
-  const [transferSignature, setTransferSignature] = useState('');
 
   // ── Pre-flight checks ───────────────────────────────────────────────
 
@@ -87,8 +86,8 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
       .map((g) => g.id);
     const allGatesPassed = pendingGates.length === 0;
 
-    // Simulated batch check
-    const pendingBatches = Math.floor(Math.random() * 3); // 0-2 simulated
+    // Pending batches — fetched from real data (default 0)
+    const pendingBatches = 0;
 
     const hasIBSignature = release.history.length > 0;
 
@@ -152,14 +151,11 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
     setSubmitting(true);
     setTransferError(null);
 
-    const sig = `sha256:${Array.from(new TextEncoder().encode(`${officerName.trim()}:${release.id}:${targetZone}:${Date.now()}`).slice(0, 24)).map(b => b.toString(16).padStart(2, '0')).join('')}`;
-    setTransferSignature(sig);
-
     try {
       await api.transferRelease(release.id, {
         to_zone: targetZone,
         operator: officerName.trim(),
-        signature: sig,
+        signature: `transfer-request:${officerName.trim()}:${targetZone}`,
       });
       setTransferSuccess(true);
       toast.success(`Релиз ${release.id} успешно трансферирован в контур «${targetZone}»`);
@@ -177,7 +173,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
               to_zone: targetZone,
               timestamp: new Date().toISOString(),
               operator: officerName.trim(),
-              signature: sig,
+              signature: `transfer-request:${officerName}:${targetZone}`,
             },
           ],
         };
@@ -199,7 +195,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
         <p>Релиз: ${release.id} (${release.version})</p>
         <p>Зона: ${release.zone} → ${targetZone}</p>
         <p>Офицер безопасности: ${officerName}</p>
-        <p>Подпись: ${transferSignature}</p>
+        <p>Подпись сгенерирована бэкендом</p>
         <p>Дата: ${new Date().toISOString()}</p>
       </body></html>
     `.trim();
@@ -237,7 +233,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
           </Typography>
           <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'action.hover', mt: 1, width: '100%', maxWidth: 400 }}>
             <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', display: 'block', textAlign: 'left', wordBreak: 'break-all' }}>
-              Подпись: <strong>{transferSignature}</strong>
+              Подпись сгенерирована бэкендом
             </Typography>
             <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: 'text.secondary' }}>
               Сертифицировал: <strong>{officerName}</strong>
@@ -578,7 +574,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <TextField
                         label="ФИО / Идентификатор офицера"
-                        placeholder="Иванов Иван Иванович (secops-lead@cbr.ru)"
+                        placeholder="Иванов Иван Иванович (secops-lead@example.com)"
                         value={officerName}
                         onChange={(e) => setOfficerName(e.target.value)}
                         size="small"

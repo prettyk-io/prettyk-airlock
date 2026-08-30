@@ -1,0 +1,63 @@
+# STACK-BUDDY-001: Kaspersky Container Security (KCS) Job
+# Pinned image: kcs-scanner@sha256:...
+# Offline bases bundle: /opt/scanner-bundles/kcs/bases.tar.gz
+# KCS is ALWAYS the last scanner in the pipeline.
+# KCS scans the EXACT Build immutable digest — not a mutable tag.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scanner-kcs
+  namespace: cosmo-system
+  labels:
+    cosmoport.role: scanner-job
+    cosmoport.scanner: kcs
+    cosmoport.phase: container
+    cosmoport.gap-mode: "true"
+  annotations:
+    cosmoport.io/scan-target-type: "container-image"
+    cosmoport.io/scan-by-digest: "true"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        cosmoport.scanner: kcs
+    spec:
+      restartPolicy: Never
+      # KCS requires registry credentials to pull the image by digest
+      imagePullSecrets:
+        - name: cosmo-registry-pull-secret
+      containers:
+        - name: scanner-kcs
+          image: kcs-scanner@sha256:0000000000000000000000000000000000000000000000000000000000000006
+          imagePullPolicy: IfNotPresent
+          args:
+            - "scan"
+            - "--image"
+            - "${COSMO_IMAGE_DIGEST}"   # e.g. sha256:07738...
+            - "--registry"
+            - "cosmo-registry-zr:5000"
+            - "--output"
+            - "/reports/kcs.sarif"
+            - "--format"
+            - "sarif"
+          env:
+            - name: COSMO_IMAGE_DIGEST
+              valueFrom:
+                configMapKeyRef:
+                  name: cosmo-build-context
+                  key: image-digest
+            - name: COSMO_REGISTRY_ENDPOINT
+              value: "cosmo-registry-zr:5000"
+          resources:
+            requests: { memory: "2Gi",   cpu: "1000m" }
+            limits:   { memory: "4Gi",   cpu: "2000m" }
+          volumeMounts:
+            - { name: workspace,        mountPath: /workspace }
+            - { name: scanner-bundles,  mountPath: /opt/scanner-bundles }
+            - { name: reports,          mountPath: /reports }
+      volumes:
+        - { name: workspace,        persistentVolumeClaim: { claimName: cosmo-workspace } }
+        - { name: scanner-bundles,  persistentVolumeClaim: { claimName: cosmo-scanner-bundles } }
+        - { name: reports,          emptyDir: {} }

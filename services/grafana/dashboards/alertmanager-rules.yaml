@@ -1,0 +1,88 @@
+# COS-195: Prometheus AlertManager Rules (20 rules)
+groups:
+  - name: cosmoport-critical
+    rules:
+      - alert: ComplianceIndexBelow60
+        expr: avg(cosmo_compliance_index) < 60
+        for: 5m
+        annotations: { summary: "Compliance index below 60% for {{ $labels.domain_id }}" }
+      - alert: CriticalVulnerabilityOpen
+        expr: cosmo_findings{severity="Critical"} > 0
+        for: 1h
+        annotations: { summary: "Critical vulnerability open > 1 hour in {{ $labels.domain_id }}" }
+      - alert: SLAHighBreached
+        expr: increase(cosmo_sla_breached{severity="High"}[24h]) > 5
+        annotations: { summary: ">5 High SLA breaches in 24h for {{ $labels.domain_id }}" }
+      - alert: StaleScanDetected
+        expr: cosmo_stale_scans > 0
+        for: 1h
+        annotations: { summary: "Domain has stale scan > 30 days" }
+      - alert: GateRejected
+        expr: rate(cosmo_gate_decision{decision="block"}[1h]) > 0.1
+        annotations: { summary: "Gate block rate > 10%" }
+
+  - name: cosmoport-database
+    rules:
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 30s
+        annotations: { summary: "PostgreSQL instance {{ $labels.instance }} is down", severity: "critical" }
+      - alert: HighConnections
+        expr: pg_stat_database_numbackends > 400
+        for: 5m
+        annotations: { summary: "> 400 active PG connections" }
+      - alert: ReplicationLag
+        expr: pg_stat_replication_flush_lag > 10 * 1024 * 1024
+        for: 2m
+        annotations: { summary: "Replication lag > 10MB on {{ $labels.instance }}" }
+      - alert: TransactionRateAnomalies
+        expr: rate(pg_stat_database_xact_rollback[5m]) / rate(pg_stat_database_xact_commit[5m]) > 0.1
+        for: 5m
+        annotations: { summary: "Rollback ratio > 10% — possible deadlocks" }
+      - alert: SlowQueries
+        expr: rate(pg_stat_statements_mean_exec_time_seconds[5m]) > 1
+        for: 5m
+        annotations: { summary: "Mean query execution time > 1s" }
+
+  - name: cosmoport-runtime
+    rules:
+      - alert: WorkerPoolExhausted
+        expr: sum(cosmo_workers_busy) / sum(cosmo_workers_total) > 0.95
+        for: 5m
+        annotations: { summary: "Worker pool > 95% utilized" }
+      - alert: QueueBackpressure
+        expr: cosmo_queue_depth > 50
+        for: 3m
+        annotations: { summary: "Queue depth > 50 — backpressure detected" }
+      - alert: StaleWorkers
+        expr: cosmo_worker_last_heartbeat_seconds > 60
+        for: 2m
+        annotations: { summary: "Worker {{ $labels.worker_id }} has not sent heartbeat for > 60s" }
+      - alert: HighRunFailures
+        expr: rate(cosmo_runs_completed{status="failed"}[15m]) > 0.2
+        annotations: { summary: "Run failure rate > 20% in last 15m" }
+      - alert: WoodpeckerPipelineStuck
+        expr: cosmo_woodpecker_pipeline_duration_seconds > 3600
+        annotations: { summary: "Pipeline {{ $labels.pipeline_id }} running > 1 hour" }
+
+  - name: cosmoport-infrastructure
+    rules:
+      - alert: MinIONodeDown
+        expr: minio_cluster_nodes_offline_total > 0
+        for: 1m
+        annotations: { summary: "MinIO node offline — erasure coding degraded" }
+      - alert: ValkeyDown
+        expr: valkey_up == 0
+        for: 15s
+        annotations: { summary: "Valkey instance {{ $labels.instance }} is down" }
+      - alert: DiskSpaceLow
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.15
+        for: 5m
+        annotations: { summary: "Disk space < 15% on {{ $labels.instance }}" }
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.9
+        for: 5m
+        annotations: { summary: "Memory usage > 90% on {{ $labels.instance }}" }
+      - alert: CertExpirySoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 86400 * 30
+        annotations: { summary: "TLS certificate expiring within 30 days" }

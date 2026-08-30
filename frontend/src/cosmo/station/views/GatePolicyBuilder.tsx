@@ -215,11 +215,11 @@ export function GatePolicyBuilder({ initialGateId, onPolicySaved }: GatePolicyBu
 
       // Update local state
       setSelectedGate((prev) =>
-        prev ? { ...prev, type: gateType, policy, ...updated } : prev
+        prev ? { ...prev, ...updated } : prev
       );
 
       if (onPolicySaved) {
-        onPolicySaved({ ...selectedGate!, type: gateType, policy, ...updated });
+        onPolicySaved({ ...selectedGate!, ...updated });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка сохранения политики';

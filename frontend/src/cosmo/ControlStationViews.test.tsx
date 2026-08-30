@@ -1,8 +1,8 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { CosmoThemeProvider } from './theme';
-import { Overview } from './station/views/Overview';
+import { ProjectsOverview } from './station/views/ProjectsOverview';
 import { Applications } from './station/views/Applications';
 import { RunControl } from './station/views/RunControl';
 import { Gates } from './station/views/Gates';
@@ -17,8 +17,20 @@ import { Analytics } from './station/views/Analytics';
 import { GatePolicyBuilder } from './station/views/GatePolicyBuilder';
 import { ReleaseTransferWizard } from './station/views/ReleaseTransferWizard';
 import { AlertHUD } from './station/views/AlertHUD';
-import { ExecutivePostureWidget } from './station/views/ExecutivePostureWidget';
-import { SlaRemediationWidget } from './station/views/SlaRemediationWidget';
+import { ApplicationDetail } from './station/views/ApplicationDetail';
+import { BuildsRegistry } from './station/views/BuildsRegistry';
+import { DeploymentsRegistry } from './station/views/DeploymentsRegistry';
+import { ProjectsRegistry } from './station/views/ProjectsRegistry';
+import { ProjectDetail } from './station/views/ProjectDetail';
+import { ProjectGraph } from './station/views/ProjectGraph';
+import { FlatAppsRegistry } from './station/views/FlatAppsRegistry';
+import { ReleaseTypeBuilder } from './station/views/ReleaseTypeBuilder';
+import { BatchConstructor } from './station/views/BatchConstructor';
+import { ProjectReleaseDashboard } from './station/views/ProjectReleaseDashboard';
+import { ProjectCreateWizard } from './station/views/ProjectCreateWizard';
+import { CreateStandaloneApp } from './station/views/CreateStandaloneApp';
+import { CreateLibrary } from './station/views/CreateLibrary';
+import type { Application } from './station/api';
 import { WebIDEShell } from './ide/WebIDEShell';
 
 vi.mock('@monaco-editor/react', () => ({
@@ -26,27 +38,17 @@ vi.mock('@monaco-editor/react', () => ({
   DiffEditor: () => null,
 }));
 
-const mockDomains = [
-  {
-    id: 'dom-alpha',
-    label: 'Alpha Core Domain',
-    forge_binding: { forge_type: 'gitea', url: 'http://gitea:3000', token_ref: 'TOK' },
-    rbac_config: {},
-    quota: { max_runs: 50, max_storage_gb: 100, max_cpu: 8 },
-  },
-];
-
 const mockApps = [
   {
     id: 'app-payments',
-    domain_id: 'dom-alpha',
+    project_id: 'prj-1',
     level: 1,
     repo_binding: { forge_id: 'gitea', repo_path: 'org/payments', default_branch: 'main' },
     pipeline_plan_id: 'plan-payments',
   },
   {
     id: 'lib-auth',
-    domain_id: 'dom-alpha',
+    project_id: 'prj-1',
     level: 0,
     repo_binding: { forge_id: 'gitea', repo_path: 'org/auth-lib', default_branch: 'main' },
   },
@@ -55,7 +57,7 @@ const mockApps = [
 const mockGroups = [
   {
     id: 'grp-fintech',
-    domain_id: 'dom-alpha',
+    project_id: 'prj-1',
     level: 2,
     name: 'FinTech Services',
   },
@@ -100,7 +102,7 @@ const mockRuns = [
     plan_id: 'plan-payments',
     trigger: 'scheduled',
     initiator: 'cron-system',
-    domain_id: 'dom-alpha',
+    project_id: 'prj-1',
     status: 'running',
     created_at: new Date().toISOString(),
     batches: [
@@ -165,7 +167,6 @@ beforeEach(() => {
         )
       );
     }
-    if (url.includes('/api/v1/domains')) return Promise.resolve(new Response(JSON.stringify(mockDomains), { status: 200 }));
     if (url.includes('/api/v1/apps')) return Promise.resolve(new Response(JSON.stringify(mockApps), { status: 200 }));
     if (url.includes('/api/v1/groups')) return Promise.resolve(new Response(JSON.stringify(mockGroups), { status: 200 }));
     if (url.includes('/api/v1/bricks')) return Promise.resolve(new Response(JSON.stringify(mockBricks), { status: 200 }));
@@ -179,72 +180,129 @@ beforeEach(() => {
         mean_duration_trend: [{ date: '2026-08-29', value: 145 }],
         flaky_gates: [{ gate_id: 'gate-qg', plan_id: 'plan-test', total_decisions: 10, blocks: 3, block_rate: 30, passes: 7 }],
         summary: { total_runs: 25, pass_rate_pct: 92.0, failed_runs: 2, mean_duration_seconds: 145, total_critical_findings: 2, last_updated: new Date().toISOString() },
-        domain_id: 'all', days: 30,
+        days: 30,
       }), { status: 200 }));
     }
-    if (url.includes('/api/v1/posture')) {
-      return Promise.resolve(new Response(JSON.stringify({
-        score: 85,
-        grade: 'B',
-        critical_open: 1,
-        high_open: 4,
-        gate_pass_rate_pct: 89.5,
-        sla_compliance_pct: 93.2,
-        gost_56939_pct: 82,
-        cbr_683_pct: 88,
-        cbr_757_pct: 79,
-        auto_gates_pct: 68.0,
-        manual_gates_count: 8,
-        total_gates: 25,
-        last_updated: new Date().toISOString(),
-      }), { status: 200 }));
+    // SAN-017: Builds & Deployments — return empty by default (honest EmptyState)
+    if (url.includes('/api/v1/builds')) return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    if (url.includes('/api/v1/deployments')) return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    // FR-003/004: Projects & KITS mocks
+    if (url.includes('/api/v1/kits/tags')) {
+      return Promise.resolve(new Response(JSON.stringify([
+        { id: 'cbr', label: 'Цифровой рубль' },
+        { id: 'payments', label: 'Платежи' },
+        { id: 'cards', label: 'Карты' },
+      ]), { status: 200 }));
     }
-    if (url.includes('/api/v1/metrics/sla')) {
+    // POST-FLASH-001: project compose, standalone app, library creation
+    if (url.includes('/api/v1/projects/compose')) {
       return Promise.resolve(new Response(JSON.stringify({
-        overall_compliance_pct: 76,
-        total_open: 15,
-        breached_count: 3,
-        critical_breached: 1,
-        high_breached: 1,
-        medium_breached: 1,
-        tiers: [
-          { tier: 'critical', sla_hours: 24, on_time: 3, breached: 1, total: 4, compliance_pct: 75 },
-          { tier: 'high', sla_hours: 168, on_time: 5, breached: 1, total: 6, compliance_pct: 83 },
-          { tier: 'medium', sla_hours: 720, on_time: 4, breached: 1, total: 5, compliance_pct: 80 },
-        ],
-        breaches: [
-          { id: 'slab-1', finding_id: 'FND-101', title: 'SQL Injection in auth', tier: 'critical', opened_at: new Date().toISOString(), sla_deadline: new Date().toISOString(), overdue_hours: 12, repo: 'cbr/wallet', file: 'src/auth/login.ts', line: 88, app_id: 'app-auth' },
-          { id: 'slab-2', finding_id: 'FND-202', title: 'XSS in reports', tier: 'high', opened_at: new Date().toISOString(), sla_deadline: new Date().toISOString(), overdue_hours: 72, repo: 'cbr/reports', file: 'src/views/Report.tsx', line: 45, app_id: 'app-reports' },
-          { id: 'slab-3', finding_id: 'FND-303', title: 'Missing CSP header', tier: 'medium', opened_at: new Date().toISOString(), sla_deadline: new Date().toISOString(), overdue_hours: 360, repo: 'cbr/frontend', file: 'src/index.html', line: 1, app_id: 'app-frontend' },
-        ],
-        last_updated: new Date().toISOString(),
-      }), { status: 200 }));
+        project_id: 'prj-created', project_name: 'New Project', apps_created: 2, repos_created: 2,
+        apps: [{ app_id: 'svc-1', repo_path: 'org/svc-1', status: 'created' }],
+      }), { status: 201 }));
+    }
+    if (url.includes('/api/v1/apps/standalone')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        id: 'app-standalone', level: 1, repo_binding: { forge_id: 'gitea', repo_path: 'org/standalone', default_branch: 'main' },
+        artifact_kind: 'docker',
+      }), { status: 201 }));
+    }
+    if (url.includes('/api/v1/libraries')) {
+      return Promise.resolve(new Response(JSON.stringify({
+        id: 'lib-shared', level: 0, repo_binding: { forge_id: 'gitea', repo_path: 'org/shared-lib', default_branch: 'main' },
+      }), { status: 201 }));
+    }
+    if (url.includes('/api/v1/projects') && !url.includes('/api/v1/apps')) {
+      if (url.includes('/graph')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          project_id: 'prj-1',
+          nodes: [],
+          edges: [],
+        }), { status: 200 }));
+      }
+      if (url.includes('/batch-releases')) {
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+      }
+      if (url.match(/\/api\/v1\/projects\/[^/?]+$/)) {
+        return Promise.resolve(new Response(JSON.stringify(
+          { id: 'prj-1', name: 'Digital Ruble Core', description: 'Core platform', kits_tags: ['cbr'], app_count: 5, l0_count: 2, l1_count: 3, l2_count: 0, status: 'active', last_release: 'v2.1.0', last_release_date: new Date().toISOString(), updated_at: new Date().toISOString(), created_by: 'Иванов И.И.', team: [] }
+        ), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify([
+        { id: 'prj-1', name: 'Digital Ruble Core', kits_tags: ['cbr'], app_count: 5, l0_count: 2, l1_count: 3, l2_count: 0, status: 'active', last_release: 'v2.1.0', last_release_date: new Date().toISOString(), updated_at: new Date().toISOString(), created_by: 'Иванов И.И.' },
+        { id: 'prj-2', name: 'Payment Gateway', kits_tags: ['payments'], app_count: 3, l0_count: 1, l1_count: 2, l2_count: 0, status: 'active', last_release: 'v1.5.0', last_release_date: new Date().toISOString(), updated_at: new Date().toISOString(), created_by: 'Петров П.П.' },
+      ]), { status: 200 }));
+    }
+    if (url.includes('/api/v1/release-types')) {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
     }
     return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
   });
 });
 
-describe('COS-022: Control Station Core Views', () => {
-  it('Overview view: рендерит дашборд, активные runs и security gates', async () => {
+describe('FR-003: Projects Overview & Registry', () => {
+  it('ProjectsOverview: рендерит таблицу проектов с KITS-свитчером', async () => {
     render(
       <CosmoThemeProvider>
-        <Overview selectedDomain="dom-alpha" />
+        <ProjectsOverview />
       </CosmoThemeProvider>
     );
 
-    expect(screen.getByText('Обзор системы (Control Station)')).toBeTruthy();
-    expect(screen.getByText('Активные прогоны')).toBeTruthy();
+    expect(screen.getByText('Проекты')).toBeTruthy();
 
     await waitFor(() => {
-      expect(screen.getAllByText('run-101').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('gate-qg').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Digital Ruble Core')).toBeTruthy();
+      expect(screen.getByText('Payment Gateway')).toBeTruthy();
+      // KITS tags
+      expect(screen.getByText('Цифровой рубль')).toBeTruthy();
+      expect(screen.getByText('Платежи')).toBeTruthy();
+      // Status chips (both projects are Active)
+      expect(screen.getAllByText('Active').length).toBeGreaterThanOrEqual(1);
+      // Last release
+      expect(screen.getByText('v2.1.0')).toBeTruthy();
+    });
+  });
+
+  it('ProjectsRegistry: рендерит реестр с кнопкой и модалкой создания', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectsRegistry />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Реестр проектов')).toBeTruthy();
+    expect(screen.getByText('Создать проект')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('Digital Ruble Core')).toBeTruthy();
+    });
+
+    // Open create modal via "Быстрое создание" button
+    fireEvent.click(screen.getByText('Быстрое создание'));
+    expect(screen.getByText('Создать новый проект')).toBeTruthy();
+    expect(screen.getByText('Создать')).toBeTruthy();
+  });
+});
+
+describe('COS-022: Control Station Core Views', () => {
+  it('Overview view: рендерит проекты как главную таблицу', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectsOverview />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Проекты')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('Digital Ruble Core')).toBeTruthy();
     });
   });
 
   it('Applications view: рендерит таблицу приложений, уровни и Git-репозитории', async () => {
     render(
       <CosmoThemeProvider>
-        <Applications selectedDomain="dom-alpha" />
+        <Applications />
       </CosmoThemeProvider>
     );
 
@@ -261,7 +319,7 @@ describe('COS-022: Control Station Core Views', () => {
   it('RunControl view: рендерит список прогонов и детальную панель со статусами батчей', async () => {
     render(
       <CosmoThemeProvider>
-        <RunControl selectedDomain="dom-alpha" initialRunId="run-101" />
+        <RunControl initialRunId="run-101" />
       </CosmoThemeProvider>
     );
 
@@ -278,7 +336,7 @@ describe('COS-022: Control Station Core Views', () => {
   it('COS-064: RunControl — рендерит чекбоксы пакетного выбора и плавающий экшн-бар', async () => {
     render(
       <CosmoThemeProvider>
-        <RunControl selectedDomain="dom-alpha" />
+        <RunControl />
       </CosmoThemeProvider>
     );
 
@@ -327,7 +385,7 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('2 ожидают ручного вердикта')).toBeTruthy();
   });
 
-  it('Evidence view: рендерит SHA-256 цепочку доказательств и метаданные', async () => {
+  it('Evidence view: рендерит цепочку SHA-256 и заголовки доказательств', async () => {
     render(
       <CosmoThemeProvider>
         <Evidence initialRunId="run-101" />
@@ -337,8 +395,9 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Журнал доказательств (Evidence Ledger)')).toBeTruthy();
     expect(screen.getByText('Цепочка SHA-256 валидна')).toBeTruthy();
 
+    // Backend returns empty → honest EmptyState for entries
     await waitFor(() => {
-      expect(screen.getByText('Provenance & Metadata (JSON)')).toBeTruthy();
+      expect(screen.getByText('Нет записей доказательств')).toBeTruthy();
     });
   });
 
@@ -369,14 +428,14 @@ describe('COS-022: Control Station Core Views', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('plan-payments').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('Граф выполнения шагов (DAG Workflow)')).toBeTruthy();
+      expect(screen.getByText(/Граф выполнения/)).toBeTruthy();
     });
   });
 
-  it('Releases view: рендерит релизы, состав (nodes + edges) и трансфер ЗР→ЗТ→ЗПЭ', async () => {
+  it('Releases view: рендерит заголовок и зоны промоушена (честный EmptyState)', async () => {
     render(
       <CosmoThemeProvider>
-        <Releases selectedDomain="cbr" />
+        <Releases />
       </CosmoThemeProvider>
     );
 
@@ -385,33 +444,21 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Зона Тестирования (DAST / SAST / Gates)')).toBeTruthy();
     expect(screen.getByText('Зона Пром Эксплуатации (Signed & Airgap)')).toBeTruthy();
 
+    // Backend returns empty → honest EmptyState
     await waitFor(() => {
-      expect(screen.getAllByText('Цифровой Рубль — Релиз Q3 2026').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('Состав релиза (Nodes / Компоненты)')).toBeTruthy();
-      expect(screen.getByText('Digital Wallet API')).toBeTruthy();
-      expect(screen.getByText('GOST Crypto Provider')).toBeTruthy();
-      expect(screen.getByText('Трансфер: ЗТ → ЗПЭ')).toBeTruthy();
+      expect(screen.getByText('Релизы не найдены')).toBeTruthy();
     });
   });
 
-  it('AppGraph view: рендерит редактор топологии, L0/L1/L2 легенду и узлы', async () => {
+  it('AppGraph view: рендерит плейсхолдер графа (используйте ProjectGraph)', async () => {
     render(
       <CosmoThemeProvider>
-        <AppGraph selectedDomain="dom-alpha" />
+        <AppGraph />
       </CosmoThemeProvider>
     );
 
-    expect(screen.getByText('Graph Topology Editor (Редактор топологии)')).toBeTruthy();
-    expect(screen.getByText('Авто-раскладка')).toBeTruthy();
-    expect(screen.getByText('Экспорт топологии')).toBeTruthy();
-    expect(screen.getByText('Добавить узел')).toBeTruthy();
-
-    await waitFor(() => {
-      expect(screen.getByText('L0 Библиотека')).toBeTruthy();
-      expect(screen.getByText('L1 Приложение')).toBeTruthy();
-      expect(screen.getByText('L2 Группа')).toBeTruthy();
-      expect(screen.getAllByText('app-payments').length).toBeGreaterThanOrEqual(1);
-    });
+    expect(screen.getByText('Граф зависимостей приложений')).toBeTruthy();
+    expect(screen.getByText(/Перейдите в карточку проекта/)).toBeTruthy();
   });
 
   it('WebIDEShell: рендерит файл-дерево, тулбар с Diff View, Commit & Push и Commit & Run', async () => {
@@ -444,7 +491,7 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Запушить в репозиторий')).toBeTruthy();
   });
 
-  it('AuditLog view: рендерит журнал событий аудита, фильтры и кнопки экспорта', async () => {
+  it('AuditLog view: рендерит заголовок, фильтры и кнопки экспорта (честный EmptyState)', async () => {
     render(
       <CosmoThemeProvider>
         <AuditLog />
@@ -456,10 +503,9 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Экспорт JSON')).toBeTruthy();
     expect(screen.getByPlaceholderText('Поиск по пользователю...')).toBeTruthy();
 
+    // Backend returns empty → honest EmptyState
     await waitFor(() => {
-      expect(screen.getAllByText('operator@cosmo.local').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('gate_decision').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('transfer_zone').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('События аудита не найдены')).toBeTruthy();
     });
   });
 
@@ -496,7 +542,7 @@ describe('COS-022: Control Station Core Views', () => {
   it('COS-062: Analytics — рендерит KPI карточки, спарклайны Pass Rate и трендовые индикаторы', async () => {
     render(
       <CosmoThemeProvider>
-        <Analytics selectedDomain="dom-alpha" />
+        <Analytics />
       </CosmoThemeProvider>
     );
 
@@ -587,79 +633,65 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Подтвердить и продолжить')).toBeTruthy();
   });
 
-  it('COS-100: ExecutivePostureWidget — рендерит радиальный индикатор Security Posture, сводку комплаенса и кнопку отчёта', async () => {
+  it('SAN-003/SAN-004: ApplicationDetail — рендерит 6 вкладок, 3 аккордеона настроек и 8 шагов ЖЦ', async () => {
+    const mockApp: Application = {
+      id: 'app-payments',
+      project_id: 'prj-1',
+      level: 1,
+      repo_binding: { forge_id: 'gitea', repo_path: 'org/payments', default_branch: 'main' },
+      pipeline_plan_id: 'plan-payments',
+    };
+
     render(
       <CosmoThemeProvider>
-        <ExecutivePostureWidget domain="all" />
+        <ApplicationDetail app={mockApp} onBack={vi.fn()} />
       </CosmoThemeProvider>
     );
 
-    // Header elements
-    expect(screen.getByText('Security Posture КИТС')).toBeTruthy();
-    expect(screen.getByText('C-Level Overview')).toBeTruthy();
-    expect(screen.getByText('Отчёт аудитору')).toBeTruthy();
+    // 6 tabs visible
+    expect(screen.getByText('Информация')).toBeTruthy();
+    expect(screen.getByText('Сборки')).toBeTruthy();
+    expect(screen.getByText('Деплои')).toBeTruthy();
+    expect(screen.getByText('Релизы')).toBeTruthy();
+    expect(screen.getByText('Настройки и ЖЦ')).toBeTruthy();
+    expect(screen.getByText('Команда')).toBeTruthy();
 
-    // Wait for async data load
-    await waitFor(() => {
-      // Radial gauge score and grade
-      expect(screen.getByText('85')).toBeTruthy();
-      expect(screen.getByText('из 100')).toBeTruthy();
-      expect(screen.getByText('Grade B')).toBeTruthy();
+    // Tab 0: Info content (general data only, no hardcoded integrations/contacts)
+    expect(screen.getByText('Общие данные')).toBeTruthy();
+    expect(screen.getByText('Статус')).toBeTruthy();
+    expect(screen.getByText('Тип')).toBeTruthy();
+    expect(screen.getByText('Капсула')).toBeTruthy();
 
-      // Compliance bars
-      expect(screen.getByText('ГОСТ Р 56939-2016 (Защита ПДн)')).toBeTruthy();
-      expect(screen.getByText('Положение ЦБ 683-П')).toBeTruthy();
-      expect(screen.getByText('Положение ЦБ 757-П')).toBeTruthy();
+    // Switch to tab 4 (Settings & LC)
+    const settingsTab = screen.getByText('Настройки и ЖЦ');
+    fireEvent.click(settingsTab);
 
-      // Findings
-      expect(screen.getByText(/1 Critical/)).toBeTruthy();
-      expect(screen.getByText(/4 High/)).toBeTruthy();
+    // 3 accordion headers
+    expect(screen.getByText('Общие настройки')).toBeTruthy();
+    expect(screen.getByText('Мониторинг')).toBeTruthy();
+    expect(screen.getByText(/Конфигурация жизненного цикла/)).toBeTruthy();
 
-      // Automation
-      expect(screen.getByText('Автоматизация гейтов: 68%')).toBeTruthy();
-      expect(screen.getByText(/17 авто/)).toBeTruthy();
+    // 8 LC steps (7 static + 1 deploy, DAST block removed)
+    expect(screen.getByText('Сборка')).toBeTruthy();
+    expect(screen.getByText('Юнит-тестирование')).toBeTruthy();
+    expect(screen.getByText('Генерация документации')).toBeTruthy();
+    expect(screen.getByText('SonarQube')).toBeTruthy();
+    expect(screen.getByText('Trivy')).toBeTruthy();
+    expect(screen.getByText('CodeScoring')).toBeTruthy();
+    expect(screen.getByText('Генерация SBOM (CycloneDX)')).toBeTruthy();
+    expect(screen.getByText('Развёртывание ПО')).toBeTruthy();
 
-      // SLA
-      expect(screen.getByText(/SLA: 93.2%/)).toBeTruthy();
-    });
-  });
+    // CONTINUE/TERMINATE_ON_ERROR selectors (8 steps × 1 CONTINUE row each)
+    const continueOptions = screen.getAllByText('▶ Продолжить (CONTINUE)');
+    expect(continueOptions.length).toBeGreaterThanOrEqual(8);
 
-  it('COS-107: SlaRemediationWidget — рендерит SLA-гейдж, карточки разбивки по критичности и список просроченных уязвимостей', async () => {
-    render(
-      <CosmoThemeProvider>
-        <SlaRemediationWidget domain="all" />
-      </CosmoThemeProvider>
-    );
-
-    // Header
-    expect(screen.getByText('SLA устранения уязвимостей')).toBeTruthy();
-    expect(screen.getByText('ЦБ РФ 683-П')).toBeTruthy();
-    expect(screen.getByText('Нарушения SLA (Breached)')).toBeTruthy();
-
-    await waitFor(() => {
-      // Gauge
-      expect(screen.getByText('76%')).toBeTruthy();
-      expect(screen.getByText('SLA')).toBeTruthy();
-      expect(screen.getByText('3 просроч.')).toBeTruthy();
-
-      // Tier cards — Critical/High/Medium may appear in both cards and breach chips
-      expect(screen.getAllByText('Critical').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('High').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('Medium').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('норма ≤ 24 ч')).toBeTruthy();
-      expect(screen.getByText('норма ≤ 7 дн')).toBeTruthy();
-      expect(screen.getByText('норма ≤ 30 дн')).toBeTruthy();
-
-      // Breach list
-      expect(screen.getByText('SQL Injection in auth')).toBeTruthy();
-      expect(screen.getByText('XSS in reports')).toBeTruthy();
-      expect(screen.getByText('Missing CSP header')).toBeTruthy();
-
-      // Overdue badges
-      expect(screen.getByText('Просрочено на 12 ч')).toBeTruthy();
-      expect(screen.getByText('Просрочено на 3 дн')).toBeTruthy();
-      expect(screen.getByText('Просрочено на 15 дн')).toBeTruthy();
-    });
+    // Switch to tab 5 (Team)
+    const teamTab = screen.getByText('Команда');
+    fireEvent.click(teamTab);
+    expect(screen.getByText('Петров П.П.')).toBeTruthy();
+    expect(screen.getByText('Разработчик')).toBeTruthy();
+    expect(screen.getByText('Merge')).toBeTruthy();
+    expect(screen.getByText('Isolate')).toBeTruthy();
   });
 
   it('COS-084: AlertHUD — рендерит колокольчик с бейджем, открывает шторку и показывает оповещения', async () => {
@@ -678,6 +710,282 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Центр уведомлений')).toBeTruthy();
     expect(screen.getByText('Все чисто — инцидентов нет')).toBeTruthy();
     expect(screen.getByText('Прочитано')).toBeTruthy();
-    expect(screen.getByText('Очистить')).toBeTruthy();
+expect(screen.getByText('Очистить')).toBeTruthy();
+  });
+
+  it('SAN-005: BuildsRegistry — рендерит заголовок, фильтры и модалку создания сборки (честный EmptyState)', async () => {
+    render(
+      <CosmoThemeProvider>
+        <BuildsRegistry />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Реестр сборок (Builds Registry)')).toBeTruthy();
+    expect(screen.getAllByText('Создать сборку').length).toBeGreaterThanOrEqual(1);
+
+    // Filter selects exist
+    const appFilters = screen.getAllByText('Все приложения');
+    expect(appFilters.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Все статусы')).toBeTruthy();
+    expect(screen.getByText('Все ветки')).toBeTruthy();
+
+    // Wait for async load — empty data → EmptyState
+    await waitFor(() => {
+      expect(screen.getByText('Сборки не найдены')).toBeTruthy();
+    });
+
+    // Open create modal (click the header button)
+    const createBtns = screen.getAllByText('Создать сборку');
+    fireEvent.click(createBtns[0]);
+    expect(screen.getByText('Создать новую сборку')).toBeTruthy();
+    expect(screen.getByText('Запустить сборку')).toBeTruthy();
+  });
+
+  it('SAN-005: DeploymentsRegistry — рендерит заголовок, фильтры и модалку отката (честный EmptyState)', async () => {
+    render(
+      <CosmoThemeProvider>
+        <DeploymentsRegistry />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Реестр развертываний (Deployments Registry)')).toBeTruthy();
+
+    // Filter selects
+    expect(screen.getAllByText('Все приложения').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Все зоны')).toBeTruthy();
+    expect(screen.getByText('Все статусы')).toBeTruthy();
+
+    // Wait for async load — empty data → EmptyState
+    await waitFor(() => {
+      expect(screen.getByText('Деплои не найдены')).toBeTruthy();
+    });
+  });
+});
+
+describe('FINAL-FLASH-001: Live Operator Journey', () => {
+  it('ProjectDetail: рендерит метаданные, состав и команду', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectDetail projectId="prj-1" onBack={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Digital Ruble Core')).toBeTruthy();
+      expect(screen.getAllByText(/Состав/).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/Команда/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('ProjectGraph: рендерит React Flow граф проекта', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectGraph projectId="prj-1" onBack={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Граф зависимостей проекта')).toBeTruthy();
+    expect(screen.getByText('← Назад')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('depends_on')).toBeTruthy();
+      expect(screen.getByText('uses_library')).toBeTruthy();
+    });
+  });
+
+  it('FlatAppsRegistry: рендерит таблицу приложений с фильтрами', async () => {
+    render(
+      <CosmoThemeProvider>
+        <FlatAppsRegistry />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Реестр приложений')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('Все проекты')).toBeTruthy();
+      expect(screen.getByText('Все уровни')).toBeTruthy();
+    });
+  });
+
+  it('ReleaseTypeBuilder: рендерит двухпанельный конструктор', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ReleaseTypeBuilder />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Release Type Builder')).toBeTruthy();
+    expect(screen.getByText('Создать тип')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('Типы релизов')).toBeTruthy();
+    });
+  });
+
+  it('ReleaseTypeBuilder: открывает модалку создания типа', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ReleaseTypeBuilder />
+      </CosmoThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Создать тип')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('Создать тип'));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Название')).toBeTruthy();
+    });
+  });
+
+  it('BatchConstructor: рендерит сборщик batch релизов', async () => {
+    render(
+      <CosmoThemeProvider>
+        <BatchConstructor projectId="prj-1" onBack={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Batch Release Constructor')).toBeTruthy();
+    expect(screen.getByText('← Назад')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('Template Release Type:')).toBeTruthy();
+    });
+  });
+
+  it('ProjectReleaseDashboard: рендерит readiness summary', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectReleaseDashboard projectId="prj-1" onBack={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Release Readiness Dashboard')).toBeTruthy();
+    expect(screen.getByText('← Назад')).toBeTruthy();
+  });
+
+  it('ProjectsRegistry: создаёт проект через модалку', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectsRegistry />
+      </CosmoThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Digital Ruble Core')).toBeTruthy();
+    });
+
+    expect(screen.getByText('Создать проект')).toBeTruthy();
+    expect(screen.getByText('Быстрое создание')).toBeTruthy();
+  });
+});
+
+describe('POST-FLASH-001 / POST-FLASH-002: Project Composition Wizard & Corrections', () => {
+  it('ProjectCreateWizard: рендерит 5-шаговый stepper', () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectCreateWizard onCancel={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Создание проекта')).toBeTruthy();
+    expect(screen.getByText('Проект')).toBeTruthy();
+    expect(screen.getByText('Папки → Приложения')).toBeTruthy();
+    expect(screen.getByText('Граф зависимостей')).toBeTruthy();
+    expect(screen.getByText(/KITS \/ Команда \/ Manifest/)).toBeTruthy();
+    expect(screen.getByText('Валидация и создание')).toBeTruthy();
+  });
+
+  it('ProjectCreateWizard: шаг 0 — ввод названия проекта', () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectCreateWizard onCancel={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByRole('textbox', { name: /Название проекта/ })).toBeTruthy();
+    expect(screen.getByText('Далее')).toBeTruthy();
+  });
+
+  it('ProjectCreateWizard: шаг 1 — drag-drop зона и папки', () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectCreateWizard onCancel={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    // Go to step 1
+    fireEvent.change(screen.getByRole('textbox', { name: /Название проекта/ }), { target: { value: 'Test Project' } });
+    fireEvent.click(screen.getByText('Далее'));
+
+    expect(screen.getByText('Перетащите папки сюда или нажмите «Добавить»')).toBeTruthy();
+    expect(screen.getByText('api-gateway')).toBeTruthy();
+    expect(screen.getByText('auth-service')).toBeTruthy();
+  });
+
+  it('ProjectCreateWizard: POST-FLASH-002 — создание проекта успешно без KITS-тегов (KITS опционален)', async () => {
+    render(
+      <CosmoThemeProvider>
+        <ProjectCreateWizard onCancel={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    // Go to step 4 without selecting any KITS tags
+    fireEvent.change(screen.getByRole('textbox', { name: /Название проекта/ }), { target: { value: 'Test Project No KITS' } });
+    fireEvent.click(screen.getByText('Далее')); // to step 1
+    fireEvent.click(screen.getByText('Далее')); // to step 2
+    fireEvent.click(screen.getByText('Далее')); // to step 3 (KITS optional)
+    fireEvent.click(screen.getByText('Далее')); // to step 4 (Validation)
+
+    // Click 'Создать проект' without selecting KITS tags — should succeed
+    fireEvent.click(screen.getByText('Создать проект'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Проект создан')).toBeTruthy();
+    });
+  });
+
+  it('CreateStandaloneApp: POST-FLASH-002 — автоматическое определение характеристик без обязательного выбора уровня', () => {
+    render(
+      <CosmoThemeProvider>
+        <CreateStandaloneApp onCancel={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Создать приложение без проекта')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /App ID/ })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /Репозиторий/ })).toBeTruthy();
+    expect(screen.getByText(/Автоопределение:/)).toBeTruthy();
+    expect(screen.getByText('Создать приложение')).toBeTruthy();
+  });
+
+  it('CreateLibrary: POST-FLASH-002 — рендерит профиль доступа потребители vs Library Team', () => {
+    render(
+      <CosmoThemeProvider>
+        <CreateLibrary onCancel={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Создать публичную библиотеку')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: /Library ID/ })).toBeTruthy();
+    expect(screen.getByText('Internal')).toBeTruthy();
+    expect(screen.getByText('Public')).toBeTruthy();
+    expect(screen.getByText('Library Team (write/settings)')).toBeTruthy();
+    expect(screen.getByText('Consumers')).toBeTruthy();
+  });
+
+  it('CreateLibrary: переключает видимость Internal ↔ Public', () => {
+    render(
+      <CosmoThemeProvider>
+        <CreateLibrary onCancel={vi.fn()} />
+      </CosmoThemeProvider>
+    );
+
+    // Click Public card
+    fireEvent.click(screen.getByText('Public'));
+    expect(screen.getByText('Public')).toBeTruthy();
   });
 });

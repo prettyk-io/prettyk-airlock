@@ -19,7 +19,6 @@ import { api, type MetricsTrends, type TrendDataPoint } from '../api';
 import { ErrorBoundary } from '../../shared/ErrorBoundary';
 import { EmptyState } from '../../shared/EmptyState';
 import { toast } from '../../shared/toast';
-import { SlaRemediationWidget } from './SlaRemediationWidget';
 
 // ── Sparkline SVG component ───────────────────────────────────────────
 
@@ -121,10 +120,9 @@ function SeverityBars({ trends }: { trends: Array<{ date: string; critical: numb
 // ── Main Component ─────────────────────────────────────────────────────
 
 interface AnalyticsProps {
-  selectedDomain?: string;
 }
 
-export function Analytics({ selectedDomain = 'all' }: AnalyticsProps) {
+export function Analytics({}: AnalyticsProps) {
   const [trends, setTrends] = useState<MetricsTrends | null>(null);
   const [daysFilter, setDaysFilter] = useState(30);
   const [loading, setLoading] = useState(true);
@@ -134,7 +132,7 @@ export function Analytics({ selectedDomain = 'all' }: AnalyticsProps) {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getMetricsTrends(selectedDomain, daysFilter);
+      const data = await api.getMetricsTrends(undefined, daysFilter);
       setTrends(data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка загрузки метрик';
@@ -143,7 +141,7 @@ export function Analytics({ selectedDomain = 'all' }: AnalyticsProps) {
     } finally {
       setLoading(false);
     }
-  }, [selectedDomain, daysFilter]);
+  }, [daysFilter]);
 
   useEffect(() => {
     fetchTrends();
@@ -198,9 +196,6 @@ export function Analytics({ selectedDomain = 'all' }: AnalyticsProps) {
             {error}
           </Alert>
         )}
-
-        {/* COS-107: SLA Remediation Widget */}
-        <SlaRemediationWidget domain={selectedDomain} />
 
         {/* Summary KPI Cards */}
         <Grid container spacing={2}>

@@ -1,0 +1,45 @@
+# STACK-BUDDY-001: KICS IaC Security Scanner Job
+# Pinned image: checkmarx/kics@sha256:...
+# Offline queries bundle: /opt/scanner-bundles/kics/queries.tar.gz
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scanner-kics
+  namespace: cosmo-system
+  labels:
+    cosmoport.role: scanner-job
+    cosmoport.scanner: kics
+    cosmoport.phase: static
+    cosmoport.gap-mode: "true"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        cosmoport.scanner: kics
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: scanner-kics
+          image: checkmarx/kics@sha256:0000000000000000000000000000000000000000000000000000000000000001
+          imagePullPolicy: IfNotPresent
+          args:
+            - "scan"
+            - "-p"
+            - "/workspace"
+            - "-o"
+            - "/reports/kics.sarif"
+            - "--type"
+            - "Terraform,Dockerfile,Kubernetes"
+          resources:
+            requests: { memory: "512Mi", cpu: "500m" }
+            limits:   { memory: "1Gi",   cpu: "1000m" }
+          volumeMounts:
+            - { name: workspace,        mountPath: /workspace }
+            - { name: scanner-bundles,  mountPath: /opt/scanner-bundles }
+            - { name: reports,          mountPath: /reports }
+      volumes:
+        - { name: workspace,        persistentVolumeClaim: { claimName: cosmo-workspace } }
+        - { name: scanner-bundles,  persistentVolumeClaim: { claimName: cosmo-scanner-bundles } }
+        - { name: reports,          emptyDir: {} }

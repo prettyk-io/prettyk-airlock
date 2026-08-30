@@ -1,0 +1,35 @@
+# STACK-BUDDY-001: Hadolint Dockerfile Linter Job
+# Pinned image: hadolint/hadolint@sha256:...
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scanner-hadolint
+  namespace: cosmo-system
+  labels:
+    cosmoport.role: scanner-job
+    cosmoport.scanner: hadolint
+    cosmoport.phase: pre-scan
+    cosmoport.gap-mode: "false"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        cosmoport.scanner: hadolint
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: scanner-hadolint
+          image: hadolint/hadolint@sha256:0000000000000000000000000000000000000000000000000000000000000004
+          imagePullPolicy: IfNotPresent
+          args: ["--format", "sarif", "/workspace/Dockerfile", "-o", "/reports/hadolint.sarif"]
+          resources:
+            requests: { memory: "128Mi", cpu: "100m" }
+            limits:   { memory: "256Mi", cpu: "200m" }
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+            - { name: reports,   mountPath: /reports }
+      volumes:
+        - { name: workspace, persistentVolumeClaim: { claimName: cosmo-workspace } }
+        - { name: reports,   emptyDir: {} }

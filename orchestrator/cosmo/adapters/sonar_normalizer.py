@@ -96,7 +96,7 @@ def normalize_sonar_issues(
             text_range=issue.get("textRange"),
         )
 
-        severity = _severity_to_appsechub(issue.get("severity"))
+        severity = _normalize_severity(issue.get("severity"))
         tags = issue.get("tags", [])
         rule_desc = rule_data.get("name") or issue.get("message", "")
 
@@ -157,7 +157,7 @@ def normalize_sonar_hotspots(
             text_range=d.get("textRange") if isinstance(d, dict) else None,
         )
 
-        severity = _severity_to_appsechub(
+        severity = _normalize_severity(
             severity=rule_info.get("severity"),
             probability=probability,
         )
@@ -333,11 +333,11 @@ def extract_cwe(tags: list[str] | None = None, rule_desc: str = "") -> list[dict
 
 # ── Severity helpers ──
 
-def _severity_to_appsechub(
+def _normalize_severity(
     severity: Optional[str] = None,
     probability: Optional[str] = None,
 ) -> str:
-    """Преобразование severity Sonar → формат AppSecHub (Critical/High/Medium/Low)."""
+    """Преобразование severity Sonar → нормализованный формат (Critical/High/Medium/Low)."""
     if severity in {"Low", "Medium", "High", "Critical"}:
         return severity  # type: ignore[return-value]
     mapped = _SEVERITY_MAP.get((severity or "").upper())

@@ -19,8 +19,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_capability
 from orchestrator.cosmo.api.domain_guard import require_domain, verify_ownership
+from orchestrator.cosmo.domain.rbac import Action
 from orchestrator.cosmo.db.models import (
     Release as ReleaseModel,
     Run as RunModel,
@@ -92,6 +93,16 @@ class TransferRequest(BaseModel):
     """COS-054: запрос на межзонный трансфер."""
     initiated_by: str = Field(..., min_length=1, description="ID оператора")
     comment: str = Field(default="", description="Комментарий к трансферу")
+    target_zone: Optional[str] = Field(default=None, description="Целевая зона: zt или zpe")
+
+
+class TransferReleaseRequest(BaseModel):
+    """SAN-009: расширенный DTO трансфера с цифровой подписью и 2FA."""
+    target_zone: str = Field(..., description="Целевая зона: zt или zpe")
+    officer_name: str = Field(..., min_length=1, description="ФИО офицера, выполняющего трансфер")
+    sign_signature: str = Field(..., min_length=1, description="Цифровая подпись офицера")
+    token_2fa: str | None = Field(None, description="Одноразовый 2FA-токен")
+    transfer_notes: str | None = Field(None, description="Заметки к трансферу")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -141,6 +152,7 @@ async def list_releases(
 async def create_release(
     body: CreateReleaseRequest,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.RELEASE_CREATE)),
 ) -> Release:
     domain = await db.get(DomainModel, body.domain_id)
     if domain is None:
@@ -296,6 +308,7 @@ async def transfer_release(
     release_id: str,
     body: TransferRequest,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.RELEASE_TRANSFER)),
 ) -> Release:
     """COS-054: трансфер релиза в следующую зону (ЗР→ЗТ→ЗПЭ).
 
@@ -341,13 +354,23 @@ async def transfer_release(
             f"Gates pending decision: {gate_ids}. All gates must be evaluated before transfer.",
         )
 
-    # 3. Определяем следующую зону
+    # 3. SAN-009 / CLN-008: Linear zone promotion validation
     current = rel.current_zone or "zr"
-    target = next_zone(current)  # type: ignore
-    if target is None:
+    valid_paths = {"zr": "zt", "zt": "zpe"}
+    expected_next = valid_paths.get(current)
+    if expected_next is None:
         raise HTTPException(
             400,
             f"Release already in final zone ({current}). No further transfer possible.",
+        )
+
+    target = body.target_zone or expected_next
+    if target != expected_next:
+        raise HTTPException(
+            400,
+            f"Invalid zone promotion. Strict path is ZR -> ZT -> ZPE. "
+            f"Cannot transfer from '{current}' directly to '{target}'. "
+            f"Expected next zone: '{expected_next}'.",
         )
 
     # 4. Создаём TransferRecord
@@ -370,6 +393,80 @@ async def transfer_release(
 
     # COS-065: нотификация о трансфере
     _try_notify_transfer(rel, current, target, body.initiated_by)
+
+    return _to_release_schema(rel)
+
+
+@router.post("/{release_id}/transfer-v2", response_model=Release)
+async def transfer_release_v2(
+    release_id: str,
+    body: TransferReleaseRequest,
+    db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.RELEASE_TRANSFER)),
+) -> Release:
+    """SAN-009: Трансфер релиза с цифровой подписью, 2FA и линейной валидацией зон.
+
+    Строгий линейный путь: ЗР → ЗТ → ЗПЭ.
+    Прямой перескок ЗР → ЗПЭ блокируется (HTTP 400).
+    """
+    from orchestrator.cosmo.db.models import Gate as GateModel
+
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+
+    if rel.status != "deployed":
+        raise HTTPException(400, f"Release must be deployed before transfer (current: {rel.status})")
+
+    # Validate gates
+    gate_stmt = select(GateModel).where(GateModel.plan_id == rel.plan_id)
+    gate_res = await db.execute(gate_stmt)
+    gates = gate_res.scalars().all()
+
+    blocked_gates = [g for g in gates if g.decision != "pass" and g.decision is not None]
+    pending_gates = [g for g in gates if g.decision is None]
+
+    if blocked_gates or pending_gates:
+        raise HTTPException(400, "All gates must have decision='pass' before transfer.")
+
+    # SAN-009: Strict linear zone promotion
+    current = rel.current_zone or "zr"
+    valid_paths = {"zr": "zt", "zt": "zpe"}
+    expected_next = valid_paths.get(current)
+
+    if expected_next is None:
+        raise HTTPException(400, f"Release already in final zone '{current}'. No further transfer possible.")
+
+    if body.target_zone != expected_next:
+        raise HTTPException(
+            400,
+            f"Invalid zone promotion. Strict path is ZR -> ZT -> ZPE. "
+            f"Cannot transfer from '{current}' directly to '{body.target_zone}'. "
+            f"Expected next zone: '{expected_next}'.",
+        )
+
+    # SAN-009: Record transfer with officer credentials
+    transfer = TransferRecord(
+        from_zone=current,  # type: ignore
+        to_zone=expected_next,  # type: ignore
+        initiated_by=body.officer_name,
+        gate_check_passed=True,
+        comment=body.transfer_notes or "",
+    )
+    # Add SAN-009 fields to the transfer record
+    transfer_dict = transfer.model_dump()
+    transfer_dict["officer_name"] = body.officer_name
+    transfer_dict["signature"] = body.sign_signature
+    transfer_dict["token_2fa"] = body.token_2fa
+    transfer_dict["timestamp"] = datetime.datetime.utcnow().isoformat()
+
+    history = list(rel.transfer_history or [])
+    history.append(transfer_dict)
+    rel.transfer_history = history
+    rel.current_zone = expected_next
+
+    await db.commit()
+    await db.refresh(rel)
 
     return _to_release_schema(rel)
 

@@ -26,10 +26,13 @@ if str(_orch) not in sys.path:
     sys.path.insert(0, str(_orch))
 
 from orchestrator.cosmo.api.main import app
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, get_current_principal, require_capability
+from orchestrator.cosmo.api.domain_guard import require_domain
 from orchestrator.cosmo.db.models import Base as CosmoBase  # noqa: F811
+from orchestrator.cosmo.domain.rbac import PrincipalContext, Role
 
-_PG_URL = "postgresql+asyncpg://cosmo:cosmo@localhost:5432/cosmo"
+import os
+_PG_URL = os.getenv("COSMO_DATABASE_URL", "postgresql+asyncpg://cosmo:cosmo@localhost:5432/cosmo")
 
 # ══════════════════════════════════════════════════════════════════
 # PG availability skip
@@ -63,15 +66,17 @@ async def pg_client():
     async with engine.begin() as conn:
         await conn.run_sync(CosmoBase.metadata.create_all)
 
-    # Clean all tables: nullify circular FKs → TRUNCATE CASCADE
+    # Clean all tables: nullify circular FKs → ordered DELETE
     async with engine.begin() as conn:
-        # Nullify circular FK columns so TRUNCATE works
         await conn.exec_driver_sql("UPDATE apps SET pipeline_plan_id = NULL")
         await conn.exec_driver_sql("UPDATE runs SET batch_id = NULL")
-        # TRUNCATE with CASCADE handles all FK chains automatically
-        sorted_names = [t.name for t in CosmoBase.metadata.sorted_tables]
-        for tbl in reversed(sorted_names):
-            await conn.exec_driver_sql(f"TRUNCATE TABLE {tbl} CASCADE")
+        delete_order = [
+            "plan_bricks", "batches", "gates", "runs", "releases",
+            "evidence_ledger", "pipeline_plans", "pipeline_bricks",
+            "repo_bindings", "apps", "groups", "domains",
+        ]
+        for tbl in delete_order:
+            await conn.exec_driver_sql(f'DELETE FROM "{tbl}"')
         await conn.commit()
 
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -85,6 +90,14 @@ async def pg_client():
                 raise
 
     app.dependency_overrides[get_db] = _override_get_db
+
+    # COS-032: Override get_current_principal with admin for tests
+    async def _get_admin_principal() -> PrincipalContext:
+        return PrincipalContext(
+            user_id="test-admin", roles=[Role.ADMIN_SEC],
+            domain_id="test", zone="zr", is_system_admin=True,
+        )
+    app.dependency_overrides[get_current_principal] = _get_admin_principal
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

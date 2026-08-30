@@ -12,8 +12,9 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_capability
 from orchestrator.cosmo.api.domain_guard import require_domain, verify_ownership
+from orchestrator.cosmo.domain.rbac import Action
 from orchestrator.cosmo.db.models import (
     Run as RunModel,
     Batch as BatchModel,
@@ -120,6 +121,7 @@ async def list_runs(
 async def create_run(
     body: CreateRunRequest,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.SCAN_START)),
 ) -> Run:
     """Create and trigger a new pipeline run."""
     # Check domain exists
@@ -225,6 +227,7 @@ async def update_run_status(
 async def cancel_run(
     run_id: str,
     db: AsyncSession = Depends(get_db),
+    _guard: None = Depends(require_capability(Action.SCAN_STOP)),
 ) -> Run:
     """Cancel an active run."""
     run = await db.get(RunModel, run_id)

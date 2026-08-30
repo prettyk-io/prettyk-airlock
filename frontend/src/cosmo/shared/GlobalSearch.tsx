@@ -14,7 +14,7 @@ import {
   Gavel, RocketLaunch, Store, History, Hub, Fingerprint,
   Code, Folder, Security,
 } from '@mui/icons-material';
-import { api, type Domain, type Application, type Run, type Gate, type Release, type PipelineBrick } from '../station/api';
+import { api, type Application, type Run, type Gate, type Release, type PipelineBrick } from '../station/api';
 
 export interface SearchResultItem {
   id: string;
@@ -50,7 +50,6 @@ export function GlobalSearch({ open, onClose, onSelectResult }: GlobalSearchProp
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   // Entities cache
-  const [domains, setDomains] = useState<Domain[]>([]);
   const [apps, setApps] = useState<Application[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [gates, setGates] = useState<Gate[]>([]);
@@ -65,14 +64,12 @@ export function GlobalSearch({ open, onClose, onSelectResult }: GlobalSearchProp
       setQuery('');
       setSelectedIndex(0);
       Promise.all([
-        api.getDomains().catch(() => []),
         api.getApps().catch(() => []),
         api.getRuns().catch(() => []),
         api.getGates().catch(() => []),
         api.getReleases().catch(() => []),
         api.getBricks().catch(() => []),
-      ]).then(([d, a, r, g, rel, b]) => {
-        setDomains(d || []);
+      ]).then(([a, r, g, rel, b]) => {
         setApps(a || []);
         setRuns(r || []);
         setGates(g || []);
@@ -85,18 +82,6 @@ export function GlobalSearch({ open, onClose, onSelectResult }: GlobalSearchProp
   // Aggregate search index
   const allItems = useMemo<SearchResultItem[]>(() => {
     const list: SearchResultItem[] = [...STATIC_VIEWS];
-
-    domains.forEach((d) => {
-      list.push({
-        id: `dom-${d.id}`,
-        title: d.label,
-        subtitle: `Домен / КИТС ID: ${d.id}`,
-        category: 'domains',
-        viewId: 'domains',
-        params: { domain_id: d.id },
-        icon: <AccountTree sx={{ fontSize: 18, color: '#0EA5E9' }} />,
-      });
-    });
 
     apps.forEach((a) => {
       list.push({
@@ -159,7 +144,7 @@ export function GlobalSearch({ open, onClose, onSelectResult }: GlobalSearchProp
     });
 
     return list;
-  }, [domains, apps, runs, gates, releases, bricks]);
+  }, [apps, runs, gates, releases, bricks]);
 
   // Filtered results
   const filteredResults = useMemo(() => {

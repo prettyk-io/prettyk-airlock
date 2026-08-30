@@ -1,0 +1,35 @@
+# STACK-BUDDY-001: KubeLinter K8s Manifest Linter Job
+# Pinned image: stackrox/kube-linter@sha256:...
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scanner-kubelinter
+  namespace: cosmo-system
+  labels:
+    cosmoport.role: scanner-job
+    cosmoport.scanner: kubelinter
+    cosmoport.phase: pre-scan
+    cosmoport.gap-mode: "false"
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        cosmoport.scanner: kubelinter
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: scanner-kubelinter
+          image: stackrox/kube-linter@sha256:0000000000000000000000000000000000000000000000000000000000000005
+          imagePullPolicy: IfNotPresent
+          args: ["lint", "/workspace/k8s/", "--format", "sarif", "--output", "/reports/kubelinter.sarif"]
+          resources:
+            requests: { memory: "256Mi", cpu: "250m" }
+            limits:   { memory: "512Mi", cpu: "500m" }
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+            - { name: reports,   mountPath: /reports }
+      volumes:
+        - { name: workspace, persistentVolumeClaim: { claimName: cosmo-workspace } }
+        - { name: reports,   emptyDir: {} }

@@ -54,12 +54,12 @@ async def test_trends_with_runs_and_gates(pg_client: AsyncClient):
     # Seed domain + plan + runs + gates through the API
     await pg_client.post("/api/v1/domains", json={
         "id": "dom-trend", "label": "Trend Domain",
-        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "TOK"},
+        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "vault:secret/data/token"},
     })
     await pg_client.post("/api/v1/apps", json={
         "id": "app-trend", "domain_id": "dom-trend", "level": 1,
         "repo_binding": {"forge_id": "gitea", "repo_path": "dom-trend/app"},
-    })
+    }, headers={"X-Cosmo-Domain": "dom-trend"})
     await pg_client.post("/api/v1/plans", json={
         "id": "plan-trend", "app_id": "app-trend", "brick_ids": [],
     })
@@ -69,14 +69,14 @@ async def test_trends_with_runs_and_gates(pg_client: AsyncClient):
         rid = f"run-ok-{i}"
         await pg_client.post("/api/v1/runs", json={
             "id": rid, "plan_id": "plan-trend", "trigger": "manual", "domain_id": "dom-trend",
-        })
+        }, headers={"X-Cosmo-Domain": "dom-trend"})
         await pg_client.patch(f"/api/v1/runs/{rid}/status", json={"status": "running"}, headers={"X-Cosmo-Domain": "dom-trend"})
         await pg_client.patch(f"/api/v1/runs/{rid}/status", json={"status": "succeeded"}, headers={"X-Cosmo-Domain": "dom-trend"})
 
     # 1 failed run
     await pg_client.post("/api/v1/runs", json={
         "id": "run-fail", "plan_id": "plan-trend", "trigger": "manual", "domain_id": "dom-trend",
-    })
+    }, headers={"X-Cosmo-Domain": "dom-trend"})
     await pg_client.patch("/api/v1/runs/run-fail/status", json={"status": "running"}, headers={"X-Cosmo-Domain": "dom-trend"})
     await pg_client.patch("/api/v1/runs/run-fail/status", json={"status": "failed"}, headers={"X-Cosmo-Domain": "dom-trend"})
 
@@ -87,13 +87,13 @@ async def test_trends_with_runs_and_gates(pg_client: AsyncClient):
             "position": i,
             "policy": {"rules": [{"finding_type": "Critical", "action": "block"}]},
         })
-        await pg_client.post(f"/api/v1/gates/gate-flaky-{i}/decision", json={"decision": "block"})
+        await pg_client.post(f"/api/v1/gates/gate-flaky-{i}/decision", json={"decision": "block"}, headers={"X-Cosmo-Domain": "dom-trend"})
     await pg_client.post("/api/v1/gates", json={
         "id": "gate-pass", "plan_id": "plan-trend", "type": "automatic",
         "position": 4,
         "policy": {"rules": [{"finding_type": "Critical", "action": "block"}]},
     })
-    await pg_client.post("/api/v1/gates/gate-pass/decision", json={"decision": "pass"})
+    await pg_client.post("/api/v1/gates/gate-pass/decision", json={"decision": "pass"}, headers={"X-Cosmo-Domain": "dom-trend"})
 
     # Query trends
     res = await pg_client.get("/api/v1/metrics/trends")

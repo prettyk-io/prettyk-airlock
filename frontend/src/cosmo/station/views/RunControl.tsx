@@ -1,4 +1,4 @@
-/**
+﻿/**
  * COS-022 / COS-047 / COS-064: Control Station Run Control View.
  *
  * Execution tracking, live DAG/batch monitoring, status transitions, cancellation,
@@ -16,26 +16,23 @@ import {
   PlayArrow, Refresh, Stop, CheckCircle, Warning, Block,
   HourglassEmpty, OpenInNew, Cancel, Compare,
 } from '@mui/icons-material';
-import { api, type Run, type RunStatus, type Domain } from '../api';
+import { api, type Run, type RunStatus } from '../api';
 import { ErrorBoundary } from '../../shared/ErrorBoundary';
 import { EmptyState } from '../../shared/EmptyState';
 import { toast } from '../../shared/toast';
 
 interface RunControlProps {
-  selectedDomain?: string;
   initialRunId?: string;
   onNavigateToIDE?: (ctx: { repo: string; file: string; line?: number }) => void;
   onNavigateToView?: (view: string, params?: Record<string, string>) => void;
 }
 
 export function RunControl({
-  selectedDomain = 'all',
   initialRunId,
   onNavigateToView,
 }: RunControlProps) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
-  const [domains, setDomains] = useState<Domain[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,25 +45,17 @@ export function RunControl({
   const [openRunDialog, setOpenRunDialog] = useState(false);
   const [runIdInput, setRunIdInput] = useState('');
   const [planIdInput, setPlanIdInput] = useState('');
-  const [domainIdInput, setDomainIdInput] = useState('');
+  const [projectIdInput, setProjectIdInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const fetchRuns = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [runsData, domainsData] = await Promise.all([
-        api.getRuns({
-          domainId: selectedDomain,
-          status: statusFilter !== 'all' ? statusFilter : undefined,
-        }),
-        api.getDomains(),
-      ]);
+      const runsData = await api.getRuns({
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+      });
       setRuns(runsData || []);
-      setDomains(domainsData || []);
-      if (domainsData.length > 0 && !domainIdInput) {
-        setDomainIdInput(domainsData[0].id);
-      }
       if (initialRunId) {
         const found = runsData.find((r) => r.id === initialRunId);
         if (found) setSelectedRun(found);
@@ -80,7 +69,7 @@ export function RunControl({
     } finally {
       setLoading(false);
     }
-  }, [selectedDomain, statusFilter, initialRunId, domainIdInput]);
+  }, [statusFilter, initialRunId, projectIdInput]);
 
   useEffect(() => {
     fetchRuns();
@@ -140,13 +129,13 @@ export function RunControl({
   };
 
   const handleCreateRun = async () => {
-    if (!runIdInput.trim() || !planIdInput.trim() || !domainIdInput.trim()) return;
+    if (!runIdInput.trim() || !planIdInput.trim()) return;
     setSubmitting(true);
     try {
       const created = await api.createRun({
         id: runIdInput.trim(),
         plan_id: planIdInput.trim(),
-        domain_id: domainIdInput.trim(),
+        project_id: (projectIdInput || '').trim(),
         trigger: 'manual',
       });
       toast.success(`Прогон #${runIdInput.trim()} запущен`);
@@ -361,7 +350,7 @@ export function RunControl({
                             {r.id}
                           </TableCell>
                           <TableCell sx={{ fontSize: 12 }}>{r.plan_id}</TableCell>
-                          <TableCell sx={{ fontSize: 12 }}>{r.domain_id}</TableCell>
+                          <TableCell sx={{ fontSize: 12 }}>{r.project_id}</TableCell>
                           <TableCell sx={{ fontSize: 12, color: 'text.secondary' }}>{r.trigger}</TableCell>
                           <TableCell>{getStatusChip(r.status)}</TableCell>
                           <TableCell sx={{ fontSize: 12 }}>
@@ -430,7 +419,7 @@ export function RunControl({
                       <strong>План:</strong> <span style={{ fontFamily: 'monospace' }}>{selectedRun.plan_id}</span>
                     </div>
                     <div>
-                      <strong>Домен:</strong> {selectedRun.domain_id}
+                      <strong>Домен:</strong> {selectedRun.project_id}
                     </div>
                     <div>
                       <strong>Инициатор:</strong> {selectedRun.initiator} ({selectedRun.trigger})
@@ -557,18 +546,13 @@ export function RunControl({
             />
             <TextField
               select
-              label="Домен / КИТС"
-              value={domainIdInput}
-              onChange={(e) => setDomainIdInput(e.target.value)}
+label="Project ID"
+              placeholder="prj-1"
+              value={projectIdInput}
+              onChange={(e) => setProjectIdInput(e.target.value)}
               fullWidth
               size="small"
-            >
-              {domains.map((d) => (
-                <MenuItem key={d.id} value={d.id}>
-                  {d.label} ({d.id})
-                </MenuItem>
-              ))}
-            </TextField>
+            />
           </DialogContent>
           <DialogActions sx={{ p: 2 }}>
             <Button onClick={() => setOpenRunDialog(false)} disabled={submitting}>

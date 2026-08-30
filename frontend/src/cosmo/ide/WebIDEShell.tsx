@@ -31,30 +31,7 @@ export interface IDEFileNode {
   children?: IDEFileNode[];
 }
 
-const DEFAULT_REPO = 'payments/api';
-const DEFAULT_FILE = 'scenarios/auth.wire';
-
-const FALLBACK_TREE: IDEFileNode[] = [
-  {
-    name: 'scenarios',
-    path: 'scenarios',
-    kind: 'dir',
-    children: [
-      { name: 'auth.wire', path: 'scenarios/auth.wire', kind: 'file', size: 340 },
-      { name: 'payment.wire', path: 'scenarios/payment.wire', kind: 'file', size: 420 },
-    ],
-  },
-  {
-    name: '.cosmo',
-    path: '.cosmo',
-    kind: 'dir',
-    children: [
-      { name: 'pipeline.yaml', path: '.cosmo/pipeline.yaml', kind: 'file', size: 280 },
-      { name: 'gates.yaml', path: '.cosmo/gates.yaml', kind: 'file', size: 190 },
-    ],
-  },
-  { name: 'README.md', path: 'README.md', kind: 'file', size: 150 },
-];
+const DEFAULT_FILE = 'README.md';
 
 function detectLanguage(filePath: string): string {
   if (filePath.endsWith('.yaml') || filePath.endsWith('.yml')) return 'yaml';
@@ -135,10 +112,10 @@ function FileTreeNodeItem({ node, activePath, depth = 0, onSelectFile }: TreeIte
 
 // ── Main Component ─────────────────────────────────────────────────────
 
-export function WebIDEShell({ repo = DEFAULT_REPO, file = DEFAULT_FILE, line, onNavigateToStation }: WebIDEProps) {
-  const [currentRepo, setCurrentRepo] = useState(repo);
-  const [currentFile, setCurrentFile] = useState(file);
-  const [fileTree, setFileTree] = useState<IDEFileNode[]>(FALLBACK_TREE);
+export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEProps) {
+  const [currentRepo, setCurrentRepo] = useState(repo || '');
+  const [currentFile, setCurrentFile] = useState(file || 'README.md');
+  const [fileTree, setFileTree] = useState<IDEFileNode[]>([]);
   const [code, setCode] = useState('');
   const [originalCode, setOriginalCode] = useState('');
   const [isDiffMode, setIsDiffMode] = useState(false);
@@ -275,10 +252,10 @@ export function WebIDEShell({ repo = DEFAULT_REPO, file = DEFAULT_FILE, line, on
       if (treeData && treeData.length > 0) {
         setFileTree(treeData as IDEFileNode[]);
       } else {
-        setFileTree(FALLBACK_TREE);
+        setFileTree([]);
       }
     } catch {
-      setFileTree(FALLBACK_TREE);
+      setFileTree([]);
     }
   }, [currentRepo]);
 
@@ -358,8 +335,8 @@ export function WebIDEShell({ repo = DEFAULT_REPO, file = DEFAULT_FILE, line, on
         repo: currentRepo,
         branch: commitBranch,
         message: `IDE Commit & Run: ${currentFile}`,
-        plan_id: 'plan-steel',
-        domain_id: currentRepo.split('/')[0] || 'cbr',
+        plan_id: '',
+        project_id: currentRepo.split('/')[0] || '',
         files: [{ path: currentFile, content: code }],
       });
       setOriginalCode(code);

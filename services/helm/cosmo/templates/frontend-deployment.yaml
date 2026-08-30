@@ -1,4 +1,4 @@
-# Cosmo Frontend deployment (nginx SPA).
+# Cosmo Frontend deployment (nginx SPA, OWN-BUDDY-001: digest support).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,10 +24,18 @@ spec:
         {{- include "cosmo.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: frontend
     spec:
+      {{- if .Values.registry.createPullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.registry.pullSecretName | default "cosmo-registry-pull-secret" }}
+      {{- end }}
       terminationGracePeriodSeconds: 10
       containers:
         - name: frontend
+          {{- if and .Values.registry.useDigest .Values.frontend.image.digest }}
+          image: "{{ .Values.frontend.image.repository }}@{{ .Values.frontend.image.digest }}"
+          {{- else }}
           image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          {{- end }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.frontend.service.port }}

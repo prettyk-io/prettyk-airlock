@@ -426,3 +426,112 @@ async def test_api_get_envelope_route():
 
     # Проверяем, что созданный через эндпоинт конверт валиден
     assert verify_envelope_body(envelope_dict) is True
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# COS-126: Airgap Release Bundle & Cryptography Tests
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_airgap_bundle_export_import_success():
+    """Успешный экспорт и импорт Airgap бандла с бинарниками и отчетом."""
+    from cosmo.ledger.release_envelope import (
+        AirgapReleaseBundle,
+        EnvelopeArtifactDigest,
+        export_airgap_bundle,
+        import_and_verify_airgap_bundle,
+    )
+
+    binary_data = b"BINARY_EXECUTABLE_CONTENT_V2"
+    sarif_data = b'{"version": "2.1.0", "runs": []}'
+
+    binary_sha = hashlib.sha256(binary_data).hexdigest()
+    sarif_sha = hashlib.sha256(sarif_data).hexdigest()
+
+    artifacts = [
+        EnvelopeArtifactDigest(name="app_bin", artifact_type="binary", sha256=binary_sha, size_bytes=len(binary_data)),
+        EnvelopeArtifactDigest(name="report.sarif", artifact_type="sarif", sha256=sarif_sha, size_bytes=len(sarif_data)),
+    ]
+
+    envelope = seal_envelope(
+        release_id="rel-airgap-100",
+        signer="officer_crypto",
+        version="2.0.0",
+        domain_id="dom-banking",
+        source_zone="zr",
+        target_zone="zt",
+        artifacts=artifacts,
+    )
+
+    bundle_bytes = export_airgap_bundle(
+        envelope=envelope,
+        artifacts_data={
+            "app_bin": binary_data,
+            "report.sarif": sarif_data,
+        },
+    )
+
+    assert len(bundle_bytes) > 0
+
+    # Импорт в ЗТ (целевая зона)
+    ok, imported_env, errors = import_and_verify_airgap_bundle(bundle_bytes, destination_zone="zt")
+    assert ok is True
+    assert errors == []
+    assert imported_env is not None
+    assert imported_env.release_id == "rel-airgap-100"
+
+
+def test_airgap_bundle_tampered_binary_rejected():
+    """Подмена бинарного файла в архиве отклоняется при импорте."""
+    import io
+    import zipfile
+    from cosmo.ledger.release_envelope import (
+        EnvelopeArtifactDigest,
+        export_airgap_bundle,
+        import_and_verify_airgap_bundle,
+    )
+
+    raw_data = b"ORIGINAL_CLEAN_CODE"
+    raw_sha = hashlib.sha256(raw_data).hexdigest()
+
+    envelope = seal_envelope(
+        release_id="rel-airgap-200",
+        signer="officer_crypto",
+        artifacts=[EnvelopeArtifactDigest(name="lib.so", artifact_type="binary", sha256=raw_sha, size_bytes=len(raw_data))],
+        source_zone="zr",
+        target_zone="zt",
+    )
+
+    valid_bundle = export_airgap_bundle(envelope, {"lib.so": raw_data})
+
+    # Злоумышленник подменил lib.so внутри ZIP архива
+    tampered_buf = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(valid_bundle), "r") as zin:
+        with zipfile.ZipFile(tampered_buf, "w") as zout:
+            for item in zin.infolist():
+                if item.filename == "artifacts/lib.so":
+                    zout.writestr(item.filename, b"MALICIOUS_INJECTED_CODE")
+                else:
+                    zout.writestr(item.filename, zin.read(item.filename))
+
+    ok, imported_env, errors = import_and_verify_airgap_bundle(tampered_buf.getvalue(), destination_zone="zt")
+    assert ok is False
+    assert any("Artifact checksum mismatch" in e for e in errors)
+
+
+def test_airgap_bundle_zone_mismatch_rejected():
+    """Попытка импортировать бандл ЗР->ЗТ сразу в ЗПЭ отклоняется."""
+    from cosmo.ledger.release_envelope import export_airgap_bundle, import_and_verify_airgap_bundle
+
+    envelope = seal_envelope(
+        release_id="rel-airgap-300",
+        signer="officer_crypto",
+        source_zone="zr",
+        target_zone="zt",
+    )
+    bundle_bytes = export_airgap_bundle(envelope, {})
+
+    # Попытка импорта в ЗПЭ вместо ЗТ
+    ok, imported_env, errors = import_and_verify_airgap_bundle(bundle_bytes, destination_zone="zpe")
+    assert ok is False
+    assert any("Zone mismatch" in e for e in errors)
+

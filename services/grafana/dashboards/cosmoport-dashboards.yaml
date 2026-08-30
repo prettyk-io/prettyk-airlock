@@ -1,0 +1,190 @@
+{
+  "title": "Cosmoport CISO Dashboard",
+  "uid": "cosmo-ciso",
+  "panels": [
+    {
+      "title": "Compliance Index (all domains)",
+      "type": "gauge",
+      "targets": [{"expr": "avg(cosmo_compliance_index) by (domain_id)"}],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{"color": "red", "value": 60}, {"color": "orange", "value": 85}, {"color": "green", "value": 100}] } } }
+    },
+    {
+      "title": "SLA Breaches by Severity",
+      "type": "barchart",
+      "targets": [{"expr": "sum(cosmo_sla_breached) by (severity)"}]
+    },
+    {
+      "title": "Open Critical Vulnerabilities (trend 7d)",
+      "type": "timeseries",
+      "targets": [{"expr": "sum(cosmo_findings{severity=\"Critical\"})"}]
+    },
+    {
+      "title": "Stale Scans (>30d)",
+      "type": "stat",
+      "targets": [{"expr": "sum(cosmo_stale_scans)"}]
+    },
+    {
+      "title": "Pending Manual Gates",
+      "type": "stat",
+      "targets": [{"expr": "sum(cosmo_pending_gates)"}]
+    },
+    {
+      "title": "Compliance Trend (30d)",
+      "type": "timeseries",
+      "targets": [{"expr": "avg_over_time(cosmo_compliance_index[30d])"}]
+    }
+  ]
+}
+---
+{
+  "title": "Cosmoport SOC — Security Operations Dashboard",
+  "uid": "cosmo-soc",
+  "panels": [
+    {
+      "title": "New Findings (last 1h)",
+      "type": "stat",
+      "targets": [{"expr": "increase(cosmo_findings_total[1h])"}]
+    },
+    {
+      "title": "Critical Findings Count",
+      "type": "stat",
+      "targets": [{"expr": "sum(cosmo_findings{severity=\"Critical\"})"}]
+    },
+    {
+      "title": "Findings by CWE (top 10)",
+      "type": "barchart",
+      "targets": [{"expr": "topk(10, sum(cosmo_findings) by (cwe))"}]
+    },
+    {
+      "title": "Gate Block Rate (24h)",
+      "type": "gauge",
+      "targets": [{"expr": "rate(cosmo_gate_decision{decision=\"block\"}[24h])"}]
+    },
+    {
+      "title": "Findings Ingestion Rate (per min)",
+      "type": "stat",
+      "targets": [{"expr": "rate(cosmo_findings_ingested[5m]) * 60"}]
+    },
+    {
+      "title": "Auto-Rollbacks (24h)",
+      "type": "stat",
+      "targets": [{"expr": "increase(cosmo_canary_rollbacks[24h])"}]
+    }
+  ]
+}
+---
+{
+  "title": "Cosmoport Runs — Pipeline Execution Dashboard",
+  "uid": "cosmo-runs",
+  "panels": [
+    {
+      "title": "Active Runs",
+      "type": "stat",
+      "targets": [{"expr": "sum(cosmo_runs_active)"}]
+    },
+    {
+      "title": "Runs by Status",
+      "type": "piechart",
+      "targets": [{"expr": "sum(cosmo_runs_total) by (status)"}]
+    },
+    {
+      "title": "Run Throughput (per hour)",
+      "type": "timeseries",
+      "targets": [{"expr": "rate(cosmo_runs_completed[1h]) * 3600"}]
+    },
+    {
+      "title": "Average Run Duration (seconds)",
+      "type": "timeseries",
+      "targets": [{"expr": "avg(cosmo_run_duration_seconds) by (plan_id)"}]
+    },
+    {
+      "title": "Failed Runs (last 5 minutes)",
+      "type": "stat",
+      "targets": [{"expr": "increase(cosmo_runs_failed[5m])"}]
+    },
+    {
+      "title": "Queue Depth",
+      "type": "timeseries",
+      "targets": [{"expr": "max(cosmo_queue_depth)"}]
+    },
+    {
+      "title": "Pass Rate % (24h)",
+      "type": "gauge",
+      "targets": [{"expr": "sum(rate(cosmo_runs_completed{status=\"succeeded\"}[24h])) / sum(rate(cosmo_runs_completed[24h])) * 100"}]
+    }
+  ]
+}
+---
+{
+  "title": "Cosmoport DB — Database Health Dashboard",
+  "uid": "cosmo-db",
+  "panels": [
+    {
+      "title": "Active Connections",
+      "type": "timeseries",
+      "targets": [{"expr": "pg_stat_database_numbackends"}]
+    },
+    {
+      "title": "Transaction Rate",
+      "type": "timeseries",
+      "targets": [{"expr": "rate(pg_stat_database_xact_commit[1m])"}]
+    },
+    {
+      "title": "Lock Wait Time (ms)",
+      "type": "timeseries",
+      "targets": [{"expr": "pg_stat_activity_max_tx_duration"}]
+    },
+    {
+      "title": "Cache Hit Ratio",
+      "type": "gauge",
+      "targets": [{"expr": "pg_stat_database_blks_hit / (pg_stat_database_blks_hit + pg_stat_database_blks_read) * 100"}]
+    },
+    {
+      "title": "Replication Lag (bytes)",
+      "type": "timeseries",
+      "targets": [{"expr": "pg_stat_replication_flush_lag"}]
+    },
+    {
+      "title": "Database Size (GB)",
+      "type": "stat",
+      "targets": [{"expr": "pg_database_size_bytes / 1024 / 1024 / 1024"}]
+    }
+  ]
+}
+---
+{
+  "title": "Cosmoport Worker Pool — Execution Capacity",
+  "uid": "cosmo-workers",
+  "panels": [
+    {
+      "title": "Active Workers",
+      "type": "stat",
+      "targets": [{"expr": "sum(cosmo_workers_active)"}]
+    },
+    {
+      "title": "Worker Utilization %",
+      "type": "gauge",
+      "targets": [{"expr": "sum(cosmo_workers_busy) / sum(cosmo_workers_total) * 100"}]
+    },
+    {
+      "title": "Worker Heartbeat Health",
+      "type": "table",
+      "targets": [{"expr": "cosmo_worker_last_heartbeat_seconds"}]
+    },
+    {
+      "title": "Stale Workers (>60s no heartbeat)",
+      "type": "stat",
+      "targets": [{"expr": "sum(cosmo_worker_last_heartbeat_seconds > 60)"}]
+    },
+    {
+      "title": "Woodpecker Pipeline Status",
+      "type": "piechart",
+      "targets": [{"expr": "sum(cosmo_woodpecker_pipelines) by (status)"}]
+    },
+    {
+      "title": "Worker Pool Queue Backpressure",
+      "type": "timeseries",
+      "targets": [{"expr": "cosmo_queue_depth / cosmo_workers_total"}]
+    }
+  ]
+}
