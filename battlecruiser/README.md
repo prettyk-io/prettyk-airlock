@@ -6,7 +6,7 @@
 ## Структура
 
 ```text
-D:\cosmoport2\battlecruiser\
+D:\prettyk-control-plane\battlecruiser\
 ├── README.md
 ├── captains_bridge.md
 ├── ADMISSION.md
@@ -15,7 +15,7 @@ D:\cosmoport2\battlecruiser\
 │   └── requests\
 ├── pure\
 │   └── ARTIFACT-REGISTRY-CANON.md
-└── cosmoport2\
+└── prettyk-control-plane\
     ├── CANON-INDEX.md
     └── ARTIFACT-REGISTRY-CANON.md
 ```
@@ -55,12 +55,12 @@ Cosmoport 2.0
 
 ### Cosmoport 2.0
 
-`cosmoport2/ARTIFACT-REGISTRY-CANON.md` — миграционный путь Cosmoport: старый Nexus → mirror/staging → Т1-Сфера.
+`prettyk-control-plane/ARTIFACT-REGISTRY-CANON.md` — миграционный путь Control Plane: старый Nexus → mirror/staging → Т1-Сфера.
 
 Основной продуктовый монолит пока находится в:
 
 ```text
-D:\cosmoport2\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
-Индекс связки — `cosmoport2/CANON-INDEX.md`.
+Индекс связки — `prettyk-control-plane/CANON-INDEX.md`.

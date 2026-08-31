@@ -247,7 +247,7 @@ smoke только при доступном endpoint.
 Путь friend-request:
 
 ```text
-D:\cosmoport2\battlecruiser\friend\requests\
+D:\prettyk-control-plane\battlecruiser\friend\requests\
 ```
 
 ### При ошибке агента

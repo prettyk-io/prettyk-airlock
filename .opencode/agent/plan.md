@@ -1,10 +1,12 @@
 ---
-description: Plan — планирование Cosmoport 2.0. Исследование, декомпозиция, архитектурные решения. Read-only код, write docs.
+description: Plan — планирование: исследование, декомпозиция, архитектурные решения. Read-only код, write docs.
+mode: primary
 model: openrouter/deepseek/deepseek-v4-pro
 permission:
   edit:
     "**": "deny"
     "docs/**": "allow"
+    "battlecruiser/**": "allow"
 ---
 
 # 📋 Plan — Планировщик Cosmoport 2.0

@@ -5,25 +5,26 @@
 
 ---
 
-## 🔄 В РАБОТЕ (0) — Все исполнители свободны
+## ⬜ READY — OЖИДАНИЕ СЛЕДУЮЩИХ ДИРЕКТИВ
+
+(пусто)
 
 ---
 
-## ⬜ READY (0) — Ждем массовый пакет от Макса и Keeper (RBAC & Entities)
+## ✅ CLEANUP WAVE — ВСЕ 13 КАРТОЧЕК ЗАКРЫТЫ (100%)
 
----
-
-## ✅ DONE (103) 🚀 ВСЕ ЗАДАЧИ ЗАКРЫТЫ, 100% GREEN!
-
-COS-000 COS-001 COS-002 COS-003 COS-004 COS-005 COS-006
-COS-007 COS-008
-COS-010 COS-011 COS-012 COS-033
-COS-020 COS-021 COS-022 COS-023 COS-024 COS-025 COS-029 COS-032 COS-041 COS-043 COS-047 COS-051 COS-053 COS-057 COS-062 COS-063 COS-064 COS-070 COS-080 COS-084 COS-086 COS-090 COS-099 COS-100 COS-107
-COS-013 COS-014 COS-015 COS-026 COS-037 COS-038 COS-039 COS-042 COS-045 COS-049 COS-056 COS-059 COS-067 COS-068 COS-081 COS-082 COS-085 COS-088 COS-091 COS-094 COS-098 COS-103 COS-108
-COS-016 COS-017 COS-018 COS-034 COS-035 COS-036 COS-040 COS-046 COS-048 COS-050 COS-052 COS-054 COS-055 COS-058 COS-060 COS-061 COS-065 COS-066 COS-069 COS-071 COS-072 COS-073 COS-074 COS-075 COS-076 COS-077 COS-078 COS-083 COS-087 COS-089 COS-092 COS-096 COS-097 COS-101 COS-104 COS-105 COS-106 COS-109
-
----
-
-## ❌ CANCELLED
-
-| COS-009 | scanner/Playwright ctl — Pure Box internal |
+| ID | Кто | h | Результат |
+|---|---|---|---|
+| **CLN-001** | Flash | 2h | Колонки исправлены, Vault Path и хардкод-контакты вырезаны |
+| **CLN-002** | Flash | 1h | Evidence mockEntries удалены → честный EmptyState |
+| **CLN-003** | Flash | 3h | DEFAULT_RELEASES удалены, клиентские хэши-подписи убраны |
+| **CLN-004** | Flash | 2h | PipelineStudio setInterval удалён, честный POST /runs |
+| **CLN-005** | Flash | 2h | DeepLinker fix + plan-steel убран |
+| **CLN-006** | Flash | 2h | api.ts .catch(()=>[]) удалены, честные ошибки |
+| **CLN-007** | Luna | 2h | SoD в create_gate: HTTP 409, 10/10 тестов |
+| **CLN-008** | Boss/Luna | 1h | Линейный трансфер: ZR→ZPE запрещён → HTTP 400 |
+| **CLN-009** | Buddy | 4h | E2E-скрипт 8 фаз |
+| **CLN-010** | Buddy | 3h | CI regression gate в GitHub Actions |
+| **CLN-011** | Luna | 3h | Негативные тесты SoD + трансфер |
+| **CLN-012** | Luna | 2h | Аудит API: 0 хардкод-ответов |
+| **CLN-013** | Luna | 2h | Финальный вердикт: **1222 passed, 39 passed, 0 failed** |

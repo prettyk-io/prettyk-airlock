@@ -1,8 +1,8 @@
 # Cosmo — Operator Control Plane / Cosmoport 2.0
 
-> **Repo:** https://github.com/prettyk-io/cosmoport2  
+> **Repo:** https://github.com/prettyk-io/prettyk-control-plane  
 > **Org:** https://github.com/prettyk-io/  
-> **Local clone:** `D:\cosmoport2`  
+> **Local clone:** `D:\prettyk-control-plane`  
 > **Parent repo (planning SoT, Pure Box code):** `D:\prettyk-dev`  
 > **Владелец:** Максим. **Ты — Cosmo, менеджер этого скоупа.**
 
@@ -15,30 +15,30 @@
 ### Шаг 1: Что ты вообще строишь (10 мин)
 
 Прочитай **один** файл:
-- `D:\cosmoport2\docs\CONCEPT.md` — полный концепт: что такое Cosmoport 2.0, чем отличается от старого, архитектура, 8 сущностей, Steel Thread, стек, две UI-поверхности.
+- `D:\prettyk-control-plane\docs\CONCEPT.md` — полный концепт: что такое PrettyK Control Plane, чем отличается от старого, архитектура, 8 сущностей, Steel Thread, стек, две UI-поверхности.
 
 На выходе ты должен мочь ответить: «Cosmoport 2.0 — это Sovereign Run Control Plane. 8 сущностей вместо 80 таблиц. Domain → Pipeline → Compile → Run → Batch → Gate → Evidence. Два UI: Control Station (MUI, белая) и Web IDE (Tailwind, тёмная).»
 
 ### Шаг 2: Откуда мы это взяли (15 мин)
 
 Прочитай **один** файл:
-- `D:\cosmoport2\docs\DISCOVERY.md` — выжимки из старого Cosmoport (80+ таблиц, 97 сервисов, расхождения ТЗ vs код, API-маппинг старый→новый, статусы).
+- `D:\prettyk-control-plane\docs\DISCOVERY.md` — выжимки из старого Cosmoport (80+ таблиц, 97 сервисов, расхождения ТЗ vs код, API-маппинг старый→новый, статусы).
 
 На выходе ты должен понимать: старый Cosmoport был клеем над GitLab CI с Redis'ом вместо базы. Мы выжали оттуда доменную модель, статусные машины и API-контракты, но архитектуру строим с нуля.
 
 ### Шаг 3: На чём строим и что уже готово (15 мин)
 
 Прочитай **три** коротких файла:
-- `D:\cosmoport2\docs\STACK.md` — утверждённый стек, что запрещено.
-- `D:\cosmoport2\docs\INVENTORY.md` — что уже сделано (боевое в Pure Box + Cosmo-прототипы).
-- `D:\cosmoport2\docs\PERSISTENCE.md` — граница хранения: PostgreSQL, MinIO, Valkey, ArtifactStore.
+- `D:\prettyk-control-plane\docs\STACK.md` — утверждённый стек, что запрещено.
+- `D:\prettyk-control-plane\docs\INVENTORY.md` — что уже сделано (боевое в Pure Box + Control Plane).
+- `D:\prettyk-control-plane\docs\PERSISTENCE.md` — граница хранения: PostgreSQL, MinIO, Valkey, ArtifactStore.
 
 На выходе ты знаешь: Python/FastAPI/PostgreSQL/Valkey. MUI для Control Station, Tailwind для Web IDE. React Admin как shell НЕ юзаем, AntD НЕ юзаем, React Flow Pro НЕ покупали. У Luna готовы Pydantic-модели (39 тестов), у Boss прототип PlanCompiler, у Flash прототипы UI-панелей.
 
 ### Шаг 4: Что делать прямо сейчас (10 мин)
 
 Прочитай **один** файл:
-- `D:\cosmoport2\docs\BACKLOG.md` — 24 карточки, 6 фаз, распределение по братьям.
+- `D:\prettyk-control-plane\docs\BACKLOG.md` — legacy backlog, замороженный после перехода на Battlecruiser.
 
 На выходе ты знаешь: первая партия — COS-001 (DDL + Alembic, Boss/Luna) и COS-004 (CapabilityBroker, Luna). Boss и Luna могут стартовать параллельно. Flash занят в prettyk-dev (ADM-WIRE), придёт позже.
 
@@ -396,7 +396,7 @@ Cosmoport 2.0
 
 | Правило | Суть |
 |---|---|
-| **Запрет на prettyk-dev .venv** | КАТЕГОРИЧЕСКИ запрещено вызывать `D:\prettyk-dev\.venv`. Только системный `python` из PATH или собственный `D:\cosmoport2\.venv` |
+| **Запрет на prettyk-dev .venv** | КАТЕГОРИЧЕСКИ запрещено вызывать `D:\prettyk-dev\.venv`. Только системный `python` из PATH или собственный `D:\prettyk-control-plane\.venv` |
 | **MUI/Tailwind style boundary** | MUI только для Control Station, Tailwind только для Web IDE |
 | **Meta Light — default** | Белая тема для Control Station, Meta Dark — переключатель |
 | **React Flow — бесплатный MIT** | `@xyflow/react` + `dagre`. Pro НЕ покупали |

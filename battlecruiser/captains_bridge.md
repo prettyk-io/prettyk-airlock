@@ -1,7 +1,7 @@
 # CAPTAIN'S BRIDGE — устав семьи PrettyK / Cosmoport
 
 > **Статус:** общий организационный канон экосистемы  
-> **Командный центр:** `D:\cosmoport2\battlecruiser`  
+> **Командный центр:** `D:\prettyk-control-plane\battlecruiser`  
 > **Владелец продукта:** Максим  
 > **Капитан:** Cosmo
 
@@ -236,10 +236,10 @@ Cosmoport 2.0
 - никаких общих внутренних модулей под видом «удобства».
 
 ```text
-D:\cosmoport2\battlecruiser\
+D:\prettyk-control-plane\battlecruiser\
 ├── friend\requests — предложения до принятия в канон
 ├── pure             — каноны PureK/PrettyK
-├── cosmoport2       — каноны Cosmoport 2.0
+├── prettyk-control-plane — каноны PrettyK Control Plane
 └── общие            — этот устав и общие каноны
 ```
 
@@ -385,7 +385,7 @@ Cosmoport использует старый Nexus как переходный и
 Полный сводный канон:
 
 ```text
-D:\cosmoport2\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 ---
@@ -427,7 +427,7 @@ D:\cosmoport2\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 - принуждение к изменению канона;
 - односторонняя запись необговорённого смысла;
 - безответвенная правка устава или канона;
-- проталкивание предложения сразу в `pure/` или `cosmoport2/`;
+- проталкивание предложения сразу в `pure/` или `prettyk-control-plane/`;
 - объявление гипотезы утверждённым решением;
 - изменение устава «по пьяни», на эмоциях или без проверки последствий;
 - использование зелёных тестов как замены смысловому согласованию.
@@ -453,7 +453,7 @@ Cosmo обязан остановить внесение и запросить �
 
 4. Friend-request
    До принятия предложение лежит в:
-   D:\cosmoport2\battlecruiser\friend\requests\
+   D:\prettyk-control-plane\battlecruiser\friend\requests\
 
 5. Реализация и проверка
    Исполнители выполняют задачу только по согласованному request.
@@ -464,7 +464,7 @@ Cosmo обязан остановить внесение и запросить �
 
 7. Polish / canon admission
    Только после повторного 2FA request переносится в соответствующий канон:
-   pure/ или cosmoport2/.
+   pure/ или prettyk-control-plane/.
 ```
 
 ### 10.3. Friend-request — промежуточный статус
@@ -546,13 +546,13 @@ Cosmo держит корабль, архитектуру и инженерны�
 Операционная инструкция по работе с Максимом:
 
 ```text
-D:\cosmoport2\battlecruiser\MAXIM-PROFILE.md
+D:\prettyk-control-plane\battlecruiser\MAXIM-PROFILE.md
 ```
 
 Священный журнал допуска канонов:
 
 ```text
-D:\cosmoport2\battlecruiser\ADMISSION.md
+D:\prettyk-control-plane\battlecruiser\ADMISSION.md
 ```
 
 ---
@@ -567,4 +567,43 @@ D:\cosmoport2\battlecruiser\ADMISSION.md
 Не плодим сущности — вводим только нужные.
 Не бросаем братьев — ставим им ясные задачи.
 Не теряем продукт — держим курс.
+```
+
+---
+
+## 14. PrettyK Control Plane family
+
+Принятый 2FA-брандовый расклад:
+
+```text
+PrettyK
+├── prettyk.io
+│   └── product/execution layer — Keeper
+├── PrettyK Control Plane
+│   └── current prettyk-control-plane — Cosmo
+└── PrettyK Findings Control Station & QG Triage
+    └── target D:\prettyk-qgfcs — Gatekeeper
+```
+
+Это три слоя одного бренда, а не три случайных монолита. В каждом слое свой
+source of truth и свой PO, между слоями только внешние контракты.
+
+```text
+Keeper     → product/PureK/SecOps PO
+Cosmo      → Control Plane/DevOps PO
+Gatekeeper → Findings/QG/Triage PO
+```
+
+`D:\prettyk-qgfcs` — отдельный существующий репозиторий Findings Control Station.
+Gatekeeper — равный PO-партнёр Cosmo по своему слою.
+
+Boss, Flash, Luna и Buddy — общие братья-исполнители всей семьи. Конкретная
+карточка всегда имеет одного PO-владельца и ясную границу.
+
+Фактическое переименование GitHub repository не выполняется автоматически. До
+отдельного migration request:
+
+```text
+repository: prettyk-control-plane
+logical product name: PrettyK Control Plane
 ```

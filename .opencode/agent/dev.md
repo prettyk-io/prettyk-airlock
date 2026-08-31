@@ -1,5 +1,6 @@
 ---
-description: Dev — инженерный режим Cosmoport 2.0. Код, архитектура, бэкенд, фронт, исполнение (DeepSeek V4 Pro). Только когда Cosmo нужно писать код самому.
+description: Dev — инженерный режим: код, архитектура, бэкенд, фронт, исполнение (DeepSeek V4 Pro)
+mode: primary
 model: openrouter/deepseek/deepseek-v4-pro
 ---
 

@@ -9,7 +9,7 @@
 
 ### 1. Масштаб старого Cosmoport
 - **80+ таблиц** PostgreSQL, **97 сервисных классов** Ruby, **537 строк routes.rb**
-- **12 типов интеграций** (GitLab, Jenkins, OpenShift, Confluence, Jira, Artifactory, Vault, Nexus, ~~AppSecHub~~ ❌ не наш, etc.)
+- **12 типов интеграций** (GitLab, Jenkins, OpenShift, Confluence, Jira, Artifactory, Vault, Nexus, внешний SARIF-агрегатор ❌ не наш, etc.)
 - **65+ core service codes** (JenkinsService, GitlabService, SonarQubeService, etc.)
 - **15 типов приложений (kind'ов):** ppod, allocated, pis, legacy, service_subsystem, service, ehd, epvv_po/spo, universal_app, library, report_templates, configuration_templates, universal_lib, data_transfer_lib
 - **15 статусов проектов:** draft→developing→...→active→...→archived (7 активных + 5 архивных + 3 прерывания)
@@ -69,7 +69,7 @@
 `D:\cosmo\documentation\_converted\`:
 - `10_rukovodstvo_razrabotchika.md` (1.5 МБ) — главный документ
 - BEWS/BELS v2.13 — Уровни рабочих пространств (4 уровня + Grouping)
-- IN v2.10 — Интеграции (9 сервисов, ~~AppSecHub~~ ❌ не наш — было в старом Cosmoport, у нас свой SARIF-экспортёр)
+- IN v2.10 — Интеграции (9 сервисов, внешний SARIF-агрегатор ❌ не наш — было в старом Cosmoport, у нас свой SARIF-экспортёр)
 - BEMR v3.8 — Схема управления релизами
 - LCBE v2.11 — Жизненный цикл бизнес-сущностей (14 шагов ЗР)
 - LCZD v3.3 — Зоны и трансфер

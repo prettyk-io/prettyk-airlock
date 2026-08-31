@@ -81,7 +81,7 @@ EXCLUDED    — не входит в продуктовую модель
 До финального допуска предложение хранится в:
 
 ```text
-D:\cosmoport2\battlecruiser\friend\requests\
+D:\prettyk-control-plane\battlecruiser\friend\requests\
 ```
 
 ---
@@ -995,14 +995,14 @@ success
 ## 18. Связанные документы
 
 ```text
-D:\cosmoport2\battlecruiser\captains_bridge.md
-D:\cosmoport2\battlecruiser\README.md
-D:\cosmoport2\battlecruiser\friend\requests\
-D:\cosmoport2\battlecruiser\pure\ARTIFACT-REGISTRY-CANON.md
-D:\cosmoport2\battlecruiser\cosmoport2\ARTIFACT-REGISTRY-CANON.md
-D:\cosmoport2\battlecruiser\cosmoport2\CANON-INDEX.md
-D:\cosmoport2\battlecruiser\cosmoport2\NEXT-RAILS-BACKLOG.md
-D:\cosmoport2\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-control-plane\battlecruiser\captains_bridge.md
+D:\prettyk-control-plane\battlecruiser\README.md
+D:\prettyk-control-plane\battlecruiser\friend\requests\
+D:\prettyk-control-plane\battlecruiser\pure\ARTIFACT-REGISTRY-CANON.md
+D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\ARTIFACT-REGISTRY-CANON.md
+D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\CANON-INDEX.md
+D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\NEXT-RAILS-BACKLOG.md
+D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 ---
@@ -1017,3 +1017,684 @@ D:\cosmoport2\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 Рабочее передаётся братьям.
 Путь держим вместе.
 ```
+
+---
+
+## 20. PrettyK brand admission — три слоя, три PO, четыре общих брата
+
+> **Статус:** ADMITTED by 2FA  
+> **Участники:** Максим ↔ Cosmo  
+> **Дата:** 31 августа 2026
+
+PrettyK становится единым существующим брендом для трёх отдельных продуктовых
+слоёв. Это не один раздутый монолит и не три независимые конкурирующие системы.
+
+```text
+PrettyK
+├── prettyk.io
+│   └── product / execution layer
+├── PrettyK Control Plane
+│   └── operator/release/control layer
+└── PrettyK Findings Control Station & QG Triage
+    └── findings/triage/policy layer
+```
+
+### 20.1. Слой 1 — PrettyK product/execution
+
+```text
+Public/product identity: prettyk.io
+Контур: PureK/PrettyK execution, browser, scanner, AppSec, runtime
+PO: Keeper
+```
+
+Это существующий продуктовый и production-facing контур PrettyK. Он выполняет
+свои специализированные операции и отдаёт результаты через внешние контракты.
+
+### 20.2. Слой 2 — PrettyK Control Plane
+
+```text
+Логическое имя: PrettyK Control Plane
+Текущее repository: prettyk-control-plane
+Целевое repository name: prettyk-control-plane
+PO: Cosmo
+```
+
+Это операторский control plane:
+
+- Projects;
+- Applications;
+- KITS tags;
+- Teams;
+- Builds;
+- Lifecycle;
+- Release Types;
+- Runs;
+- Gates;
+- Releases;
+- Release Batches;
+- Artifact metadata;
+- Release Packages;
+- `Ready for transfer`.
+
+`Cosmoport` — первый рабочий alias/profile этого слоя для текущего ЦБ/ПлЦР
+сценария. Продуктовый бренд и repository name уже приняты как:
+
+```text
+PrettyK Control Plane
+prettyk-control-plane
+```
+
+Внутренние Python package names, API prefixes, Docker image names и database
+names меняются только отдельными migration decisions.
+
+### 20.3. Слой 3 — PrettyK Findings Control Station
+
+```text
+Логическое имя: PrettyK Findings Control Station & QG Triage
+Целевое repository/path: D:\prettyk-qgfcs
+PO: Gatekeeper
+```
+
+Слой владеет:
+
+- Finding;
+- FindingOccurrence;
+- TriageDecision;
+- GateEvaluation;
+- Baseline;
+- QWEN suggestions intake;
+- approvals;
+- QG explanation;
+- finding dashboards;
+- immutable triage history.
+
+Он получает результаты от PrettyK и других approved scanner adapters, но не
+заменяет execution layer.
+
+Cosmoport/PrettyK Control Plane потребляет готовый QG verdict, а не пересчитывает
+findings самостоятельно.
+
+`D:\prettyk-qgfcs` — отдельный существующий репозиторий Findings Control Station.
+Плотная реализация этого слоя ведётся отдельным рабочим циклом.
+
+### 20.4. Три PO-агента
+
+```text
+Keeper     → PrettyK product/execution/SecOps
+Cosmo      → PrettyK Control Plane/DevOps/release control
+Gatekeeper → Findings Control Station/QG/triage
+```
+
+Три PO-агента — равные партнёры и держатели своих продуктовых смыслов. Ни один слой
+не поглощает другой и не меняет чужой канон молча.
+
+### 20.5. Четыре общих исполнителя
+
+```text
+Boss
+Flash
+Luna
+Buddy
+```
+
+Они общие для всей семьи PrettyK, Control Plane и Findings Station:
+
+- Boss — core/orchestration/state machine;
+- Flash — API/UI/Control Station/Web IDE;
+- Luna — domain/ORM/Alembic/adapters/tests;
+- Buddy — runtime/Compose/Caddy/airgap/registry.
+
+Исполнитель получает задачу от конкретного PO по ясному scope. В одной карточке
+не должно быть двух неразрешённых PO-владельцев.
+
+### 20.6. Кодовые границы
+
+```text
+prettyk.io / PureK
+  ↔ REST / webhook / SSE
+
+prettyk-control-plane
+  ↔ REST / webhook / SSE
+
+prettyk-qgfcs
+  ↔ REST / webhook / SSE
+```
+
+Запрещены:
+
+- общая внутренняя БД;
+- внутренние Python/TypeScript imports между слоями;
+- общий mutable state;
+- подмена внешнего контракта прямым вызовом чужого модуля.
+
+Общими могут быть только согласованные wire contracts, схемы обмена, лицензия
+Minimal UI и общая продуктовая терминология.
+
+### 20.7. Брендинг и кастомизация
+
+```text
+PrettyK = единый бренд и продуктовая семья
+слои = отдельные поставляемые поверхности
+клиентские варианты = конфигурация/профиль, не форк на каждую мелочь
+```
+
+Сначала строится универсальное ядро. Затем оно кастомизируется под заказчика,
+airgap-сеть и зону. `Cosmoport` остаётся первым интеграционным alias, пока не
+завершена миграция бренда.
+
+### 20.8. Migration rule
+
+Переименование сущности и repository принято:
+
+```text
+Cosmoport alias / prettyk-control-plane
+  → PrettyK Control Plane / prettyk-control-plane
+```
+
+Это не означает автоматически:
+
+- rename всех Python packages;
+- массовую замену API prefixes;
+- изменение DB names;
+- изменение Docker image names;
+- изменение внешних contracts.
+
+Это отдельные migration plans на конкретный rename scope.
+
+---
+
+## 21. Gatekeeper admission — Findings Control Station PO
+
+> **Статус:** ADMITTED by 2FA  
+> **Дата:** 31 августа 2026  
+> **PO:** Gatekeeper  
+> **Repository:** `D:\prettyk-qgfcs`  
+> **Remote:** `https://github.com/prettyk-io/prettyk-qgfcs.git`
+
+### 21.1. Роль Gatekeeper
+
+Gatekeeper — равный PO-партнёр Keeper и Cosmo, инженерная голова отдельного
+третьего слоя:
+
+```text
+PrettyK Findings Control Station & QG Triage
+```
+
+Его зона:
+
+- Findings;
+- Finding Occurrences;
+- triage;
+- baseline;
+- decisions;
+- approvals;
+- QG evaluation;
+- QG explanation;
+- история решений;
+- findings dashboard.
+
+Gatekeeper не владеет execution runtime PrettyK и не владеет Release Control
+Plane. Он владеет интерпретацией и управлением результатами проверок.
+
+### 21.2. Внешний контракт слоёв
+
+```text
+PrettyK execution
+  → raw findings, Evidence, QWEN suggestions, summary
+  → Findings Intake API
+
+Gatekeeper / Findings Control Station
+  → Finding / Occurrence / Decision / Baseline / GateEvaluation
+  → QG verdict + explanation
+
+PrettyK Control Plane
+  → consumes verdict
+  → Release / Package readiness
+```
+
+Ни один слой не импортирует внутренние модули другого. Связь только через:
+
+```text
+REST
+webhook
+SSE
+SARIF/JSON/CycloneDX
+object/evidence references
+```
+
+### 21.3. Обязательные модели
+
+```text
+Finding
+FindingOccurrence
+TriageDecision
+GateEvaluation
+Baseline
+```
+
+Смысл:
+
+```text
+Finding            → одна логическая проблема по stable fingerprint
+FindingOccurrence  → конкретное обнаружение scanner/build/release/digest
+TriageDecision     → immutable история человеческого решения
+GateEvaluation     → effect конкретной Finding на конкретный Release
+Baseline           → известная разрешённая проблема с reason/owner/expiry/approval
+```
+
+Статус Finding и влияние на Release не смешиваются.
+
+### 21.4. QWEN boundary
+
+```text
+QWEN предлагает
+→ человек принимает или отвергает
+→ Admin IB утверждает Critical/High по policy
+→ TriageDecision фиксируется
+→ GateEvaluation применяет policy
+→ Control Plane получает verdict
+```
+
+QWEN не имеет права самостоятельно удалять finding, выставлять финальный
+`false_positive`/`wont_fix`, менять GateEvaluation или разблокировать Release.
+
+`TriageDecision` хранит `model_suggestion_ref` и `model_version`.
+
+### 21.5. Baseline/QG rules
+
+```text
+new Critical
+  → BLOCK
+
+known approved baseline
+  → effect определяется policy, без вечной сирены
+
+expired decision
+  → REOPEN/BLOCK
+
+changed finding
+  → REOPEN
+
+developer proposal без нужного approval
+  → не разблокирует Critical/High
+```
+
+Gatekeeper возвращает не только `PASS/BLOCK`, а explanation:
+
+```text
+New Critical
+New High
+Approved baseline
+Expired decisions
+Missing approvals
+Blockers
+Ready for transfer
+```
+
+Control Plane не пересчитывает QG самостоятельно.
+
+### 21.6. Onboarding protocol
+
+Gatekeeper при запуске:
+
+1. читает `captains_bridge.md`, этот ADMISSION и `MAXIM-PROFILE.md`;
+2. понимает трёхслойную модель PrettyK;
+3. изучает реальные PrettyK scanner outputs, filtering/grouping/correlation и
+   QWEN suggestions;
+4. не придумывает API, fingerprints или semantics по памяти;
+5. собирает список вопросов и discovery evidence;
+6. готовит contract draft;
+7. проходит 2FA с Keeper/Cosmo/Максимом;
+8. только затем режет работу общим братьям.
+
+Полный copy-paste onboarding-pack для Keeper:
+
+```text
+D:\prettyk-control-plane\battlecruiser\gatekeeper\KEEPER-BRIEFING-GATEKEEPER.md
+```
+
+Собственный канон Gatekeeper:
+
+```text
+D:\prettyk-qgfcs\chambers\CONSTITUTION.md
+```
+
+`chambers/CONSTITUTION.md` заменяет прежний локальный `chambers/ADMISSION.md`
+и является единственным admission-журналом Findings Control Station.
+
+### 21.6a. Gatekeeper V1 foundation
+
+Gatekeeper закрепил минимальный V1 фундамент:
+
+```text
+ScanRun
+→ Finding
+→ FindingOccurrence
+→ TriageDecision
+→ Baseline
+→ GateEvaluation
+→ QG Explanation
+→ PrettyK Control Plane
+```
+
+V1 отвечает на один операторский вопрос:
+
+```text
+Может ли конкретный Release двигаться дальше и какие точные blockers этому мешают?
+```
+
+Закреплены:
+
+- exact correlation только по `producer + fingerprint scheme/version + fingerprint`;
+- одна строгая server-side QG policy;
+- QWEN только optional advisory;
+- immutable decision/approval history;
+- Registry, Finding Detail и Release QG Explanation как три operator surfaces.
+
+Не входят в V1:
+
+```text
+ASPM suite
+magic risk scoring
+threat intelligence feeds
+graphs as primary UI
+auto-fixes
+ticketing
+campaigns
+policy builder
+dashboard sprawl
+```
+
+### 21.7. UI principle
+
+```text
+MUI Minimal UI + MUI X Data Grid → Findings Registry
+Drawer/Page                       → Finding Detail
+Cards/Charts                      → QG/Findings dashboard
+React Flow                         → secondary provenance/dependency view
+```
+
+React Flow не является основной поверхностью работы с тысячами findings.
+
+### 21.8. Стек (ADMITTED by 2FA)
+
+Стек PrettyK Findings Control Station & QG Triage (prettyk-qgfcs) утверждён:
+
+```text
+Frontend:
+  React 19 + TypeScript + Vite
+  MUI Minimal UI (общая лицензия)
+  MUI X Data Grid (тяжёлые реестры)
+  MUI X Charts (нативная аналитика и метрики)
+  @xyflow/react (вторичный provenance/dependency view only)
+
+Backend:
+  Python 3.13 + FastAPI + Pydantic v2
+  PostgreSQL 16 (отдельная изолированная база qgfcs)
+  SQLAlchemy 2 (Async) + Alembic
+
+Storage & Queue (Dedicated from Day 1):
+  Dedicated MinIO instance (хранение raw reports, SARIF, Evidence, Act)
+  Valkey (активная очередь событий, webhook intake, retry, idempotency locks)
+  Caddy (reverse proxy edge)
+```
+
+---
+
+## 22. PrettyK Control Plane rebrand
+
+> **Статус:** ADMITTED by 2FA  
+> **Дата:** 31 августа 2026
+
+### Принятое продуктовое имя
+
+```text
+PrettyK Control Plane
+```
+
+### Принятый репозиторий
+
+```text
+Local:  D:\prettyk-control-plane
+Remote: https://github.com/prettyk-io/prettyk-control-plane.git
+```
+
+### Роль Cosmoport
+
+```text
+Cosmoport = первый integration alias/profile
+```
+
+Он используется для текущего ЦБ/ПлЦР discovery context и первой интеграционной
+поставки. Он не является конечной отдельной продуктовой линией.
+
+### Универсальное ядро
+
+```text
+PrettyK Control Plane
+├── Cosmoport profile — первый integration alias
+└── PureK profile/fork — при созревании универсального ядра
+```
+
+Клиентские особенности реализуются конфигурацией и profile boundaries, а не
+копированием отдельной легаси-системы под каждого заказчика.
+
+### Три слоя бренда
+
+```text
+PrettyK
+├── prettyk.io
+│   └── Product / Execution layer — Keeper
+├── PrettyK Control Plane
+│   └── prettyk-control-plane — Cosmo
+└── PrettyK Findings Control Station & QG Triage
+    └── D:\prettyk-qgfcs — Gatekeeper
+```
+
+---
+
+## 23. Scanner capability baseline
+
+> **Статус:** ADMITTED by 2FA  
+> **Принцип:** capability = что проверяем; provider = чем проверяем  
+> **Правило:** scanner запускается только для применимого артефакта/профиля
+
+### Source / repository profile
+
+```text
+Gitleaks
+  → secret_scan
+  → repository/source/files
+
+SonarQube
+  → source quality/security analysis
+
+CodeScoring
+  → SCA/license analysis
+
+CycloneDX
+  → canonical SBOM contract
+
+KICS
+  → IaC policy scan, только если найден IaC
+
+SLSA
+  → provenance capability
+```
+
+Source code не запускается через container-only проверки.
+
+### Container / deployment profile
+
+```text
+Hadolint
+  → Dockerfile/build-context lint
+
+CycloneDX
+  → SBOM contract
+
+Trivy
+  → container vulnerability scan
+
+ClamAV
+  → artifact content/malware scan
+
+KCS
+  → последний container scan по exact Build digest
+
+KubeLinter
+  → Kubernetes manifest lint
+```
+
+Container profile не запускает SonarQube, CodeScoring или CodeQL как image scan.
+KCS получает конкретный `image@sha256:digest` от Build, не mutable tag и не
+произвольный образ из registry.
+
+### Provenance и SBOM
+
+```text
+SLSA      = единственный product capability provenance
+in-toto   = возможный технический wire format, не отдельный step
+
+CycloneDX = единственный product SBOM contract
+Syft      = возможный генератор, не отдельный business step
+```
+
+### CodeQL policy
+
+```text
+PureK ordinary source:
+  SonarQube + CodeQL
+
+PrettyK Control Plane ordinary source:
+  SonarQube + CodeScoring
+  CodeQL не активируется до готового bridge
+
+PrettyK Control Plane security/regulatory source:
+  SonarQube + CodeScoring + CodeQL
+  только после licensing/offline/query/executor/Evidence bridge
+```
+
+CodeQL — source semantic analysis, не container scanner.
+
+### Build modes
+
+```text
+Development Build:
+  разработчик/тестер выбирает шаги для работы и отладки
+  результат не является Release и не квалифицирует transfer
+
+Release Build:
+  immutable ReleaseType profile
+  steps не меняются чекбоксами
+  QG/Gates/Evidence/Act обязательны по policy
+```
+
+Hotfix может убрать разрешённые optional technical steps, но не может обходить:
+
+```text
+PrettyK QG
+required Gates
+Evidence
+Act
+Release Package readiness
+```
+
+### Не входит в baseline
+
+```text
+Checkov
+OPA/Conftest
+YARA
+Grype
+```
+
+Они не включаются «на всякий случай».
+
+### Low-priority candidates
+
+```text
+Semgrep → fast/custom SAST for development/hotfix profiles
+CodeQL  → activated per policy only after bridge requirements
+cosign  → possible image-signature value for future GAP supply chain
+```
+
+Ни один из них не становится default без отдельного 2FA и явной бизнес-ценности.
+
+---
+
+## 24. SecOps Studio, Gatekeeper and Control Plane authority boundary
+
+> **Статус:** PROVISIONAL — product essence agreed; exact contract requires joint 2FA with Gatekeeper  
+> **Связанный request:** `friend/requests/2026-08-31-secops-studio-gatekeeper-control-plane-flow.md`
+
+### Продуктовый поток
+
+```text
+PrettyK Control Plane
+→ Release/Build/artifact/required-step context
+→ Gatekeeper QG Center processing
+→ qualifying deployment
+→ PrettyK SecOps Studio post-deployment DAST/AppSec
+→ final Studio PASS/FAIL + Act + Evidence
+→ Gatekeeper triage/policy/clearance
+→ Control Plane OK_TO_TRANSFER
+```
+
+### Authority
+
+```text
+PrettyK SecOps Studio
+  → DAST execution authority
+  → final DAST PASS/FAIL
+  → final Act
+
+Gatekeeper QG Center
+  → findings, triage, baseline, approvals, policy explanation
+  → PASS_GRANTED only after Studio PASS + Act + applicable policy
+
+PrettyK Control Plane
+  → Release/Package orchestration
+  → consumes clearance; does not recompute DAST QG
+```
+
+Studio FAIL cannot be silently overridden by Gatekeeper or Control Plane.
+
+### Required step failure
+
+```text
+required Build/registry/scanner step fails or is unavailable
+→ qualifying deploy does not start
+→ DAST is not expected
+→ Release BLOCKED before QG
+→ no transfer
+```
+
+This is execution failure, not a QG warning and not a triage decision.
+
+### Diagnostic exception
+
+Limited investigation deployment may exist only as an explicitly authorised,
+non-qualifying path. It can produce findings and Evidence but can never produce:
+
+```text
+qualified Release
+PASS_GRANTED
+OK_TO_TRANSFER
+```
+
+### Remediation loop
+
+```text
+findings
+→ remediation/triage
+→ new Build
+→ qualifying deployment
+→ new Studio DAST + Act
+→ repeat until current PASS
+→ Gatekeeper clearance
+→ Control Plane transfer permission
+```
+
+Every iteration is preserved as a new ScanRun/FindingOccurrence/Evidence record.
+Nothing is silently overwritten or muted.

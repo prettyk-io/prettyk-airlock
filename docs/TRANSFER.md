@@ -5,7 +5,7 @@
 
 ---
 
-## 1. Копируем как ИСХОДНИКИ (портировать в `D:\cosmoport2`)
+## 1. Копируем как ИСХОДНИКИ (портировать в `D:\prettyk-control-plane`)
 
 ### Backend (`orchestrator/cosmo/`)
 
@@ -75,7 +75,7 @@ Cosmo ← SSE ← Pure Box (live telemetry)
 
 ---
 
-## 3. Инфраструктура — Buddy собирает с нуля в cosmoport2
+## 3. Инфраструктура — Buddy собирает с нуля в prettyk-control-plane
 
 | Что | Кто | Что делать |
 |---|---|---|
@@ -118,10 +118,10 @@ Cosmo ← SSE ← Pure Box (live telemetry)
 
 ---
 
-## 5. Итого: что уже лежит в D:\cosmoport2
+## 5. Итого: что уже лежит в D:\prettyk-control-plane
 
 ```text
-D:\cosmoport2\
+D:\prettyk-control-plane\
 ├── AGENTS.md                    ← ✅ готово
 ├── .opencode\agent\             ← ✅ готово (cosmo/dev/plan)
 ├── docs\                        ← ✅ готово (CONCEPT, BACKLOG, DISCOVERY, INVENTORY, STACK, PERSISTENCE)

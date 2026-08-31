@@ -3,7 +3,7 @@
 ## Быстрый старт
 
 ```powershell
-cd D:\cosmoport2
+cd D:\prettyk-control-plane
 
 # Поднять стек
 docker compose -f services/docker-compose.yml up -d cosmo-postgres cosmo-valkey cosmo-api cosmo-caddy

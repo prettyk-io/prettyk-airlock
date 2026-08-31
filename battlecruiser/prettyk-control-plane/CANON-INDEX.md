@@ -3,7 +3,7 @@
 ## Главный монолит
 
 ```text
-D:\cosmoport2\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 Он содержит согласованную модель:
@@ -29,7 +29,7 @@ pure/ARTIFACT-REGISTRY-CANON.md
 Nexus — baseline target для PureK/PrettyK bundle.
 
 ```text
-cosmoport2/ARTIFACT-REGISTRY-CANON.md
+prettyk-control-plane/ARTIFACT-REGISTRY-CANON.md
 ```
 
 Т1-Сфера — целевой отечественный provider для Cosmoport 2.0.
@@ -52,4 +52,4 @@ Cosmoport
 
 - Официальная страница платформы Сфера: <https://www.sferaplatform.ru/sfera-platform>
 - Официальная страница «Сфера.Дистрибутивы и лицензии»: <https://www.sferaplatform.ru/distributivy-licenzii>
-- Документация Cosmoport в репозитории: `D:\cosmoport2\docs\`
+- Документация PrettyK Control Plane в репозитории: `D:\prettyk-control-plane\docs\`

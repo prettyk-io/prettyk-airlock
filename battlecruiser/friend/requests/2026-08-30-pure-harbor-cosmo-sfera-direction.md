@@ -109,8 +109,8 @@ Harbor не заменяет Nexus для всех package ecosystems и не д
 После evidence и targeted tests request можно перенести в:
 
 ```text
-D:\cosmoport2\battlecruiser\pure\
-D:\cosmoport2\battlecruiser\cosmoport2\
+D:\prettyk-control-plane\battlecruiser\pure\
+D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\
 ```
 
 только после повторного 2FA и polish.

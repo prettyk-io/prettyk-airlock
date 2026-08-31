@@ -439,7 +439,7 @@ Project Detail
 Фактический аудит показал:
 
 ```text
-В cosmoport2 сейчас:
+В текущем репозитории PrettyK Control Plane сейчас:
   MUI + собственная тема + обычные MUI Table
 
 Фактически не подключены:
@@ -975,7 +975,7 @@ created_at DESC
 
 Временно не участвует в этой feature-wave. Его отдельная задача:
 
-- `D:\cosmoport2\.venv`;
+- `D:\prettyk-control-plane\.venv`;
 - npm/pip/Playwright caches;
 - OpenCode tool-output/cache;
 - Docker/WSL/PostgreSQL storage;

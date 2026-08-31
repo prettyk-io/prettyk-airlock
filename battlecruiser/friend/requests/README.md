@@ -3,7 +3,7 @@
 Это промежуточная зона предложений, которые ещё не стали канонами.
 
 ```text
-D:\cosmoport2\battlecruiser\friend\requests\
+D:\prettyk-control-plane\battlecruiser\friend\requests\
 ```
 
 ## Правило
@@ -11,7 +11,7 @@ D:\cosmoport2\battlecruiser\friend\requests\
 Любой новый канон или изменение существующего сначала оформляется здесь после
 обязательного 2FA-разговора Максима и Cosmo.
 
-В `pure/` или `cosmoport2/` request попадает только после:
+В `pure/` или `prettyk-control-plane/` request попадает только после:
 
 1. реализации исполнителями;
 2. тестов и проверки результата;

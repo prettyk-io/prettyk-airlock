@@ -2,7 +2,7 @@
 
 > **Статус:** живой delivery backlog  
 > **Старый backlog:** заморожен; следующие задачи ведём здесь  
-> **Основной канон:** `D:\cosmoport2\battlecruiser\ADMISSION.md`  
+> **Основной канон:** `D:\prettyk-control-plane\battlecruiser\ADMISSION.md`  
 > **Текущий target:** Cosmoport ПлЦР / ЗР  
 > **Экипаж:** Boss, Flash, Luna, Buddy  
 > **Правило:** данные и ошибки честные; неизвестное помечается `UNKNOWN`; новые каноны проходят 2FA
@@ -479,3 +479,119 @@ PrettyK scan
 - QWEN не принимает решение сам;
 - duplicate occurrences не плодят findings;
 - raw report и Evidence не теряются.
+
+---
+
+## 9. CONTROL PLANE DELIVERY — stop dreaming, start shipping
+
+> **Статус:** next implementation wave  
+> **Причина:** мы напланировали три слоя Findings Station для Gatekeeper, а сами ещё не выкатили Production-ready Observation Envelope и ReleaseCandidate. Пора строить свою базу, а не раздавать теории соседу.
+
+### Boss + Luna — CP-OWN-001: Observation Envelope and ReleaseCandidate contract
+
+**Оценка:** 16–22 часа  
+**Owners:** Boss (domain), Luna (persistence/API)
+
+Построить реальный работающий contract между Control Plane и внешним consumer
+(сейчас это будет Gatekeeper/Findings Station, позже любой другой):
+
+```text
+ReleaseCandidate
+→ source identity
+→ Build identity
+→ artifact digest
+→ ReleaseType snapshot
+→ deployment/environment context
+→ required-step execution proof
+```
+
+И версионируемый Observation Envelope для отдачи:
+
+```text
+event id
+schema version
+producer
+scan id
+execution status
+context snapshot
+tool/ruleset versions
+raw report reference
+Evidence refs
+findings
+QWEN suggestion slot
+Act reference
+idempotency key
+origin: release_pipeline / development_build / ad_hoc_inspection / post_deploy_dast
+qualification_scope: release_required / diagnostic
+```
+
+В V1 считать ReleaseCandidate scope через фиксацию всего необходимого контекста при создании, а не через вычисление affected scope потом. Различить `Development Build` и `Release Build` в API и в persistence.
+
+**DoD:**
+
+- domain model ReleaseCandidate + Observation Envelope;
+- PostgreSQL persistence (Luna);
+- clean API с версионированием;
+- 25+ tests: создание candidate, разные origin/qualification context, invalid candidate;
+- ReleaseCandidate и Observation не смешиваются с Gatekeeper Findings;
+- Gatekeeper ещё не пишет implementation — мы даём ему реальный intake, а не теорию.
+
+### Flash + Buddy — CP-OWN-002: Project Composition, Build/Registry, and Scanner integration
+
+**Оценка:** 18–26 часов  
+**Owners:** Flash (UI), Buddy (runtime/registry)
+
+Довести уже начатое до рабочего product surface:
+
+```text
+Project Composition:
+  → drag-and-drop N folders
+  → proposed N applications + dependencies
+  → KITS (optional) + optional Project Manifest
+  → создание N/N+1 repositories
+
+Build / Registry flow:
+  → source Build → source checks
+  → container Build → image push → digest
+  → registry artifact record
+  → Kubernetes deployment manifest by digest
+
+Scanner profiles в API:
+  → KICS / ClamAV / Gitleaks / Hadolint / KubeLinter / Trivy / KCS
+  → не как fake adapters, а как реальные capability references
+  → applicability matrix source/container/IaC
+
+Development Build UI:
+  → свободный выбор шагов
+  → diagnostic result
+  → явное отличие от Release Build
+```
+
+**DoD:**
+
+- Project создания flow доходит до материализации репозиториев и result;
+- Build/Registry/K8s path: image pushed by digest, Kubernetes manifest references exact digest;
+- scanner profile matrix доступна в API и отображается оператору;
+- Development Build и Release Build явно различимы;
+- 40+ UI/contract tests;
+- 0 TS errors;
+- живой не-skipped OCI push/pull при поднятом registry.
+
+### Joint acceptance
+
+```text
+Project
+→ drag-and-drop composition
+→ optional KITS + optional Manifest
+→ N applications/repositories
+
+Build (source/container)
+→ registry digest
+→ Kubernetes deploy manifest
+
+ReleaseCandidate
+→ фиксация context
+→ готовность отдать Observation Envelope
+```
+
+Мы доказываем свой Production path **до того**, как режем реализацию Findings Station для Gatekeeper.

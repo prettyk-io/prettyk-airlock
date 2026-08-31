@@ -486,7 +486,7 @@ Project Detail
 Аудит показал:
 
 ```text
-В cosmoport2 сейчас:
+В текущем репозитории PrettyK Control Plane сейчас:
   MUI + собственная тема + обычные MUI Table
 
 Не доказано/не сделано:
@@ -1269,7 +1269,7 @@ PrettyK lab остаётся отдельным контуром и не сме�
 
 Репозитории уже на `D:`, но окружения и кеши надо отдельно перенести:
 
-- `D:\cosmoport2\.venv`;
+- `D:\prettyk-control-plane\.venv`;
 - npm cache;
 - pip cache;
 - Playwright browsers;
