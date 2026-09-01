@@ -77,14 +77,16 @@ docs  — SBOM, GOST-Act, evidence. Не артефакт выполнения, 
 
 ## 3. UNKNOWN (не подтверждено, не зашито в код, помечено future)
 
-### СОД / МЗП (Separation of Duties / Межзоновое Перемещение)
+### СОД bridge / МЗП legacy
 | Поле | Cosmoport 1.0 | Cosmoport 2.0 |
 |---|---|---|
 | `sod_code` | `release_routes.sod_code` | ❌ НЕ в active модели |
-| `mzp_url` | `release_routes.mzp_url` | ❌ НЕ в active модели |
-| `sod?` / `mzp?` | `release_route.rb:16-22` | ❌ НЕ реализовано |
+| `mzp_url` | `release_routes.mzp_url` | `EXCLUDED`: historical field only |
+| `sod?` / `mzp?` | `release_route.rb:16-22` | СОД bridge future; МЗП excluded |
 
-**Причина**: СОД/МЗП — специфичные для конкретной организации протоколы. Не являются частью универсального контракта Cosmoport 2.0.
+**Причина**: СОД — специфичный внешний provider и будет подключаться bridge
+adapter. МЗП исключён продуктовым решением и не является частью контракта
+Cosmoport 2.0.
 
 ### Т1-Сфера capability matrix
 - Полная матрица возможностей Т1-Сфера (manifest put, tag list, blob push, signature verify) — **UNKNOWN**.
@@ -128,7 +130,10 @@ docs  — SBOM, GOST-Act, evidence. Не артефакт выполнения, 
                           │
            UNKNOWN (future, не зашито)
            ╔══════════════════════════════════╗
-           ║  СОД (sod_code)                 ║
+            ║  СОД bridge API/operations      ║
+            ║  Т1-Сфера full capability       ║
+            ║  KCS enforcement policy         ║
+            ║  МЗП — EXCLUDED (legacy only)   ║
            ║  МЗП (mzp_url)                  ║
            ║  Т1-Сфера full capability       ║
            ║  KCS enforcement policy         ║

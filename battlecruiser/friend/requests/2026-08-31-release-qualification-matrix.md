@@ -140,7 +140,7 @@ Application creation detects language/technology and stores it as card metadata.
 
 ```text
 CodeQL supported language
-→ CodeQL required in security/reulatory profile
+→ CodeQL required in security/regulatory profile
 
 CodeQL unsupported language
 → NOT_APPLICABLE with visible reason

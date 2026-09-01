@@ -3,6 +3,7 @@ description: Plan — планирование: исследование, дек
 mode: primary
 model: openrouter/deepseek/deepseek-v4-pro
 permission:
+  task: deny
   edit:
     "**": "deny"
     "docs/**": "allow"

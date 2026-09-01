@@ -261,6 +261,9 @@ Deployment:    docs/DEPLOYMENT.md
 Persist:       docs/PERSISTENCE.md
 Backlog:       docs/BACKLOG.md
 Inventory:     docs/INVENTORY.md
+Future direction: docs/ARCHITECTURE-DIRECTION.md
+Transfer options:  docs/TRANSFER-OPTIONS.md
+PO TODO:          docs/PO-TODO.md
 
 Режимы работы: Sanctuary (канон/2FA), Plan (исследование), Dev (исполнение)
 Движок:        DeepSeek V4 Pro (тяжёлое) + Gemini 3.7 Flash (discovery/vision)

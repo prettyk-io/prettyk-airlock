@@ -31,7 +31,7 @@ PureK / PrettyK
 Cosmoport 2.0
   → operator control plane
   → projects, applications, builds, lifecycle, gates, evidence, releases
-  → release package и внешняя передача через СОД/МЗП
+  → release package, sovereign cross-zone transport и bridge к СОД
 ```
 
 ## Общие правила
@@ -44,7 +44,8 @@ Cosmoport 2.0
 6. Образы и релизные артефакты фиксируются immutable digest, а не только mutable tag.
 7. В БД хранятся только secret references; raw credentials не допускаются.
 8. ЗР, ЗТ и ЗПЭ — отдельные инстансы с отдельными Gitea, registry и БД.
-9. СОД и МЗП — внешние системы доставки; их внутреннюю механику не выдумываем.
+9. Sovereign cross-zone transport — default для PrettyK и Cosmoport 2. СОД —
+   внешняя bridge-интеграция; его внутреннюю механику не выдумываем. МЗП исключён.
 10. Лицензионные продукты используем только по легальной поставке, документации и разрешённым API.
 
 ## Каноны по направлениям

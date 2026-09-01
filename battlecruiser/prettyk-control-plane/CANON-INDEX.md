@@ -18,7 +18,7 @@ D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 - Project Release Batch;
 - PrettyK DAST/QG;
 - Release Package;
-- СОД/МЗП и future zone instances.
+- sovereign cross-zone transport, СОД bridge и future zone instances.
 
 ## Канон artifact registry
 

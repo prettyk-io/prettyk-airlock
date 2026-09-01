@@ -20,6 +20,18 @@
 → локальный PrettyK-контур
 ```
 
+2. QG status snapshot, который ПУ читает от хаба для exact candidate:
+
+```text
+candidate identity
+waiting / blocked / unlocked
+status version
+policy version
+Act reference
+resolutions references
+flexible_override_obtained, if applicable
+```
+
 Текущий lifecycle:
 
 ```text
@@ -27,7 +39,8 @@ Project → Application → Git → Build → Run → scans → PrettyK QG
 → Gates → Release → Release Package → Ready for transfer
 ```
 
-ЗТ/ЗПЭ, СОД и МЗП — отдельные будущие инстансы/эпики.
+ЗТ/ЗПЭ, sovereign cross-zone transport и СОД bridge — отдельные будущие
+инстансы/эпики. МЗП исключён и не должен вернуться в backlog.
 
 КИТС — optional many-to-many tag. Domain не является business tenant boundary.
 
@@ -318,7 +331,7 @@ Baseline
 QWEN только предлагает. Разработчик triage/propose. Critical/High approval
 определяется policy. Cosmoport получает QG verdict и не пересчитывает findings.
 
-**DoD:** 40+ business/core tests, deterministic dedup, baseline/new/expired
+**DoD for CP-OWN-001A:** 40+ business/core tests, deterministic dedup, baseline/new/expired
 cases, QG explanation object, no scanner-specific business branching.
 
 ### Luna — FND-LUNA-001: Findings persistence and intake API
@@ -361,7 +374,7 @@ act_ref
 Raw reports и attachments идут в object storage references, не в secret refs и не
 в бесконтрольное поле PostgreSQL.
 
-**DoD:** 40+ API/integration tests, clean Alembic migration, idempotent intake,
+**DoD for CP-OWN-001B:** 40+ API/integration tests, clean Alembic migration, idempotent intake,
 fresh-session recovery, no internal PrettyK imports, no external aggregator dependency.
 
 ### Flash — FND-FLASH-001: Findings Control Station UI
@@ -487,10 +500,13 @@ PrettyK scan
 > **Статус:** next implementation wave  
 > **Причина:** мы напланировали три слоя Findings Station для Gatekeeper, а сами ещё не выкатили Production-ready Observation Envelope и ReleaseCandidate. Пора строить свою базу, а не раздавать теории соседу.
 
-### Boss + Luna — CP-OWN-001: Observation Envelope and ReleaseCandidate contract
+### Boss — CP-OWN-001A: ReleaseCandidate and qualification contract
 
-**Оценка:** 16–22 часа  
-**Owners:** Boss (domain), Luna (persistence/API)
+**Оценка:** 8–10 часов
+**Owner:** Boss
+
+**Scope boundary:** domain semantics, versioned envelope shape, validation rules,
+and contract-level tests. No persistence or API implementation in this packet.
 
 Построить реальный работающий contract между Control Plane и внешним consumer
 (сейчас это будет Gatekeeper/Findings Station, позже любой другой):
@@ -505,7 +521,9 @@ ReleaseCandidate
 → required-step execution proof
 ```
 
-И версионируемый Observation Envelope для отдачи:
+И два версионируемых contract DTO:
+
+1. Observation Envelope для отдачи в хаб:
 
 ```text
 event id
@@ -529,17 +547,40 @@ qualification_scope: release_required / diagnostic
 
 **DoD:**
 
-- domain model ReleaseCandidate + Observation Envelope;
-- PostgreSQL persistence (Luna);
-- clean API с версионированием;
-- 25+ tests: создание candidate, разные origin/qualification context, invalid candidate;
+- domain model ReleaseCandidate + Observation Envelope + QG status snapshot;
+- versioned contract and deterministic validation;
+- contract tests: creation, different origin/qualification context, invalid candidate;
 - ReleaseCandidate и Observation не смешиваются с Gatekeeper Findings;
 - Gatekeeper ещё не пишет implementation — мы даём ему реальный intake, а не теорию.
 
-### Flash + Buddy — CP-OWN-002: Project Composition, Build/Registry, and Scanner integration
+### Luna — CP-OWN-001B: Observation Envelope persistence and API
 
-**Оценка:** 18–26 часов  
-**Owners:** Flash (UI), Buddy (runtime/registry)
+**Оценка:** 8–12 часов
+**Owner:** Luna
+
+**Dependency:** CP-OWN-001A accepted by Boss/PO. Luna consumes the accepted
+domain contract and does not redefine its semantics in the persistence layer.
+
+**Scope:** PostgreSQL persistence, versioned API exposure, idempotency and
+integration tests for the ReleaseCandidate and Observation Envelope contract.
+
+**Out of scope:** domain redesign, Gatekeeper Findings implementation, or
+unrelated release orchestration.
+
+**DoD for CP-OWN-001B:**
+
+- PostgreSQL persistence and clean versioned API;
+- 25+ persistence/API tests including invalid and idempotent cases;
+- ReleaseCandidate and Observation remain separate from Gatekeeper Findings;
+- Gatekeeper receives a real intake contract, not a theory document.
+
+### Flash — CP-OWN-002A: Project Composition and Development Build UI
+
+**Оценка:** 10–14 часов
+**Owner:** Flash
+
+**Scope boundary:** operator-facing Project Composition and Development Build
+flow. No registry runtime or scanner execution changes in this packet.
 
 Довести уже начатое до рабочего product surface:
 
@@ -550,16 +591,6 @@ Project Composition:
   → KITS (optional) + optional Project Manifest
   → создание N/N+1 repositories
 
-Build / Registry flow:
-  → source Build → source checks
-  → container Build → image push → digest
-  → registry artifact record
-  → Kubernetes deployment manifest by digest
-
-Scanner profiles в API:
-  → KICS / ClamAV / Gitleaks / Hadolint / KubeLinter / Trivy / KCS
-  → не как fake adapters, а как реальные capability references
-  → applicability matrix source/container/IaC
 
 Development Build UI:
   → свободный выбор шагов
@@ -570,12 +601,40 @@ Development Build UI:
 **DoD:**
 
 - Project создания flow доходит до материализации репозиториев и result;
-- Build/Registry/K8s path: image pushed by digest, Kubernetes manifest references exact digest;
-- scanner profile matrix доступна в API и отображается оператору;
+
 - Development Build и Release Build явно различимы;
 - 40+ UI/contract tests;
 - 0 TS errors;
-- живой не-skipped OCI push/pull при поднятом registry.
+- UI показывает честные loading/empty/error states и не создаёт fake scanner data.
+
+### Buddy — CP-OWN-002B: Build, Registry and Scanner runtime
+
+**Оценка:** 8–12 часов
+**Owner:** Buddy
+
+**Scope boundary:** runtime/registry path and scanner capability references. No
+Project Composition UI edits in this packet.
+
+**Scope:**
+
+```text
+source Build → source checks
+container Build → image push → digest
+registry artifact record
+Kubernetes deployment manifest by digest
+scanner capability matrix for source/container/IaC
+```
+
+**Out of scope:** UI shell, drag-and-drop interaction, and unrelated findings
+triage semantics.
+
+**DoD for CP-OWN-002B:**
+
+- image pushed by digest and Kubernetes manifest references exact digest;
+- scanner profile matrix is available through the runtime/API boundary;
+- 20+ runtime/contract checks;
+- live non-skipped OCI push/pull passes with the registry available;
+- no fake adapters and no external registry dependency in GAP mode.
 
 ### Joint acceptance
 

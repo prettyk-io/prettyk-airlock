@@ -52,7 +52,8 @@ canceled transferred_to_test transferred_to_prod deleting build_failed_dev canar
 ### Выявлено для Cosmoport 2.0
 - **Уже есть**: `ReleaseModel` (domain/release_model.py): statuses `draft..rollback`, zones `zr/zt/zpe`, transfer_history
 - **Нужно добавить**: `domain` (semver), `extra_tag` (внеочередной), `repeat_transfer` (повторный), `guide`, `abac`
-- **СОД/МЗП**: помечены как `future` — поля `sod_code`, `mzp_url`
+- **СОД/МЗП**: legacy-поля `sod_code`, `mzp_url`. В target architecture МЗП
+  исключён; СОД рассматривается только как external bridge.
 
 ---
 
@@ -65,9 +66,9 @@ canceled transferred_to_test transferred_to_prod deleting build_failed_dev canar
 | `segment` | string | Сегмент |
 | `zone` | string | Зона (dev/test/prod) |
 | `contour` | string | Контур |
-| `transport_name` | string | Имя транспорта (СОД/МЗП) |
+| `transport_name` | string | Имя legacy transport (СОД/МЗП); МЗП excluded in target |
 | `sod_code` | string | Код СОД — **future** |
-| `mzp_url` | string | URL МЗП — **future** |
+| `mzp_url` | string | URL legacy МЗП — `EXCLUDED` в target |
 | `route_name` | string | Человекочитаемый ID |
 | `enabled` | boolean | Доступность |
 
@@ -87,4 +88,5 @@ canceled transferred_to_test transferred_to_prod deleting build_failed_dev canar
 
 ### Для Cosmoport 2.0
 - **Уже есть**: `transfer-v2` (линейный ЗР→ЗТ→ЗПЭ), `TransferRecord`, `ReleaseBatch`
-- **future**: СОД/МЗП поля (`sod_code`, `mzp_url`) — помечены в моделях как `Optional[str] = None`
+- **future**: СОД bridge details (`sod_code`) требуют external contract; `mzp_url`
+  историческое поле и `EXCLUDED` в target.
