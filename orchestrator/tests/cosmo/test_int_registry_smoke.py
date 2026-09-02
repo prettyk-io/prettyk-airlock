@@ -214,7 +214,7 @@ class TestPortBoundaries:
         compose_path = Path(__file__).resolve().parents[3] / "services" / "docker-compose.yml"
         if not compose_path.exists():
             pytest.skip("docker-compose.yml not found")
-        compose = compose_path.read_text()
+        compose = compose_path.read_text(encoding="utf-8")
         assert "8180:80" in compose, "Caddy host port must be 8180"
         assert "8080:80" not in compose, "Caddy must NOT use 8080"
 

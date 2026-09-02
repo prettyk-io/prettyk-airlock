@@ -1,6 +1,6 @@
 """COS-062: Metrics Trends API tests (PostgreSQL-only).
 
-PG fixture: conftest.py (auto-skip if PostgreSQL :5432 unreachable).
+PG fixture: conftest.py (auto-skip if the test PG :5433 is unreachable).
 """
 from __future__ import annotations
 

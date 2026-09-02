@@ -4,9 +4,10 @@
 COS-016: Domain → App → Bricks → Plan → Run → Batch → Gate → Evidence — all 8 entities on real PG.
 COS-017: Two identical creates don't duplicate. Valkey reset — statuses recover from PG.
 
-All PG-dependent tests auto-skip when localhost:5432 is unreachable.
+All PG-dependent tests auto-skip when the test PG (:5433) is unreachable.
 """
 from __future__ import annotations
+import _testpg  # noqa: E402  (COS-078: unified PG check)
 
 import sys
 from pathlib import Path
@@ -30,16 +31,11 @@ from sqlalchemy.exc import OperationalError
 # ── PG availability skip ────────────────────────────────────────────
 
 def _pg_available() -> bool:
-    try:
-        s = get_sync_session()
-        s.execute(text("SELECT 1"))
-        s.close()
-        return True
-    except OperationalError:
-        return False
+    """COS-078: unified on _testpg.pg_available (single resolution point)."""
+    return _testpg.pg_available()
 
 
-_pg_needed = pytest.mark.skipif(not _pg_available(), reason="PostgreSQL :5432 unreachable")
+_pg_needed = pytest.mark.skipif(not _pg_available(), reason="test PG (:5433) unreachable - docker compose -f services/docker-compose.test-pg.yml up -d")
 
 
 # ── Clean DB before each PG test ────────────────────────────────────

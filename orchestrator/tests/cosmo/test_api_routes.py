@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """COS-010: Tests for FastAPI REST API routes (PostgreSQL-only).
 
 Tests all CRUD and lifecycle operations with isolated async database:
@@ -9,7 +9,7 @@ Tests all CRUD and lifecycle operations with isolated async database:
 - Runs & Batches (/api/v1/runs, /api/v1/batches)
 - Security Gates (/api/v1/gates)
 
-PG fixture: conftest.py (auto-skip if PostgreSQL :5432 unreachable).
+PG fixture: conftest.py (auto-skip if the test PG :5433 is unreachable).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _orch = Path(__file__).resolve().parents[1]
 if str(_orch) not in sys.path:
     sys.path.insert(0, str(_orch))
 
-# ── Health Tests ───────────────────────────────────────────────────────
+# в”Ђв”Ђ Health Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @pytest.mark.asyncio
 async def test_health_endpoints(pg_client: AsyncClient):
@@ -39,7 +39,115 @@ async def test_health_endpoints(pg_client: AsyncClient):
     assert "dependencies" in data
 
 
-# ── Domain Tests ───────────────────────────────────────────────────────
+# в”Ђв”Ђ COS-090: /ready honest signaling (K8s readiness semantics) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+
+@pytest.mark.asyncio
+async def test_ready_pg_up_valkey_down_is_200_degraded(
+    pg_client: AsyncClient, monkeypatch, loop_safe_engine_reset,
+):
+    """Soft-dep (Valkey) РЅРµРґРѕСЃС‚СѓРїРµРЅ в†’ 200 degraded: СЏРґСЂРѕ СЃРїРѕСЃРѕР±РЅРѕ РѕР±СЃР»СѓР¶РёРІР°С‚СЊ.
+
+    Р’ С‚РµСЃС‚РѕРІРѕРј РѕРєСЂСѓР¶РµРЅРёРё Valkey РЅРµ РїРѕРґРЅСЏС‚, РЅРѕ Р·Р°РјРѕРєР°РµРј РїСЂРѕР±Сѓ СЏРІРЅРѕ, С‡С‚РѕР±С‹
+    С‚РµСЃС‚ РЅРµ Р·Р°РІРёСЃРµР» РѕС‚ СЃС‚РµРЅРґР°. Anchor РЅРµ СЃРєРѕРЅС„РёРіСѓСЂРёСЂРѕРІР°РЅ в†’ disabled.
+    """
+    from orchestrator.cosmo.api import health as health_mod
+
+    async def _vk_down(timeout: float = 2.0):
+        return health_mod.DependencyStatus(
+            name="valkey", status="unhealthy", error="connection refused (simulated)",
+        )
+
+    monkeypatch.setattr(health_mod, "_probe_valkey", _vk_down)
+
+    res = await pg_client.get("/ready")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "degraded"
+    assert body["database"] == "connected"
+    assert body["cache"] == "unavailable"
+    assert body["anchor"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_ready_pg_down_is_503_with_component_map(
+    pg_client: AsyncClient, monkeypatch, loop_safe_engine_reset,
+):
+    """Hard-dep (PostgreSQL) РЅРµРґРѕСЃС‚СѓРїРµРЅ в†’ 503 + С‡РµСЃС‚РЅС‹Р№ РєРѕРјРїРѕРЅРµРЅС‚-РјР°Рї.
+
+    РўРµР»Рѕ вЂ” РїР»РѕСЃРєРёР№ JSON (РЅРµ Р·Р°РІС‘СЂРЅСѓС‚ РІ detail), С‡С‚РѕР±С‹ upstream/Р±Р°Р»Р°РЅСЃРёСЂРѕРІС‰РёРє
+    РІРёРґРµР» С„Р°РєС‚С‹: pg unavailable, СЃРѕСЃС‚РѕСЏРЅРёРµ soft-РєРѕРјРїРѕРЅРµРЅС‚РѕРІ РЅРµ Р·Р°РјР°СЃРєРёСЂРѕРІР°РЅРѕ.
+    """
+    from orchestrator.cosmo.api import health as health_mod
+
+    async def _pg_down(timeout: float = 2.0):
+        return health_mod.DependencyStatus(
+            name="postgres", status="unhealthy", error="connection refused (simulated)",
+        )
+
+    monkeypatch.setattr(health_mod, "_probe_postgres", _pg_down)
+
+    res = await pg_client.get("/ready")
+    assert res.status_code == 503
+    body = res.json()
+    assert body["status"] == "not_ready"
+    assert body["database"] == "unavailable"
+    assert body["cache"] in ("connected", "unavailable")
+    assert body["anchor"] in ("connected", "disabled", "unavailable")
+    assert "detail" not in body
+
+
+@pytest.mark.asyncio
+async def test_ready_both_soft_ok_and_anchor_healthy_is_200_ok(
+    pg_client: AsyncClient, monkeypatch, loop_safe_engine_reset,
+):
+    """Р’СЃРµ РєРѕРјРїРѕРЅРµРЅС‚С‹ healthy (anchor Р·Р°РјРѕРєР°РЅ healthy) в†’ 200 ok."""
+    from orchestrator.cosmo.api import health as health_mod
+
+    async def _vk_ok(timeout: float = 2.0):
+        return health_mod.DependencyStatus(
+            name="valkey", status="healthy", latency_ms=0.5,
+        )
+
+    monkeypatch.setattr(health_mod, "_probe_valkey", _vk_ok)
+    monkeypatch.setattr(
+        health_mod, "_probe_anchor",
+        lambda: health_mod.DependencyStatus(name="anchor", status="healthy", latency_ms=0.2),
+    )
+
+    res = await pg_client.get("/ready")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "ok"
+    assert body["database"] == "connected"
+    assert body["cache"] == "connected"
+    assert body["anchor"] == "connected"
+
+
+@pytest.mark.asyncio
+async def test_ready_anchor_sink_broken_does_not_drop_readiness(
+    pg_client: AsyncClient, monkeypatch, loop_safe_engine_reset,
+):
+    """Anchor СЃРєРѕРЅС„РёРіСѓСЂРёСЂРѕРІР°РЅ, РЅРѕ sink СЃР»РѕРјР°РЅ в†’ 200 (soft), degraded РІ С‚РµР»Рµ."""
+    from orchestrator.cosmo.api import health as health_mod
+
+    async def _vk_ok(timeout: float = 2.0):
+        return health_mod.DependencyStatus(name="valkey", status="healthy", latency_ms=0.5)
+
+    monkeypatch.setattr(health_mod, "_probe_valkey", _vk_ok)
+    monkeypatch.setattr(
+        health_mod, "_probe_anchor",
+        lambda: health_mod.DependencyStatus(name="anchor", status="unhealthy", error="sink unreadable"),
+    )
+
+    res = await pg_client.get("/ready")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "degraded"
+    assert body["database"] == "connected"
+    assert body["anchor"] == "unavailable"
+
+
+# в”Ђв”Ђ Domain Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @pytest.mark.asyncio
 async def test_domains_crud(pg_client: AsyncClient):
@@ -94,7 +202,7 @@ async def test_domains_crud(pg_client: AsyncClient):
     assert res_get_404.status_code == 404
 
 
-# ── Apps & Groups Tests ────────────────────────────────────────────────
+# в”Ђв”Ђ Apps & Groups Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @pytest.mark.asyncio
 async def test_apps_and_groups_crud(pg_client: AsyncClient):
@@ -134,10 +242,12 @@ async def test_apps_and_groups_crud(pg_client: AsyncClient):
     assert len(graph["libraries"]) == 1
 
     # 5. Update repo binding
+    # COS-083: РјСѓС‚Р°С†РёСЏ binding С‚СЂРµР±СѓРµС‚ ownership вЂ” Р°РґРјРёРЅ РїРµСЂРµРєР»СЋС‡Р°РµС‚ РєРѕРЅС‚РµРєСЃС‚
+    # Р·Р°РіРѕР»РѕРІРєРѕРј X-Cosmo-Domain (РїСЂРёР»РѕР¶РµРЅРёРµ Р¶РёРІС‘С‚ РІ dom-app-test)
     res_upd = await pg_client.put("/api/v1/apps/app-auth/repo-binding", json={
         "forge_id": "gitea", "repo_path": "dom-app-test/auth-v2",
         "default_branch": "main", "webhook_id": "wh-99",
-    })
+    }, headers={"X-Cosmo-Domain": "dom-app-test"})
     assert res_upd.status_code == 200
     assert res_upd.json()["repo_path"] == "dom-app-test/auth-v2"
 
@@ -146,7 +256,7 @@ async def test_apps_and_groups_crud(pg_client: AsyncClient):
     assert (await pg_client.delete("/api/v1/groups/grp-core")).status_code == 204
 
 
-# ── Pipeline Bricks & Plans Tests ──────────────────────────────────────
+# в”Ђв”Ђ Pipeline Bricks & Plans Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @pytest.mark.asyncio
 async def test_pipeline_bricks_and_plan_compilation(pg_client: AsyncClient):
@@ -188,7 +298,7 @@ async def test_pipeline_bricks_and_plan_compilation(pg_client: AsyncClient):
     assert len(res_batches.json()) >= 2
 
 
-# ── Runs & Batches Lifecycle Tests ─────────────────────────────────────
+# в”Ђв”Ђ Runs & Batches Lifecycle Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @pytest.mark.asyncio
 async def test_runs_and_batches_lifecycle(pg_client: AsyncClient):
@@ -217,7 +327,7 @@ async def test_runs_and_batches_lifecycle(pg_client: AsyncClient):
     assert res_run.status_code == 201
     assert res_run.json()["status"] == "pending"
 
-    # 2. Transition: pending → queued → running → succeeded
+    # 2. Transition: pending в†’ queued в†’ running в†’ succeeded
     for st in ["queued", "running", "succeeded"]:
         res = await pg_client.patch(
             "/api/v1/runs/run-101/status",
@@ -243,7 +353,7 @@ async def test_runs_and_batches_lifecycle(pg_client: AsyncClient):
     assert res_cancel.json()["status"] == "cancelled"
 
 
-# ── Security Gates Tests ───────────────────────────────────────────────
+# в”Ђв”Ђ Security Gates Tests в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @pytest.mark.asyncio
 async def test_gates_and_decisions(pg_client: AsyncClient):
@@ -283,7 +393,7 @@ async def test_gates_and_decisions(pg_client: AsyncClient):
     assert dec["decision"] == "pass"
     assert dec["decided_by"] == "secops-lead@company.ru"
 
-    # 3. Manual gate requires decided_by — reject
+    # 3. Manual gate requires decided_by вЂ” reject
     res_bad = await pg_client.post("/api/v1/gates/gate-manual/decision", json={"decision": "block"},
                                    headers={"X-Cosmo-Domain": "dom-gate"})
     assert res_bad.status_code == 400

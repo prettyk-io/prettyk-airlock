@@ -7,7 +7,7 @@ Tests:
   - Breakdown maps (runs_by_status, batches_by_status, gates_by_decision)
   - Prometheus /metrics exposition formatting
 
-PG fixture: conftest.py (auto-skip if PostgreSQL :5432 unreachable).
+PG fixture: conftest.py (auto-skip if the test PG :5433 is unreachable).
 """
 from __future__ import annotations
 

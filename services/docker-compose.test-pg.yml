@@ -1,0 +1,43 @@
+# COS-073 — Isolated test PostgreSQL for pytest/alembic checks.
+#
+# Contract: tests NEVER touch the dev-stand DB (cosmo-postgres, host :5432).
+# This instance is dedicated to the test suite: its own port, own volume,
+# own database name. It may be wiped freely by tests at any time.
+#
+# Start:   docker compose -f services/docker-compose.test-pg.yml up -d
+# Stop:    docker compose -f services/docker-compose.test-pg.yml down
+# Reset:   ... down -v          (destroys test data only — safe)
+#
+# URL consumed by tests (or set COSMO_TEST_DATABASE_URL to override):
+#   postgresql+asyncpg://cosmo:cosmo@127.0.0.1:5433/cosmo_test
+#
+# Port canon: 5432 = dev-stand cosmo-postgres (FORBIDDEN for tests),
+#             5433 = this test instance.
+
+services:
+  cosmo-test-pg:
+    image: postgres:16-alpine
+    container_name: cosmo-test-pg
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${COSMO_TEST_PG_USER:-cosmo}
+      POSTGRES_PASSWORD: ${COSMO_TEST_PG_PASSWORD:-cosmo}
+      POSTGRES_DB: ${COSMO_TEST_PG_DB:-cosmo_test}
+    volumes:
+      - cosmo_test_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${COSMO_TEST_PG_USER:-cosmo} -d ${COSMO_TEST_PG_DB:-cosmo_test}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks: [test-pg-net]
+
+networks:
+  test-pg-net:
+    driver: bridge
+
+volumes:
+  cosmo_test_pg:
