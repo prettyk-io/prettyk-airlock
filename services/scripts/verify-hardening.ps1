@@ -37,7 +37,9 @@ $Findings = [System.Collections.ArrayList]::new()
 # ── Production port exposure policy ──────────────────────────────────────
 $PROD_ALLOWED_PORTS = @(443, 80)       # Only Caddy-facing ports
 $PROD_ALLOWED_INTERNAL = @(5432, 6379, 8200, 9000)  # OK internally, NOT on 0.0.0.0
-$DEV_INFRA_PORTS = @(5432, 6379, 8200, 9000, 9001, 3000, 8000, 8100, 5174)
+# Host-port canon (COS-064): MinIO binds 9100/9101 on the host because 9000 is
+# PureK SonarQube canon (RUN-STACK). Container-internal ports stay 9000/9001.
+$DEV_INFRA_PORTS = @(5432, 6379, 8200, 9100, 9101, 3000, 8000, 8100, 5174)
 
 # Default secrets - must NOT appear in production configs
 $DEFAULT_SECRETS = @(

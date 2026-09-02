@@ -1,31 +1,31 @@
-# Cosmoport 2.0 — Docker Compose (10 services)
+# Cosmoport 2.0 вЂ” Docker Compose (10 services)
 #
-# Отдельный Cosmo-контур. Сеть cosmo-net, собственные инстансы PG/Valkey/MinIO.
-# НЕ зависит от Pure Box pk-net и не разделяет с ним инфраструктуру.
+# РћС‚РґРµР»СЊРЅС‹Р№ Cosmo-РєРѕРЅС‚СѓСЂ. РЎРµС‚СЊ cosmo-net, СЃРѕР±СЃС‚РІРµРЅРЅС‹Рµ РёРЅСЃС‚Р°РЅСЃС‹ PG/Valkey/MinIO.
+# РќР• Р·Р°РІРёСЃРёС‚ РѕС‚ Pure Box pk-net Рё РЅРµ СЂР°Р·РґРµР»СЏРµС‚ СЃ РЅРёРј РёРЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂСѓ.
 #
-# Порты (local/dev profile):
-#   5432 — cosmo-postgres    (диагностика)
-#   6379 — cosmo-valkey       (диагностика)
-#   8200 — cosmo-openbao      (диагностика)
-#   9000 — cosmo-minio S3     (API)
-#   9001 — cosmo-minio Console (управление, не публиковать в prod)
-#   3000 — cosmo-gitea        (forge)
-#   8000 — cosmo-woodpecker   (CI server)
-#   8100 — cosmo-api          (FastAPI)
-#   5173 — cosmo-frontend     (Vite dev / built SPA)
-#   443  — cosmo-caddy        (HTTP/3 reverse proxy, single entry point)
+# РџРѕСЂС‚С‹ (local/dev profile):
+#   5432 вЂ” cosmo-postgres    (РґРёР°РіРЅРѕСЃС‚РёРєР°)
+#   6379 вЂ” cosmo-valkey       (РґРёР°РіРЅРѕСЃС‚РёРєР°)
+#   8200 вЂ” cosmo-openbao      (РґРёР°РіРЅРѕСЃС‚РёРєР°)
+#   9000 вЂ” cosmo-minio S3     (API; host-bind 9100: 9000 = PureK SonarQube canon)
+#   9001 вЂ” cosmo-minio Console (РЅРµ РїСѓР±Р»РёРєРѕРІР°С‚СЊ РІ prod; host-bind 9101)
+#   3000 вЂ” cosmo-gitea        (forge)
+#   8000 вЂ” cosmo-woodpecker   (CI server)
+#   8100 вЂ” cosmo-api          (FastAPI)
+#   5173 вЂ” cosmo-frontend     (Vite dev / built SPA)
+#   443  вЂ” cosmo-caddy        (HTTP/3 reverse proxy, single entry point)
 #
-# В production наружу — только :443.
+# Р’ production РЅР°СЂСѓР¶Сѓ вЂ” С‚РѕР»СЊРєРѕ :443.
 #
-# Запуск:
+# Р—Р°РїСѓСЃРє:
 #   docker compose -f docker-compose.yml up -d
 
 services:
-  # ── Infra (Persistence layer) ────────────────────────────────────────
+  # в”Ђв”Ђ Infra (Persistence layer) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   cosmo-postgres:
     image: postgres:16-alpine
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-postgres
     restart: unless-stopped
     ports:
@@ -36,6 +36,8 @@ services:
       POSTGRES_DB: ${COSMO_PG_DB:-cosmo}
     volumes:
       - cosmo_postgres:/var/lib/postgresql/data
+      # COS-063: side DBs (gitea, woodpecker) on fresh volumes
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${COSMO_PG_USER:-cosmo} -d ${COSMO_PG_DB:-cosmo}"]
       interval: 10s
@@ -45,7 +47,7 @@ services:
 
   cosmo-valkey:
     image: valkey/valkey:8-alpine
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-valkey
     restart: unless-stopped
     ports:
@@ -61,8 +63,9 @@ services:
       start_period: 5s
 
   cosmo-openbao:
+    profiles: ["full"]
     image: openbao/openbao:2.2
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-openbao
     restart: unless-stopped
     ports:
@@ -83,13 +86,16 @@ services:
       start_period: 15s
 
   cosmo-minio:
+    profiles: ["full"]
     image: minio/minio:RELEASE.2025-03-12T18-04-18Z
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-minio
     restart: unless-stopped
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      # Host 9100/9101: 9000/9001 = PureK SonarQube canon (RUN-STACK).
+      # Coexistence of both stacks on one Docker host must never fight over binds.
+      - "9100:9000"
+      - "9101:9001"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${COSMO_MINIO_USER:-cosmo}
@@ -103,21 +109,30 @@ services:
       retries: 5
       start_period: 15s
 
-  # ── Forge + CI ────────────────────────────────────────────────────────
+  # в”Ђв”Ђ Forge + CI в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   cosmo-gitea:
+    profiles: ["full"]
     image: gitea/gitea:1.22.6
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-gitea
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # COS-063: host 3000 belongs to PureK lab (juice-shop). Internal stays 3000.
+      - "3100:3000"
     environment:
       GITEA__database__DB_TYPE: postgres
       GITEA__database__HOST: cosmo-postgres
       GITEA__database__NAME: cosmo_gitea
       GITEA__database__USER: ${COSMO_PG_USER:-cosmo}
       GITEA__database__PASSWD: ${COSMO_PG_PASSWORD:-cosmo}
+      # COS-063: skip install wizard, activate /api/v1 (healthcheck depends on it).
+      # Admin user created idempotently in cosmo-start.ps1 (dev creds via .env, rotate for prod).
+      GITEA__security__INSTALL_LOCK: "true"
+      # COS-096: default ALLOWED_HOST_LIST=external blocks RFC-private hosts,
+      # включая cosmo-api:8100 — webhook'и на ПУ молча не доставляются.
+      # private = docker-сеть; для prod сузить до явного CIDR при freeze.
+      GITEA__webhook__ALLOWED_HOST_LIST: "private"
     volumes:
       - cosmo_gitea:/data
     depends_on:
@@ -131,8 +146,9 @@ services:
       start_period: 20s
 
   cosmo-woodpecker:
+    profiles: ["full"]
     image: woodpeckerci/woodpecker-server:v3.5
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-woodpecker
     restart: unless-stopped
     ports:
@@ -144,6 +160,9 @@ services:
       WOODPECKER_HOST: http://cosmo-woodpecker:8000
       WOODPECKER_DATABASE_DRIVER: postgres
       WOODPECKER_DATABASE_DATASOURCE: postgres://${COSMO_PG_USER:-cosmo}:${COSMO_PG_PASSWORD:-cosmo}@cosmo-postgres:5432/cosmo_woodpecker?sslmode=disable
+      # COS-063: pin shared agent secret server-side (else server generates random,
+      # agent never authenticates, DeadlineExceeded loop).
+      WOODPECKER_AGENT_SECRET: ${COSMO_WOODPECKER_AGENT_SECRET:-dev-agent-secret-change-me}
     volumes:
       - cosmo_woodpecker:/var/lib/woodpecker
     depends_on:
@@ -151,29 +170,36 @@ services:
         condition: service_healthy
       cosmo-gitea:
         condition: service_healthy
+    # COS-063: v3.5 image is distroless (no sh/curl/wget, no healthcheck subcommand).
+    # Liveness probed externally in smoke-delivery.ps1 (http://localhost:8000/api/health).
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8000/api/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      disable: true
 
   cosmo-woodpecker-agent:
+    profiles: ["full"]
     image: woodpeckerci/woodpecker-agent:v3.5
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-woodpecker-agent
     restart: unless-stopped
     environment:
-      WOODPECKER_SERVER: cosmo-woodpecker:9000
+      # COS-063: passthrough:/// prefix bypasses grpc-go dns resolver, whose
+      # SRV/TXT lookups hang on Docker embedded DNS (127.0.0.11) -> agent
+      # auth DeadlineExceeded loop. Proven by minimal Go client test.
+      WOODPECKER_SERVER: passthrough:///cosmo-woodpecker:9000
       WOODPECKER_AGENT_SECRET: ${COSMO_WOODPECKER_AGENT_SECRET:-dev-agent-secret-change-me}
       WOODPECKER_MAX_WORKFLOWS: "4"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # COS-063: deliberately NO persisted agent.conf — after server DB wipe the
+      # stale agent_id causes auth deadlock ("AgentID not found"). Stateless
+      # re-register on start is the safe default for local delivery.
+      # Log line "could not persist agent config" is expected cosmetic noise.
     depends_on:
       cosmo-woodpecker:
-        condition: service_healthy
+        # server is distroless (no internal healthcheck); agent retries gRPC itself
+        condition: service_started
 
-  # ── Application layer ──────────────────────────────────────────────────
+  # в”Ђв”Ђ Application layer в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   cosmo-api:
     build:
@@ -191,6 +217,10 @@ services:
       PK_VALKEY_HOST: cosmo-valkey
       PK_VALKEY_PORT: "6379"
       PK_GITEA_URL: http://cosmo-gitea:3000
+      PK_GITEA_USER: ${COSMO_FORGE_USER:-cosmo}
+      PK_GITEA_PASSWORD: ${COSMO_FORGE_ADMIN_PASSWORD:-cosmo-admin-dev}
+      PK_GITEA_WEBHOOK_SECRET: ${COSMO_GITEA_WEBHOOK_SECRET:-dev-webhook-secret-change-me}
+      PK_PUBLIC_API_URL: ${COSMO_PUBLIC_API_URL:-http://cosmo-api:8100}
       PK_WOODPECKER_URL: http://cosmo-woodpecker:8000
       PK_MINIO_URL: http://cosmo-minio:9000
       PK_MINIO_ACCESS_KEY: ${COSMO_MINIO_USER:-cosmo}
@@ -226,18 +256,18 @@ services:
       retries: 3
       start_period: 5s
 
-  # ── Edge ────────────────────────────────────────────────────────────────
+  # в”Ђв”Ђ Edge в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   cosmo-caddy:
     build:
       context: .
       dockerfile: cosmo-caddy.Dockerfile
     image: cosmo-caddy:local
-    # digest-pin: sha256 зафиксировать при production freeze
+    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
     container_name: cosmo-caddy
     restart: unless-stopped
-    # Cosmoport 2.0 — single canonical edge: 8180 (main Caddy).
-    # 8080 reserved for PureK / ZAP Demon — NEVER use for Cosmoport.
+    # Cosmoport 2.0 вЂ” single canonical edge: 8180 (main Caddy).
+    # 8080 reserved for PureK / ZAP Demon вЂ” NEVER use for Cosmoport.
     ports:
       - "8180:80"
     volumes:
@@ -250,13 +280,15 @@ services:
       cosmo-api:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:80/api/live"]
+      # COS-059: /live is the canonical liveness route (Caddy health block).
+      # /api/live does not exist as a route вЂ” healthcheck was permanently unhealthy.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:80/live"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 10s
 
-# ── Volumes ──────────────────────────────────────────────────────────────
+# в”Ђв”Ђ Volumes в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 volumes:
   cosmo_postgres:
@@ -268,11 +300,11 @@ volumes:
   cosmo_caddy_data:
   cosmo_caddy_config:
 
-# ── Network ──────────────────────────────────────────────────────────────
+# в”Ђв”Ђ Network в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 networks:
   default:
     name: cosmo-net
     # cosmo-net belongs to Cosmoport only. Never connect to pk-net.
-    # docker network create cosmo-net — при первом запуске.
-    # external: false означает что compose создаст сеть сам.
+    # docker network create cosmo-net вЂ” РїСЂРё РїРµСЂРІРѕРј Р·Р°РїСѓСЃРєРµ.
+    # external: false РѕР·РЅР°С‡Р°РµС‚ С‡С‚Рѕ compose СЃРѕР·РґР°СЃС‚ СЃРµС‚СЊ СЃР°Рј.

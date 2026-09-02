@@ -3,7 +3,7 @@
 > **Gate:** COS-103 — обязателен перед каждым production deploy  
 > **Скрипт:** `services/scripts/verify-hardening.ps1` (Windows) / `.sh` (Linux)  
 > **Владелец:** Buddy (DevOps)  
-> **Последнее обновление:** 29 августа 2026
+> **Последнее обновление:** 2 сентября 2026 (COS-073: MinIO host-канон 9100/9101, тестовый PG :5433)
 
 ---
 
@@ -35,8 +35,8 @@
 | 5432 | PostgreSQL | ❌ **Запрещён** | Только internal Docker network |
 | 6379 | Valkey | ❌ Запрещён | Только internal |
 | 8200 | OpenBao | ❌ Запрещён | Никогда не публиковать |
-| 9000 | MinIO S3 API | ❌ Запрещён | Доступ через Caddy `/artifacts/*` |
-| 9001 | MinIO Console | ❌ Запрещён | Никогда в production |
+| 9000 | MinIO S3 API | ❌ Запрещён | Доступ через Caddy `/artifacts/*` (host-канон dev: **9100**) |
+| 9001 | MinIO Console | ❌ Запрещён | Никогда в production (host-канон dev: **9101**) |
 | 3000 | Gitea | ❌ Запрещён | Доступ через Caddy `/forge/*` |
 | 8000 | Woodpecker | ❌ Запрещён | Internal only |
 | 8100 | Cosmo API | ❌ Запрещён | Доступ через Caddy `/api/*` |
@@ -64,6 +64,26 @@ netstat -ano | findstr "LISTENING" | findstr "0.0.0.0"
 ```
 
 В продакшене должны быть только порты из PROD_ALLOWED.
+
+### 1.3. Тестовый PG и stand-lock (COS-073)
+
+| Порт | Сервис | Правило |
+|---|---|---|
+| 5432 | cosmo-postgres (dev-stand) | **Тестам запрещён.** Только стенд/gate |
+| 5433 | cosmo-test-pg (изолированный тестовый PG) | Только pytest/alembic-проверки. Волен стираться тестами |
+
+```powershell
+# Поднять тестовый PG для pytest:
+docker compose -f services\docker-compose.test-pg.yml up -d
+
+# Stand-lock: стенд — сериализованный ресурс (один агент на стенде):
+services\scripts\stand-lock.ps1 status
+services\scripts\stand-lock.ps1 acquire -Owner buddy -Purpose "gate run"
+services\scripts\stand-lock.ps1 release -Owner buddy
+```
+
+runtime-gate.ps1 берёт lock сам (exit 3, если стенд занят). pytest lock не
+нужен: тесты идут только на :5433 и никогда не трогают dev-stand БД.
 
 ---
 

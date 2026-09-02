@@ -24,7 +24,7 @@ param(
     [string]$PgDb = "cosmo",
     [string]$PgContainer = "cosmo-postgres",
     [string]$MinioAlias = "cosmo-local",
-    [string]$MinioUrl = "http://127.0.0.1:9000",
+    [string]$MinioUrl = "http://127.0.0.1:9100",
     [string]$MinioAccessKey = "cosmo",
     [string]$MinioSecretKey = "cosmo-minio-dev",
     [string]$MinioBucket = "cosmo-evidence",

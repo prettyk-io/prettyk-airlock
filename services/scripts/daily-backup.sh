@@ -22,7 +22,7 @@ PG_DB="${COSMO_PG_DB:-cosmo}"
 PG_CONTAINER="cosmo-postgres"
 
 MINIO_ALIAS="cosmo-local"
-MINIO_URL="http://127.0.0.1:9000"
+MINIO_URL="http://127.0.0.1:9100"
 MINIO_ACCESS="${COSMO_MINIO_USER:-cosmo}"
 MINIO_SECRET="${COSMO_MINIO_PASSWORD:-cosmo-minio-dev}"
 MINIO_BUCKET="cosmo-evidence"

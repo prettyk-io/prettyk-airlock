@@ -36,6 +36,25 @@
         reverse_proxy cosmo-api:8100
     }
 
+    # ── SSE streams (COS-059: NOT buffered, NOT rate-limited) ──────
+    # flush_interval -1 disables response buffering: every chunk is
+    # forwarded immediately. Long-lived connections get no timeout.
+    # Must match /api* specificity — Caddy picks the most specific path.
+    handle /api/v1/runs/*/stream {
+        reverse_proxy cosmo-api:8100 {
+            flush_interval -1
+            header_up X-Forwarded-Proto http
+            header_up X-Forwarded-Host {host}
+        }
+    }
+    handle /api/v1/domains/*/events/stream {
+        reverse_proxy cosmo-api:8100 {
+            flush_interval -1
+            header_up X-Forwarded-Proto http
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
     # ── API: /api* → cosmo-api:8100 (RATE-LIMITED: 100 req/min/IP) ─
     # COS-067: Caddy built-in rate_limit with zone per remote_host.
     # Health/metrics are handled above, so they never reach this block.
