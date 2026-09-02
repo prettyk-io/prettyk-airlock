@@ -88,12 +88,12 @@ class TestVerifyChain:
 
 
 # ══════════════════════════════════════════════════════════════════
-# verify_and_get (PG-dependent)
+# verify_and_get (COS-082: sealed-anchor контракт)
 # ══════════════════════════════════════════════════════════════════
 
 def _make_orm_row(created_at_ts: float, run_id="run-1", batch_id="b1",
                    entry_id="e1", etype="finding", severity="High"):
-    """Симулирует ORM-строку EvidenceLedgerEntry."""
+    """Симулирует ORM-строку EvidenceLedgerEntry (БЕЗ якорей — unsealed)."""
     import datetime as dt
     from unittest.mock import MagicMock
 
@@ -109,71 +109,111 @@ def _make_orm_row(created_at_ts: float, run_id="run-1", batch_id="b1",
     return row
 
 
+def _sealed_rows(*specs):
+    """Строки, запечатанные каноническим путём (prev-linked chain)."""
+    from orchestrator.cosmo.ledger.evidence_chain import EvidenceLedger
+
+    rows = [_make_orm_row(**spec) for spec in specs]
+    prev = EvidenceLedger.GENESIS_HASH
+    for row in rows:
+        prev = EvidenceLedger.seal_entry(row, prev)
+    return rows
+
+
+def _fake_factory(rows):
+    from unittest.mock import MagicMock
+    fake_s = MagicMock()
+    fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
+    return MagicMock(return_value=fake_s)
+
+
 class TestVerifyAndGet:
     def test_empty_run(self):
-        from unittest.mock import MagicMock
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
-        fake_factory = MagicMock(return_value=fake_s)
-
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-empty")
+        result = EvidenceLedger.verify_and_get(_fake_factory([]), "run-empty")
         assert result["verified"] is True
+        assert result["integrity"] == "ok"
         assert result["total_entries"] == 0
         assert result["tampered_entries"] == []
         assert result["replay_count"] == 0
 
     def test_single_entry_verified(self):
-        from unittest.mock import MagicMock
-        rows = [_make_orm_row(1.0, entry_id="e1")]
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
-        fake_factory = MagicMock(return_value=fake_s)
-
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-1")
+        rows = _sealed_rows(dict(created_at_ts=1.0, entry_id="e1"))
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
         assert result["verified"] is True
+        assert result["integrity"] == "ok"
         assert result["total_entries"] == 1
         assert result["tampered_chain"] is False
         assert result["tampered_entries"] == []
 
     def test_multiple_entries_verified(self):
-        from unittest.mock import MagicMock
-        rows = [
-            _make_orm_row(1.0, entry_id="e1", severity="Low"),
-            _make_orm_row(2.0, entry_id="e2", severity="Medium"),
-            _make_orm_row(3.0, entry_id="e3", severity="High"),
-        ]
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
-        fake_factory = MagicMock(return_value=fake_s)
-
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-1")
+        rows = _sealed_rows(
+            dict(created_at_ts=1.0, entry_id="e1", severity="Low"),
+            dict(created_at_ts=2.0, entry_id="e2", severity="Medium"),
+            dict(created_at_ts=3.0, entry_id="e3", severity="High"),
+        )
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
         assert result["verified"] is True
+        assert result["integrity"] == "ok"
         assert result["total_entries"] == 3
 
-    def test_replay_detection(self):
-        """Два идентичных entry (same hash) → replay_count = 1."""
-        from unittest.mock import MagicMock
-        # Same timestamp + same content → same hash
-        rows = [
-            _make_orm_row(1.0, entry_id="e1", severity="Critical"),
-            _make_orm_row(1.0, entry_id="e1", severity="Critical"),  # дубль
-        ]
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
-        fake_factory = MagicMock(return_value=fake_s)
+    def test_tampered_content_detected_with_link(self):
+        """Подмена payload после запечатывания → hash_mismatch на звене
+        И broken link у следующей строки (prev подписывал оригинал)."""
+        rows = _sealed_rows(
+            dict(created_at_ts=1.0, entry_id="e1"),
+            dict(created_at_ts=2.0, entry_id="e2"),
+        )
+        rows[0].content_ref = "minio://forged"  # подмена в обход API
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
+        assert result["verified"] is False
+        assert result["integrity"] == "tampered"
+        assert result["tampered_entries"] == [0]
+        detail = result["tampered_details"][0]
+        assert detail["entry_id"] == "e1"
+        assert detail["reason"] == "hash_mismatch"
+        assert detail["stored_hash"] != detail["recomputed_hash"]
 
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-1")
+    def test_deleted_middle_row_detected_as_broken_link(self):
+        """Удаление средней строки → broken link у следующей (prev указывает
+        на хеш удалённой)."""
+        rows = _sealed_rows(
+            dict(created_at_ts=1.0, entry_id="e1"),
+            dict(created_at_ts=2.0, entry_id="e2"),
+            dict(created_at_ts=3.0, entry_id="e3"),
+        )
+        del rows[1]  # e2 удалена из PG
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
+        assert result["verified"] is False
+        assert result["integrity"] == "tampered"
+        assert result["tampered_chain"] is True
+        link = result["broken_links"][0]
+        assert link["entry_id"] == "e3"
+        assert link["expected_prev_hash"] != link["stored_prev_hash"]
+
+    def test_unsealed_row_is_not_verified(self):
+        """Строка без якорей → честный unsealed: нет доказательства целостности."""
+        rows = [
+            _sealed_rows(dict(created_at_ts=1.0, entry_id="e1"))[0],
+            _make_orm_row(2.0, entry_id="e2"),  # вставлена в обход контракта
+        ]
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
+        assert result["verified"] is False
+        assert result["integrity"] == "unsealed"
+        assert result["unsealed_entries"] == ["e2"]
+
+    def test_replay_detection(self):
+        """Два идентичных entry (same id/content) → replay_count = 1."""
+        rows = _sealed_rows(
+            dict(created_at_ts=1.0, entry_id="e1", severity="Critical"),
+            dict(created_at_ts=1.0, entry_id="e1", severity="Critical"),
+        )
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
         assert result["replay_count"] == 1
         assert result["total_entries"] == 2
 
     def test_chain_in_response(self):
-        from unittest.mock import MagicMock
-        rows = [_make_orm_row(1.0, entry_id="e1")]
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
-        fake_factory = MagicMock(return_value=fake_s)
-
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-1")
+        rows = _sealed_rows(dict(created_at_ts=1.0, entry_id="e1"))
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
         chain = result["chain"]
         assert chain["length"] == 1
         assert chain["verified"] is True
@@ -182,13 +222,8 @@ class TestVerifyAndGet:
         assert "severity" in chain["entries"][0]["content"]
 
     def test_different_runs_same_ids(self):
-        from unittest.mock import MagicMock
-        rows = [_make_orm_row(1.0, entry_id="shared-id", run_id="run-a")]
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
-        fake_factory = MagicMock(return_value=fake_s)
-
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-a")
+        rows = _sealed_rows(dict(created_at_ts=1.0, entry_id="shared-id", run_id="run-a"))
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-a")
         assert result["total_entries"] == 1
         assert result["verified"] is True
 
@@ -226,30 +261,20 @@ class TestToDict:
 
 class TestReplayProtection:
     def test_verify_and_get_detects_replays(self):
-        from unittest.mock import MagicMock
-        rows = [
-            _make_orm_row(1.0, entry_id="e1"),
-            _make_orm_row(1.0, entry_id="e1"),  # replay
-            _make_orm_row(2.0, entry_id="e2"),
-        ]
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
-        fake_factory = MagicMock(return_value=fake_s)
-
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-1")
+        rows = _sealed_rows(
+            dict(created_at_ts=1.0, entry_id="e1"),
+            dict(created_at_ts=1.0, entry_id="e1"),  # replay
+            dict(created_at_ts=2.0, entry_id="e2"),
+        )
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
         assert result["replay_count"] == 1
         assert result["total_entries"] == 3
 
     def test_unique_entries_no_replay(self):
-        from unittest.mock import MagicMock
-        rows = [
-            _make_orm_row(1.0, entry_id="e1", severity="Low"),
-            _make_orm_row(2.0, entry_id="e2", severity="Medium"),
-            _make_orm_row(3.0, entry_id="e3", severity="High"),
-        ]
-        fake_s = MagicMock()
-        fake_s.query.return_value.filter.return_value.order_by.return_value.all.return_value = rows
-        fake_factory = MagicMock(return_value=fake_s)
-
-        result = EvidenceLedger.verify_and_get(fake_factory, "run-1")
+        rows = _sealed_rows(
+            dict(created_at_ts=1.0, entry_id="e1", severity="Low"),
+            dict(created_at_ts=2.0, entry_id="e2", severity="Medium"),
+            dict(created_at_ts=3.0, entry_id="e3", severity="High"),
+        )
+        result = EvidenceLedger.verify_and_get(_fake_factory(rows), "run-1")
         assert result["replay_count"] == 0
