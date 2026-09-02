@@ -1,14 +1,23 @@
-"""COS-011 / COS-101: SSE streaming — single-run + domain-wide multiplexer.
+"""COS-011 / COS-101 / COS-056 / COS-088: SSE streaming — run + domain + notification.
 
 Endpoints:
   GET /api/v1/runs/{run_id}/stream                  — single-run SSE (COS-011)
   GET /api/v1/domains/{domain_id}/events/stream     — multiplexed SSE (COS-101)
+  GET /api/v1/notifications/stream                  — notification inbox SSE (COS-056)
 
 Events: run_created, status_change, batch_complete, gate_decision, finding,
-        release_transferred.
+        release_transferred, notification_new.
 Rate-limited to 2 Hz (500ms tick).
 Keepalive ping every 15s against proxy timeout.
 Reconnect-safe: client reconnects -> replay last known state.
+
+COS-088: каждый yielded event несёт SSE ``id`` и дублируется в backlog
+(sse_backlog — Valkey Stream с TTL, fallback in-memory ring). Reconnect с
+Last-Event-ID (стандартный заголовок EventSource или last_event_id query)
+→ resample backlog после этого id; пропущенные события доставляются, а при
+неподтверждённой непрерывности (TTL-вытеснение / рестарт в memory-режиме)
+— resync-снапшот, не тишина. Без Valkey поведение прежнее + наблюдаемый
+флаг деградации (event stream_backlog + заголовок X-Cosmo-Backlog).
 """
 from __future__ import annotations
 
@@ -21,6 +30,7 @@ from fastapi import APIRouter, Request
 from starlette.responses import StreamingResponse
 from sqlalchemy import select
 
+from orchestrator.cosmo.api import sse_backlog
 from orchestrator.cosmo.db.session import get_sessionmaker
 from orchestrator.cosmo.db.models import Run, Batch, Gate, EvidenceLedgerEntry, Domain
 
@@ -37,6 +47,38 @@ def _snapshot_hash(snap: dict) -> str:
     ).hexdigest()[:16]
 
 
+def _resolve_last_event_id(request: Request, last_event_id: str) -> str:
+    """last_event_id: query-параметр сильнее стандарного заголовка.
+
+    Стандартный SSE reconnect шлёт заголовок Last-Event-ID; клиенты с
+    ручным reconnect (fresh ticket на каждую попытку) передают явный
+    last_event_id query-параметром.
+    """
+    if last_event_id:
+        return last_event_id.strip()
+    header_id = request.headers.get("last-event-id")
+    return header_id.strip() if header_id else ""
+
+
+def _backlog_item(
+    kind: str, key: str, event: str, data: str
+) -> dict[str, Any]:
+    """SSE-событие с id из backlog (publish + id-инвариант COS-088)."""
+    event_id = sse_backlog.publish(kind, key, event, data)
+    item: dict[str, Any] = {"event": event, "data": data}
+    if event_id:
+        item["id"] = event_id
+    return item
+
+
+def _backlog_flag_event(mode: str) -> dict[str, Any]:
+    """Наблюдаемый флаг деградации backlog (COS-088). Не несёт id."""
+    return {
+        "event": "stream_backlog",
+        "data": json.dumps({"mode": mode}),
+    }
+
+
 async def _sse_formatter(
     generator: AsyncIterator[dict[str, Any]]
 ) -> AsyncIterator[str]:
@@ -46,7 +88,13 @@ async def _sse_formatter(
         else:
             event = item.get("event", "message")
             data = item.get("data", "")
-            yield f"event: {event}\ndata: {data}\n\n"
+            event_id = item.get("id")
+            lines = []
+            if event_id:
+                lines.append(f"id: {event_id}")
+            lines.append(f"event: {event}")
+            lines.append(f"data: {data}")
+            yield "\n".join(lines) + "\n\n"
 
 
 def _sse_response(generator, extra_headers: dict = None) -> StreamingResponse:
@@ -64,7 +112,7 @@ def _sse_response(generator, extra_headers: dict = None) -> StreamingResponse:
     )
 
 
-# ── Single-run stream (COS-011) ────────────────────────────────────────
+# в”Ђв”Ђ Single-run stream (COS-011) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def _fetch_run_snapshot(run_id: str) -> dict[str, Any] | None:
     sm = get_sessionmaker()
@@ -115,11 +163,25 @@ async def _fetch_run_snapshot(run_id: str) -> dict[str, Any] | None:
         }
 
 
+def _run_initial_payload(snap: dict[str, Any]) -> str:
+    """Полный state-снапшот прогона (initial / resync — COS-088)."""
+    return json.dumps({
+        "status": snap["run"]["status"],
+        "run": snap["run"],
+        "batches": snap["batches"],
+        "gates": snap["gates"],
+        "findings_count": snap["findings_count"],
+    })
+
+
 async def _run_stream(
-    run_id: str, request: Request
+    run_id: str, request: Request, last_event_id: str = ""
 ) -> AsyncIterator[dict[str, Any]]:
     last_hash: str | None = None
     last_keepalive = time.monotonic()
+
+    # COS-088: наблюдаемый флаг режима backlog
+    yield _backlog_flag_event(sse_backlog.backlog_mode())
 
     snap = await _fetch_run_snapshot(run_id)
     if snap is None:
@@ -127,16 +189,21 @@ async def _run_stream(
         return
 
     last_hash = _snapshot_hash(snap)
-    yield {
-        "event": "status_change",
-        "data": json.dumps({
-            "status": snap["run"]["status"],
-            "run": snap["run"],
-            "batches": snap["batches"],
-            "gates": snap["gates"],
-            "findings_count": snap["findings_count"],
-        }),
-    }
+    initial_payload = _run_initial_payload(snap)
+
+    # COS-088: resample по last-event-id (replay backlog; gap → resync, не тишина)
+    if last_event_id:
+        replayed = sse_backlog.replay("run", run_id, last_event_id)
+        if replayed is None:
+            # backlog недоступен (valkey сбой) → честная деградация: снапшот
+            yield {"event": "resync", "data": initial_payload}
+        else:
+            for rec in replayed.records:
+                yield {"event": rec.event_type, "data": rec.data, "id": rec.id}
+            if replayed.gap:
+                yield {"event": "resync", "data": initial_payload}
+
+    yield _backlog_item("run", run_id, "status_change", initial_payload)
 
     while True:
         if await request.is_disconnected():
@@ -164,52 +231,52 @@ async def _run_stream(
         new_run = new_snap["run"]
 
         if old_run.get("status") != new_run["status"]:
-            yield {
-                "event": "status_change",
-                "data": json.dumps({
+            yield _backlog_item(
+                "run", run_id, "status_change",
+                json.dumps({
                     "status": new_run["status"],
                     "previous": old_run.get("status"),
                     "started_at": new_run.get("started_at"),
                     "finished_at": new_run.get("finished_at"),
                 }),
-            }
+            )
 
         old_batches = {b["id"]: b["status"] for b in snap.get("batches", [])}
         for b in new_snap.get("batches", []):
             if old_batches.get(b["id"]) != b["status"] and b["status"] in ("passed", "failed"):
-                yield {
-                    "event": "batch_complete",
-                    "data": json.dumps({"batch_id": b["id"], "type": b["type"], "status": b["status"]}),
-                }
+                yield _backlog_item(
+                    "run", run_id, "batch_complete",
+                    json.dumps({"batch_id": b["id"], "type": b["type"], "status": b["status"]}),
+                )
 
         old_gates = {g["id"]: g.get("decision") for g in snap.get("gates", [])}
         for g in new_snap.get("gates", []):
             new_dec = g.get("decision")
             if old_gates.get(g["id"]) != new_dec and new_dec is not None:
-                yield {
-                    "event": "gate_decision",
-                    "data": json.dumps({
+                yield _backlog_item(
+                    "run", run_id, "gate_decision",
+                    json.dumps({
                         "gate_id": g["id"], "decision": new_dec,
                         "decided_by": g.get("decided_by"), "decided_at": g.get("decided_at"),
                     }),
-                }
+                )
 
         old_fc = snap.get("findings_count", 0)
         new_fc = new_snap.get("findings_count", 0)
         if new_fc > old_fc:
-            yield {
-                "event": "finding",
-                "data": json.dumps({
+            yield _backlog_item(
+                "run", run_id, "finding",
+                json.dumps({
                     "count": new_fc, "delta": new_fc - old_fc,
                     "total_evidence": new_snap.get("evidence_count", 0),
                 }),
-            }
+            )
 
         snap = new_snap
         last_hash = new_hash
 
 
-# ── Domain-wide multiplexer (COS-101) ──────────────────────────────────
+# в”Ђв”Ђ Domain-wide multiplexer (COS-101) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async def _fetch_domain_snapshots(domain_id: str) -> dict[str, Any]:
     """Fetch all run snapshots for a domain."""
@@ -259,8 +326,22 @@ async def _fetch_domain_snapshots(domain_id: str) -> dict[str, Any]:
         return result
 
 
+def _domain_resync_payload(domain_id: str, snaps: dict[str, Any]) -> str:
+    """Полный state-снапшот домена (resync — COS-088)."""
+    return json.dumps({
+        "domain_id": domain_id,
+        "runs": {
+            rid: {
+                "status": s.get("status"),
+                "findings_count": s.get("findings_count", 0),
+            }
+            for rid, s in snaps.items()
+        },
+    })
+
+
 async def _domain_stream(
-    domain_id: str, request: Request
+    domain_id: str, request: Request, last_event_id: str = ""
 ) -> AsyncIterator[dict[str, Any]]:
     """Multiplexed SSE stream for ALL runs in a KITS domain."""
     sm = get_sessionmaker()
@@ -273,6 +354,34 @@ async def _domain_stream(
     last_snaps: dict[str, str] = {}       # run_id -> json.dumps(snap)
     last_keepalive = time.monotonic()
     seen_run_ids: set[str] = set()
+
+    # COS-088: наблюдаемый флаг режима backlog + resample по last-event-id.
+    yield _backlog_flag_event(sse_backlog.backlog_mode())
+
+    if last_event_id:
+        replayed = sse_backlog.replay("domain", domain_id, last_event_id)
+        fresh = await _fetch_domain_snapshots(domain_id)
+        if replayed is None:
+            # backlog недоступен → честная деградация: снапшот, не тишина
+            yield {
+                "event": "resync",
+                "data": _domain_resync_payload(domain_id, fresh),
+            }
+            for rid, s in fresh.items():
+                seen_run_ids.add(rid)
+                last_snaps[rid] = json.dumps(s)
+        else:
+            for rec in replayed.records:
+                yield {"event": rec.event_type, "data": rec.data, "id": rec.id}
+            if replayed.gap:
+                yield {"event": "resync", "data": _domain_resync_payload(domain_id, fresh)}
+            # Reconnect с подтверждённым/неподтверждённым last-event-id:
+            # базовый state уже у клиента (replay или resync) — pre-seed,
+            # чтобы live-цикл не пере-выводил run_created/batch_complete
+            # для уже известных прогонов.
+            for rid, s in fresh.items():
+                seen_run_ids.add(rid)
+                last_snaps[rid] = json.dumps(s)
 
     while True:
         if await request.is_disconnected():
@@ -292,14 +401,14 @@ async def _domain_stream(
         for rid in new_snaps:
             if rid not in seen_run_ids:
                 seen_run_ids.add(rid)
-                yield {
-                    "event": "run_created",
-                    "data": json.dumps({
+                yield _backlog_item(
+                    "domain", domain_id, "run_created",
+                    json.dumps({
                         "run_id": rid,
                         "status": new_snaps[rid]["status"],
                         "domain_id": domain_id,
                     }),
-                }
+                )
 
         for run_id, snap in new_snaps.items():
             new_hash = _snapshot_hash(snap)
@@ -314,70 +423,354 @@ async def _domain_stream(
             old_status = old_snap.get("status")
             new_status = snap.get("status")
             if old_status and old_status != new_status:
-                yield {
-                    "event": "status_change",
-                    "data": json.dumps({
+                yield _backlog_item(
+                    "domain", domain_id, "status_change",
+                    json.dumps({
                         "run_id": run_id,
                         "status": new_status,
                         "previous": old_status,
                         "domain_id": domain_id,
                     }),
-                }
+                )
 
             # batch_complete
             old_batches = {b["id"]: b["status"] for b in old_snap.get("batches", [])}
             for b in snap.get("batches", []):
                 if old_batches.get(b["id"]) != b["status"] and b["status"] in ("passed", "failed"):
-                    yield {
-                        "event": "batch_complete",
-                        "data": json.dumps({
+                    yield _backlog_item(
+                        "domain", domain_id, "batch_complete",
+                        json.dumps({
                             "run_id": run_id, "batch_id": b["id"],
                             "type": b["type"], "status": b["status"],
                             "domain_id": domain_id,
                         }),
-                    }
+                    )
 
             # gate_decision
             old_gates = {g["id"]: g.get("decision") for g in old_snap.get("gates", [])}
             for g in snap.get("gates", []):
                 new_dec = g.get("decision")
                 if old_gates.get(g["id"]) != new_dec and new_dec is not None:
-                    yield {
-                        "event": "gate_decision",
-                        "data": json.dumps({
+                    yield _backlog_item(
+                        "domain", domain_id, "gate_decision",
+                        json.dumps({
                             "run_id": run_id, "gate_id": g["id"],
                             "decision": new_dec, "domain_id": domain_id,
                         }),
-                    }
+                    )
 
             # finding
             old_fc = old_snap.get("findings_count", 0)
             new_fc = snap.get("findings_count", 0)
             if new_fc > old_fc:
-                yield {
-                    "event": "finding",
-                    "data": json.dumps({
+                yield _backlog_item(
+                    "domain", domain_id, "finding",
+                    json.dumps({
                         "run_id": run_id, "count": new_fc,
                         "delta": new_fc - old_fc, "domain_id": domain_id,
                     }),
-                }
+                )
 
             last_snaps[run_id] = json.dumps(snap)
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────
+# в”Ђв”Ђ Endpoints в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.get("/api/v1/runs/{run_id}/stream")
-async def stream_run_events(run_id: str, request: Request):
-    return _sse_response(_run_stream(run_id, request))
+async def stream_run_events(
+    run_id: str, request: Request, ticket: str = "", last_event_id: str = "",
+):
+    from fastapi import HTTPException
+
+    from orchestrator.cosmo.api.sse_tickets import validate_ticket
+
+    # COS-079: SSE endpoint без auth — закрыт. EventSource не умеет custom
+    # headers, поэтому клиент получает short-TTL ticket под bearer-аутой
+    # и передаёт его в query-параметре. Recipient/run scope не расширяется.
+    # COS-079 acceptance: missing ticket → 401 (не 422).
+    if not ticket or validate_ticket(ticket) is None:
+        raise HTTPException(status_code=401, detail="invalid or expired sse ticket")
+    last_id = _resolve_last_event_id(request, last_event_id)
+    return _sse_response(
+        _run_stream(run_id, request, last_id),
+        extra_headers={"X-Cosmo-Backlog": sse_backlog.backlog_mode()},
+    )
 
 
 @router.get("/api/v1/domains/{domain_id}/events/stream")
-async def stream_domain_events(domain_id: str, request: Request):
+async def stream_domain_events(
+    domain_id: str, request: Request, ticket: str = "", last_event_id: str = "",
+):
     """SSE multiplexer: all run events for a KITS domain (COS-101).
 
     One connection = all runs in the domain.
     Events: run_created, status_change, batch_complete, gate_decision, finding.
     Keepalive ping every 15s.
     """
-    return _sse_response(_domain_stream(domain_id, request))
+    from fastapi import HTTPException
+
+    from orchestrator.cosmo.api.sse_tickets import validate_ticket
+
+    # COS-079: guard, аналогично run stream — ticket обязателен (401).
+    if not ticket or validate_ticket(ticket) is None:
+        raise HTTPException(status_code=401, detail="invalid or expired sse ticket")
+    last_id = _resolve_last_event_id(request, last_event_id)
+    return _sse_response(
+        _domain_stream(domain_id, request, last_id),
+        extra_headers={"X-Cosmo-Backlog": sse_backlog.backlog_mode()},
+    )
+
+
+# в”Ђв”Ђ Notification stream (COS-056) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+
+_NOTIFICATION_POLL_S = 2.0
+
+
+async def _notification_unread(db, recipient_id: str) -> int:
+    """РўРµРєСѓС‰РёР№ unread count РїРѕР»СѓС‡Р°С‚РµР»СЏ (in_app). Р’С‹Р·С‹РІР°РµС‚СЃСЏ РІ РіРѕС‚РѕРІРѕР№ СЃРµСЃСЃРёРё."""
+    from sqlalchemy import func
+
+    from orchestrator.cosmo.db.models_notifications import NotificationRow
+
+    count = await db.execute(
+        select(func.count(NotificationRow.id)).where(
+            NotificationRow.recipient_id == recipient_id,
+            NotificationRow.channel == "in_app",
+            NotificationRow.read_at.is_(None),
+        )
+    )
+    return count.scalar_one()
+
+
+async def _notification_poll_once(
+    db,
+    recipient_id: str,
+    last_known_ids: set[str],
+    last_seen_created: str | None,
+) -> list[dict[str, Any]]:
+    """РћРґРёРЅ poll РЅРѕРІС‹С… СѓРІРµРґРѕРјР»РµРЅРёР№ РІ РіРѕС‚РѕРІРѕР№ СЃРµСЃСЃРёРё.
+
+    Р’РѕР·РІСЂР°С‰Р°РµС‚ СЃРїРёСЃРѕРє SSE-payload'РѕРІ (notification_new / notification_unread_count).
+    Р¤СѓРЅРєС†РёСЏ С‡РёСЃС‚Р°СЏ РїРѕ СЃРµСЃСЃРёРё вЂ” РїРµСЂРµРёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ СЃС‚СЂРёРјРѕРј Рё С‚РµСЃС‚Р°РјРё.
+    """
+    from orchestrator.cosmo.db.models_notifications import NotificationRow
+
+    payloads: list[dict[str, Any]] = []
+
+    stmt = (
+        select(NotificationRow)
+        .where(
+            NotificationRow.recipient_id == recipient_id,
+            NotificationRow.channel == "in_app",
+        )
+        .order_by(NotificationRow.created_at.desc())
+        .limit(20)
+    )
+    if last_seen_created:
+        stmt = stmt.where(NotificationRow.created_at > last_seen_created)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    fresh: list[NotificationRow] = []
+    for row in reversed(rows):
+        if row.id in last_known_ids:
+            continue
+        last_known_ids.add(row.id)
+        fresh.append(row)
+        ts = row.created_at
+        if ts and (last_seen_created is None or ts.isoformat() > last_seen_created):
+            last_seen_created = ts.isoformat()
+
+    if fresh:
+        for row in fresh:
+            payloads.append({
+                "event": "notification_new",
+                "data": json.dumps({
+                    "id": row.id,
+                    "event_id": row.event_id,
+                    "notification_type": row.notification_type,
+                    "severity": row.severity,
+                    "title": row.title,
+                    "message": row.message,
+                    "created_at": row.created_at.isoformat() if row.created_at else "",
+                }),
+            })
+        unread = await _notification_unread(db, recipient_id)
+        payloads.append({
+            "event": "notification_unread_count",
+            "data": json.dumps({"unread_count": unread}),
+        })
+    return payloads
+
+
+async def _notification_stream(
+    recipient_id: str, request: Request, last_event_id: str = ""
+) -> AsyncIterator[dict[str, Any]]:
+    """SSE РґР»СЏ notification inbox РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ (COS-056).
+
+    Polling-based (durable PG вЂ” source of truth, SSE вЂ” projection).
+    Reconnect-safe: initial connection С€Р»С‘С‚ С‚РµРєСѓС‰РёР№ unread count;
+    РґР°Р»РµРµ вЂ” С‚РѕР»СЊРєРѕ РЅРѕРІС‹Рµ notification СЃ created_at > last_seen.
+
+    Delivery Hardening: РћР”РќРђ long-lived PG-СЃРµСЃСЃРёСЏ РЅР° SSE-СЃРѕРµРґРёРЅРµРЅРёРµ
+    (commit РїРѕСЃР»Рµ РєР°Р¶РґРѕРіРѕ С‚РёРєР° вЂ” Р±РµР· idle-in-transaction), РІРјРµСЃС‚Рѕ
+    checkout'Р° РґРІСѓС… СЃРµСЃСЃРёР№ РЅР° РєР°Р¶РґС‹Р№ 2s poll. РџСЂРё PG down вЂ”
+    notification_degraded + РїРµСЂРµСЃРѕР·РґР°РЅРёРµ СЃРµСЃСЃРёРё РЅР° СЃР»РµРґСѓСЋС‰РµРј С‚РёРєРµ;
+    РїРѕСЃР»Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ СЃРѕРµРґРёРЅРµРЅРёСЏ С€Р»С‘С‚СЃСЏ notification_initial Р·Р°РЅРѕРІРѕ
+    (РєР»РёРµРЅС‚ РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ РІ connected, РґСѓР±Р»Рё РёСЃРєР»СЋС‡РµРЅС‹ last_known_ids).
+
+    Р’РђР–РќРћ: Р»РѕРІРёС‚СЃСЏ Exception (Р° РЅРµ С‚РѕР»СЊРєРѕ SQLAlchemyError) вЂ” asyncpg РїСЂРё
+    РјС‘СЂС‚РІРѕРј TCP-РєРѕРЅРЅРµРєС‚Рµ (docker stop PG, РѕР±СЂС‹РІ СЃРµС‚Рё) РїСЂРѕР±СЂР°СЃС‹РІР°РµС‚ raw
+    OSError/ConnectionError, SQLAlchemy РµРіРѕ РЅРµ РѕР±РѕСЂР°С‡РёРІР°РµС‚. Р›СЋР±РѕР№ СЃР±РѕР№
+    I/O в†’ degraded + РїРµСЂРµСЃРѕР·РґР°РЅРёРµ СЃРµСЃСЃРёРё; happy path РЅРµ РјРµРЅСЏРµС‚СЃСЏ.
+    """
+    sm = get_sessionmaker()
+    last_keepalive = time.monotonic()
+    last_seen_created: str | None = None
+    last_known_ids: set[str] = set()
+
+    # COS-088: наблюдаемый флаг режима backlog (до resample, чтобы клиент
+    # знал режим до первого события).
+    yield _backlog_flag_event(sse_backlog.backlog_mode())
+
+    # COS-088: resample по last-event-id — replay notification_new из backlog.
+    # gap/недоступность backlog здесь НЕ требует отдельного resync-события:
+    # durable PG inbox — source of truth, notification_initial ниже (unread
+    # count) по построению выполняет роль resync-снапшота; последующий poll
+    # пере-доставит последние 20 нотификаций (клиент дедуплицирует по id).
+    if last_event_id:
+        replayed = sse_backlog.replay("notif", recipient_id, last_event_id)
+        if replayed is not None:
+            for rec in replayed.records:
+                yield {"event": "notification_new", "data": rec.data, "id": rec.id}
+                try:
+                    last_known_ids.add(str(json.loads(rec.data).get("id", "")))
+                except Exception:  # noqa: BLE001 — replay-запись без id не дедуплицируется
+                    pass
+
+    db = None
+    degraded = False
+    try:
+        db = sm()
+        # Initial connection: РѕС‚РїСЂР°РІРёС‚СЊ unread count
+        try:
+            unread = await _notification_unread(db, recipient_id)
+            await db.commit()
+            degraded = False
+            yield {
+                "event": "notification_initial",
+                "data": json.dumps({"unread_count": unread, "recipient_id": recipient_id}),
+            }
+        except Exception:  # noqa: BLE001 — asyncpg raises raw ConnectionError on dead socket
+            degraded = True
+            yield {
+                "event": "notification_degraded",
+                "data": json.dumps({"error": "db_unavailable", "recipient_id": recipient_id}),
+            }
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            await asyncio.sleep(_NOTIFICATION_POLL_S)
+            now = time.monotonic()
+
+            if now - last_keepalive >= _KEEPALIVE_S:
+                yield {"comment": "keepalive"}
+                last_keepalive = now
+                continue
+
+            # PG РЅРµРґРѕСЃС‚СѓРїРµРЅ: РЅР° РєР°Р¶РґРѕРј С‚РёРєРµ РїСЂРѕР±СѓРµРј РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊСЃСЏ.
+            if degraded:
+                try:
+                    unread = await _notification_unread(db, recipient_id)
+                    await db.commit()
+                except Exception:  # noqa: BLE001 — asyncpg raises raw ConnectionError on dead socket
+                    # Р•С‰С‘ РЅРµРґРѕСЃС‚СѓРїРµРЅ: РїРµСЂРµСЃРѕР·РґР°С‚СЊ СЃРµСЃСЃРёСЋ (РјС‘СЂС‚РІС‹Р№ РєРѕРЅРЅРµРєС‚)
+                    try:
+                        await db.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    db = sm()
+                    yield {
+                        "event": "notification_degraded",
+                        "data": json.dumps({"error": "db_unavailable", "recipient_id": recipient_id}),
+                    }
+                    continue
+                # Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ
+                degraded = False
+                yield {
+                    "event": "notification_initial",
+                    "data": json.dumps({"unread_count": unread, "recipient_id": recipient_id}),
+                }
+
+            # Poll РЅРѕРІС‹С… СѓРІРµРґРѕРјР»РµРЅРёР№ (РѕРґРЅР° СЃРµСЃСЃРёСЏ, commit РїРѕСЃР»Рµ С‚РёРєР°)
+            try:
+                payloads = await _notification_poll_once(
+                    db, recipient_id, last_known_ids, last_seen_created
+                )
+                await db.commit()
+            except Exception:  # noqa: BLE001 — asyncpg raises raw ConnectionError on dead socket
+                degraded = True
+                try:
+                    await db.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                db = sm()
+                yield {
+                    "event": "notification_degraded",
+                    "data": json.dumps({"error": "db_unavailable", "recipient_id": recipient_id}),
+                }
+                continue
+
+            for payload in payloads:
+                if payload.get("event") == "notification_new":
+                    # COS-088: event в backlog ДО yield — SSE id == backlog id.
+                    item = _backlog_item("notif", recipient_id, "notification_new", payload["data"])
+                    if item is not None:
+                        payload = {**payload, "id": item["id"]}
+                yield payload
+    finally:
+        if db is not None:
+            try:
+                await db.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+@router.get("/api/v1/notifications/stream")
+async def stream_notifications(
+    request: Request,
+    ticket: str,
+    last_event_id: str = "",
+):
+    """COS-056/075: SSE stream для notification inbox текущего principal.
+
+    Auth без компромисса (COS-075): EventSource не поддерживает custom
+    headers, поэтому bearer в URL запрещён. Клиент сначала POST
+    /api/v1/notifications/sse-ticket (обычная bearer-аутентификация) —
+    сервер возвращает short-TTL HMAC-ticket, привязанный к principal.user_id.
+    Stream резолвит recipient ИЗ TICKET — client-asserted recipient_id
+    из query-параметра убран (V1 compromise закрыт).
+
+    Reconnect: клиент переподключается с НОВЫМ ticket (старый истёк за 60s);
+    initial connection шлёт текущий unread_count, новые события — только
+    после last_seen. Durable inbox — source of truth; SSE — projection.
+    Graceful degradation: PG недоступен → keepalive, уведомления не теряются.
+    COS-088: last_event_id (query > Last-Event-ID header) — resample
+    notification_new из backlog; notification_initial служит resync.
+    """
+    from fastapi import HTTPException
+
+    from orchestrator.cosmo.api.sse_tickets import validate_ticket
+
+    recipient_id = validate_ticket(ticket)
+    if recipient_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="invalid or expired sse ticket",
+        )
+    last_id = _resolve_last_event_id(request, last_event_id)
+    return _sse_response(
+        _notification_stream(recipient_id, request, last_id),
+        extra_headers={"X-Cosmo-Backlog": sse_backlog.backlog_mode()},
+    )
