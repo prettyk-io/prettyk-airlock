@@ -207,6 +207,17 @@ Cosmo API ── REST/Webhook/SSE ──> отдельный Pure Box runtime
 | CI jobs | Woodpecker | через ExecutionAdapter |
 | Security session runtime | Pure Box | управляется CapabilityBroker |
 
+**COS-096: Gitea webhook delivery на ПУ.** Gitea 1.22 по умолчанию
+(`ALLOWED_HOST_LIST=external`) блокирует доставку webhook'ов на
+RFC-private хосты — включая `cosmo-api:8100` внутри docker-сети:
+push-события молча не доходят до ПУ (последний пуш честно пуст).
+Compose задаёт `GITEA__webhook__ALLOWED_HOST_LIST: "private"` (docker-сеть).
+Для production при freeze сузить до явного CIDR сети Cosmo; при
+edge-маршрутизации webhook'ов через внешний hostname — проверить,
+что он резолвится и разрешён. Проверка доставки: push в привязанный
+репо → `GET /api/v1/apps/{id}/forge/last-push` должен показать
+`last_push` (source=webhook_cache) в течение секунд.
+
 ### 4.3. MinIO buckets
 
 Минимальный набор бакетов Cosmo:
@@ -332,6 +343,39 @@ Airgap — это профиль доставки, применимый к ло�
 В airgap запрещены runtime pull из внешнего registry и фоновые network calls.
 Все образы digest-pinned, заранее загружены и проверены до установки.
 
+**Airgap-чеклист (проверен 2026-09-02, COS-094):**
+
+1. **Инвентарь образов** — 10 сервисов (full-профиль), все локальны, теги
+   закреплены (не `latest`): `postgres:16-alpine`, `valkey/valkey:8-alpine`,
+   `openbao/openbao:2.2`, `minio/minio:RELEASE.2025-03-12T18-04-18Z`,
+   `gitea/gitea:1.22.6`, `woodpeckerci/woodpecker-{server,agent}:v3.5`,
+   `cosmo-{api,frontend,caddy}:local`. Проверка:
+   `docker compose --profile full config --images` + `docker images`.
+2. **Digest-pin — TODO при production freeze**: в compose стоит
+   комментарий-заглушка «digest-pin: sha256» у каждого внешнего образа;
+   перед поставкой зафиксировать @sha256:... и перегенерить bundle.
+   Build-time базовые образы (`node:22-alpine`, `nginx:alpine`, база Caddy)
+   тоже входят в bundle как собранные `:local`-образы — тяги при `up` нет.
+3. **Cold start без тяги** (проверено):
+   `docker compose -f services/docker-compose.yml --profile full down`
+   затем `... up -d --profile full --pull never` → EXIT=0, 10/10
+   контейнеров Up (9 healthy + woodpecker: distroless, healthcheck
+   disabled by design, liveness — внешний probe :8000/api/health).
+4. **Healthchecks не зависят от DNS наружу**: все probe — `localhost`
+   внутри контейнера или внутренний сервисный DNS compose-сети
+   (`cosmo-postgres` и т.п. через 127.0.0.11); nginx edge резолвит
+   cosmo-api через Docker DNS (valid=10s), внешних имён нет; woodpecker-agent
+   использует `passthrough:///` (COS-063) — SRV/TXT наружу не ходит.
+5. **Тяги в compose нет**: только `image:`/`build:` — registry не указан;
+   при `--pull never` старт проходит.
+6. **Volumes** (сохраняются при down/up): `cosmo_postgres`, `cosmo_valkey`,
+   `cosmo_openbao`, `cosmo_minio`, `cosmo_gitea`, `cosmo_woodpecker`,
+   `cosmo_caddy_data`, `cosmo_caddy_config`.
+7. **TLS без ACME**: airgap-профиль Caddy — pre-issued сертификат/internal CA
+   (§7.2); ACME-запросов наружу нет.
+8. **Проверка поставки**: `manifest.json` + checksums + SBOM CycloneDX +
+   подпись bundle (§5.5 выше).
+
 ---
 
 ## 6. Docker Compose: финальная схема
@@ -416,9 +460,35 @@ Buddy собирает отдельный Cosmo Compose в `D:\prettyk-control-p
 
 ---
 
-## 7. Caddy и внешний entry point
+## 7. Edge-архитектура: Caddy (канонический) + nginx same-origin
 
-### 7.1. Маршруты
+### 7.0. Канонический edge-путь (COS-094)
+
+Канонический внешний entry point — **Caddy** (`cosmo-caddy`, host :8180 → 80):
+rate limiting (COS-067), TLS-профили, /forge, /artifacts, /registry, /metrics.
+Все внешние клиенты и production-трафик идут через него.
+
+`cosmo-frontend` (nginx, host :5174 → 80) — **same-origin front door SPA**:
+React-приложение зовёт относительный `/api/v1/...`, поэтому тот же origin
+обязан обслуживать API — иначе браузер получает SPA-HTML/405 вместо JSON
+(дефект, закрытый COS-094). Это НЕ второй production edge: без rate limit и
+TLS; назначение — прямая работа с SPA и приёмка «как увидит браузер».
+
+Правила nginx same-origin edge (`frontend/nginx.conf`):
+
+- `/api/` → `cosmo-api:8100` (путь сохраняется); `client_max_body_size 256m`
+  (ingest-пейлоады больше nginx-дефолта 1m);
+- SSE-ручки (`runs/*/stream`, `domains/*/events/stream`,
+  `notifications/stream`) — `proxy_buffering off`, read timeout 1h, HTTP/1.1
+  keepalive (поток живой, чанки без задержки);
+- `/live` `/ready` `/health` — честный passthrough (`/ready` = 503 при
+  падении hard-dep, COS-090);
+- cosmo-api резолвится через Docker DNS (127.0.0.11, valid=10s) — переживает
+  пересоздание контейнера API без reload nginx; никаких внешних DNS
+  (airgap-безопасно);
+- остальное — SPA fallback → index.html (React Router).
+
+### 7.1. Маршруты Caddy
 
 ```text
 /api/*        → cosmo-api:8100
@@ -771,8 +841,26 @@ domain/run, с rotation и audit.
 | Endpoint | Смысл | Проверяет зависимости |
 |---|---|---|
 | `/live` | процесс жив | нет, только process health |
-| `/ready` | API может принимать работу | PostgreSQL, migrations, required config |
+| `/ready` | ядро способно обслуживать трафик (K8s readiness) | PostgreSQL (hard), Valkey + anchor (soft) |
 | `/health` | расширенная диагностика | PG, Valkey, MinIO, adapters, versions |
+
+**Семантика `/ready` (COS-090, K8s readiness-семантика):**
+
+- **200** — только когда ядро способно обслуживать запросы: PostgreSQL
+  доступен. Тело — компонент-мап: `database`, `cache`, `anchor` +
+  сводный `status` (`ok` | `degraded`).
+- **503** — недоступен hard-dep PostgreSQL: upstream (Caddy/K8s) выводит
+  инстанс из ротации. Тело — честный компонент-мап `status="not_ready"`.
+- **Мягкие деградации НЕ роняют readiness**: Valkey недоступен → SSE
+  fallback на in-memory (COS-088); anchor sink недоступен → честный
+  `unknown_anchor` на verify-стороне (COS-087). Оба видны в теле как
+  `cache/anchor: "unavailable"` и сводном `status="degraded"`.
+- Anchor не сконфигурирован (env не задан) → `anchor: "disabled"`, не
+  деградация.
+
+Это закрывает известное отклонение COS-063 (`/ready=200 degraded` при
+падении PG — «ложь балансировщику»). Раньше: PG down + Valkey up → 200;
+теперь → 503.
 
 `/health` не должен раскрывать credentials, tokens или внутренние stack traces.
 
@@ -855,6 +943,37 @@ Box contracts.
 - airgap bundle проверяет подпись, digest, SBOM и checksum;
 - установка не требует внешней сети;
 - restore drill успешно пройден.
+
+### Gate G — Suite gate + scratch hygiene (COS-089)
+
+Одна команда — весь cosmo-суит в изолированной тестовой БД:
+
+```powershell
+.\services\scripts\suite_gate.ps1
+```
+
+- поднимает тестовый PG (:5433, `services/docker-compose.test-pg.yml`);
+- ставит `COSMO_TEST_SESSION_DB=1` — прогон получает собственную БД
+  `cosmo_test_s<hex>` на том же инстансе (COS-076): bootstrap схемы, данные
+  и wipe не касаются общего `cosmo_test`; БД дропается при выходе процесса
+  (atexit);
+- запускает `python -m pytest orchestrator/tests/cosmo -q` и возвращает
+  exit-code pytest как свой; вердикт `SUITE GATE: PASS/FAIL`;
+- идемпотентен с чистого состояния.
+
+Гигиена scratch-БД (дроп сирот после SIGKILL'нутых сессий/падений мимо
+teardown):
+
+```powershell
+python services\scripts\cleanup_scratch_pg.py            # dry-run: план
+python services\scripts\cleanup_scratch_pg.py --apply    # дроп только orphan
+```
+
+- кандидаты только с префиксами `cosmo_test_s*` / `cosmo_scratch_*`;
+- дропается только БД без активных соединений (живая сессия воркера —
+  skip);
+- `postgres`, `cosmo` (dev), `cosmo_test`, templates — защищены; хост-порт
+  5432 (dev-стенд) отказывается обслуживать (guard).
 
 ---
 

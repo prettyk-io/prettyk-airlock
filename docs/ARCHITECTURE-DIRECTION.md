@@ -607,6 +607,16 @@ legacy transfer bridge
 СОД не диктует внутренний stack PureK. Внутренние Kafka/MQ-механизмы СОД, если
 они подтвердятся, остаются внутри СОД bridge.
 
+Source inspection (1 сентября 2026, non-binding:
+`docs/research/2026-09-01-sod-source-inspection-worksheet.md`) подтвердил из
+кода: СОД — FTP/InfoDiode transport с state machine
+PREPARED→SENT→RECEIVED→DELIVERED, ZIP+MD5 packages, client-UUID idempotency;
+Kafka внутри СОД — только state notifications. Обратный ACK-канал — отдельный
+InfoDiode с meta-packets. Это подтверждает наш diode profile (one-way data +
+отдельный control/ACK channel) и multi-plane модель (legacy уже разделял
+транспорты: СОД для metadata/reports, МЗП для source/images), но не меняет
+решений этого раздела.
+
 ## 11. Landing preflight и gap adaptation
 
 ### 11.1. Pre-transfer validation
@@ -780,3 +790,33 @@ service-mesh stack.
 Если фактическое расследование обнаружит обязательный customer use case, сначала
 формулируется отдельный requirement и capability contract. Legacy-название само
 по себе не открывает интеграцию.
+
+
+## 1.3. Notification Manager (МУ)
+
+Notification Manager — собственный **portal-local bounded module** внутри
+Cosmoport Control Plane. Это не отдельный deployable microservice и не
+межзонный transport. На один портал/Control Plane приходится один logical МУ.
+
+```text
+Cosmo domain changes
+  → PostgreSQL transaction
+  → transactional outbox
+  → local Notification Manager
+  ├── in-app/BELL journal
+  ├── email/webhook provider adapters (если включены profile'ом)
+  └── SSE live projection через Valkey
+```
+
+МУ владеет notification policy, event taxonomy, recipient resolution,
+idempotency/dedup, delivery journal, retry/DLQ и audit reference. Provider
+libraries выполняют только доставку и не становятся источником истины.
+
+Межзонные события не доставляются через МУ. Source и target Control Plane
+передают transfer/reconcile state через выбранный transport profile; после
+локальной фиксации события каждый портал сам создаёт свои уведомления.
+
+Baseline V1: in-app notifications и email adapter; subscription policy —
+`ALL` или `SELECTED` с allow/blocklist, без digest/quiet-hours/multi-tenant
+complexity. Kafka, standalone Notification Service и ad-hoc SMTP paths в
+PureK не входят.

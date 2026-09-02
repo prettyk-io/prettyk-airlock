@@ -9,6 +9,9 @@
 
 ### 1. СОД: контракт второго transport option
 
+> Source inspection выполнен 1 сентября 2026: `docs/research/2026-09-01-sod-source-inspection-worksheet.md`.
+> Acceptance-разбор: `docs/research/2026-09-01-legacy-source-inspection-acceptance.md`.
+
 - [ ] Получить фактическую версию и deployment manifest СОД.
 - [ ] Получить API/OpenAPI/Postman и redacted request/response examples.
 - [ ] Зафиксировать auth, TLS/CA, endpoints, size limits и network topology.
@@ -22,28 +25,31 @@
 - [ ] Отделить обязательные ограничения СОД от деталей legacy реализации.
 - [ ] Не смешивать этот discovery с PureK default transport: СОД — только внешний
       Cosmoport 2 bridge и вторая transport option.
-- [ ] Установить роль Kafka в реальном gap flow: local event bus СОД, cross-gap
+- [x] Установить роль Kafka в реальном gap flow: local event bus СОД, cross-gap
       bridge или только внутренняя механика relay; не считать Kafka transport'ом
-      без доказанного broker-to-broker/gateway flow.
-- [ ] Узнать, кто владеет «дырой»: firewall/data diode/transfer gateway/relay,
-      кто выдаёт session lease, какие direction/protocol/TTL/byte limits и как
-      канал закрывается.
-- [ ] Развести control plane и data plane: кто просит transfer session, где
-      лежит staging/spool, кто передаёт package, кто возвращает ack и где живёт
-      authoritative status.
-- [ ] Проверить модель «one active transfer per route/zone pair» и отсутствие
-      произвольного dynamic port opening из приложения.
+      без доказанного broker-to-broker/gateway flow. Код СОД: Kafka — только
+      state change notifications (профиль KafkaNotifications), не data transport.
+      Осталось интервью: что реально использовалось в prod — Kafka или polling.
+- [x] Узнать, есть ли отдельный return control/ACK channel или ACK происходит через
+      operator / отдельный разрешённый канал. Код: обратный InfoDiode с
+      meta-packets + опционально Kafka. Подтверждает diode profile №2 baseline.
+- [x] Понять связь data diode с Kafka в СОД: Kafka как event bus для transfer events
+      или как часть relay orchestration. Код: Kafka — уведомления о смене состояния,
+      не участвует в data path и не оркестрирует relay.
 - [x] Изучить принцип data diode / InfoDiod и однонаправленных шлюзов. Результат:
       `docs/research/2026-09-01-data-diode-infodiod.md`. Data diode — физически
       однонаправленный канал; ACK невозможен без отдельного control-канала.
       Российские производители: InfoDiode, Цифровые решения, Инконтрол.
 - [ ] Узнать, какой конкретно тип устройства используется в СОД: строгий data diode
       (InfoDiod/аналог) или controlled bidirectional gateway. Кто производитель.
-- [ ] Узнать, есть ли отдельный return control/ACK channel или ACK происходит через
-      operator / отдельный разрешённый канал.
-- [ ] Понять protocol: TCP/UDP/raw, staging/spool с обеих сторон, throughput/latency.
-- [ ] Понять связь data diode с Kafka в СОД: Kafka как event bus для transfer events
-      или как часть relay orchestration.
+      Код даёт частичный ответ: два раздельных однонаправленных FTP-канала
+      (InfoDiode IN/OUT dirs); vendor и модель устройства — интервью.
+- [x] Понять protocol: TCP/UDP/raw, staging/spool с обеих сторон,
+      throughput/latency. Код: FTP поверх диода с обеих сторон, staging-каталоги
+      на локальных PVC, файлы удаляются после sync; throughput/latency — интервью.
+- [ ] Получить production-факты, недоступные из кода: актуальная топология зон
+      и число инстансов СОД, реальные размеры пакетов и latency, production
+      incidents, была ли альтернатива FTP в реальных deployment'ах.
 - [ ] Получить схему одного реального cross-gap transfer: source staging → gap
       gateway/relay → target staging → target checkup → bootstrap → cleanup.
 
@@ -145,6 +151,34 @@ artifact size, иерархические quotas, hard/soft режимы и stat
 интеграций `pending → running → success/failed/not_active`. Это полезный input
 для нашего generic contract, но не готовая PureK-модель.
 
+### 7. Notification delivery — решение принято
+
+> Source inspection выполнен: `docs/research/2026-09-01-notification-service-source-inspection-worksheet.md`.
+> Facts/insights/legacy-only разложены в acceptance-записи. Legacy-стек (Kafka
+> binder, PIS, Blitz, Consul, Single-SPA) не переносится; функциональность
+> оценивается отдельно.
+
+- [x] Notification Manager — portal-local bounded module внутри Cosmoport, не
+      отдельный deployable service и не межзонный transport.
+- [x] Источник событий — PostgreSQL transactional outbox; Kafka в PureK не
+      используется. Valkey — только live/SSE projection.
+- [x] МУ владеет policy, taxonomy, recipients, dedup, journal, retry/DLQ и
+      audit reference; libraries являются только delivery providers.
+- [x] V1 channels: in-app/BELL и email adapter. Webhook — отдельный optional
+      provider profile, не обязательный канал.
+- [x] Subscription V1: `ALL` или `SELECTED` + allow/blocklist. Digest,
+      quiet-hours и сложная multi-tenant policy отложены.
+- [x] Межзонные события идут через transfer/reconcile; каждый портал локально
+      порождает собственные notifications. МУ не входит в transport matrix.
+- [x] Recipient resolution V1 использует существующие Control Plane auth и
+      domain/project membership; LDAP и legacy PIS не переносятся.
+- [x] Каноническое событие V1: durable outbox event с event id, aggregate,
+      event type, timestamp, payload и correlation id.
+- [x] Delivery semantics V1: PostgreSQL inbox write = delivered; email provider
+      accept = sent; retryable failure → retry/DLQ; read receipt не обещаем.
+- [x] V1 taxonomy ограничена run/gate/batch/release/transfer failure и approval;
+      полный legacy каталог 22+ событий не переносим.
+
 ## P1 — оформить после интервью
 
 - [x] Выбрать multi-option PureK sovereign transfer framework: direct authenticated
@@ -156,7 +190,10 @@ artifact size, иерархические quotas, hard/soft режимы и stat
       `docs/research/2026-09-01-data-diode-infodiod.md`.
 - [ ] Оформить `DiodeAdapter` contract: send(package, session_lease), track_status,
       verify_on_target, no immediate ACK semantics. Учесть физический protocol break.
-- [ ] Оформить `SODTransferAdapter` как второй Cosmoport 2 transport.
+- [ ] Оформить `SODTransferAdapter` как optional второй Cosmoport 2 transport
+      после общего transfer kernel; не делать СОД blocker'ом sovereign profiles.
+- [ ] Реализовать Notification Manager V1 как portal-local module: outbox,
+      in-app journal, email provider, dedup, retry/DLQ и SSE projection.
 - [ ] Оформить `VirtualizationAdapter / EnvironmentProvisioner` с provider-neutral
       контрактом и честными `NotImplemented` capability paths.
 - [ ] Подготовить friend request для VM provider только после появления реального
