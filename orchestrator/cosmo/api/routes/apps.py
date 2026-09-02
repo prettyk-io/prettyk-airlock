@@ -4,16 +4,18 @@ CRUD operations for Application (Level 0..3), RepositoryBinding, and Groups.
 """
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db, require_capability
-from orchestrator.cosmo.domain.rbac import Action
+from orchestrator.cosmo.api.deps import get_current_principal, get_db, require_capability, require_principal
+from orchestrator.cosmo.api.domain_guard import resolve_caller_domain, verify_ownership
+from orchestrator.cosmo.domain.rbac import Action, PrincipalContext
 from orchestrator.cosmo.db.models import (
     Application as ApplicationModel,
     RepositoryBinding as RepoBindingModel,
@@ -74,11 +76,20 @@ def _to_app_schema(app_model: ApplicationModel) -> Application:
 async def list_applications(
     domain_id: Optional[str] = Query(None, description="Filter by domain ID"),
     level: Optional[int] = Query(None, ge=0, le=3, description="Filter by level"),
+    principal: PrincipalContext = Depends(require_principal()),
     db: AsyncSession = Depends(get_db),
 ) -> list[Application]:
-    """List applications with optional filtering."""
+    """List applications with optional filtering.
+
+    COS-083: authentication required; не-админ видит только приложения
+    своего домена (клиентский фильтр не может расширить выборку),
+    админ фильтрует свободно или видит все.
+    """
     stmt = select(ApplicationModel).options(selectinload(ApplicationModel.repo_bindings))
-    if domain_id:
+    if not principal.is_system_admin:
+        caller = resolve_caller_domain(principal, domain_id)
+        stmt = stmt.where(ApplicationModel.domain_id == caller)
+    elif domain_id:
         stmt = stmt.where(ApplicationModel.domain_id == domain_id)
     if level is not None:
         stmt = stmt.where(ApplicationModel.level == level)
@@ -93,7 +104,7 @@ async def list_applications(
 async def create_application(
     body: CreateApplicationRequest,
     db: AsyncSession = Depends(get_db),
-    _guard: None = Depends(require_capability(Action.BRICK_MANAGE)),
+    principal: PrincipalContext = Depends(require_capability(Action.BRICK_MANAGE, domain_binding="identity")),
 ) -> Application:
     """Create a new application with repository binding."""
     # Check domain exists
@@ -102,6 +113,13 @@ async def create_application(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain '{body.domain_id}' not found",
+        )
+
+    # COS-067: domain binding — не-админ создаёт только в своём домене
+    if not principal.is_system_admin and body.domain_id != principal.domain_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"domain_id '{body.domain_id}' does not match authenticated principal domain",
         )
 
     # Check app doesn't exist
@@ -159,9 +177,15 @@ async def create_application(
 @router.get("/api/v1/apps/{app_id}", response_model=Application)
 async def get_application(
     app_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_principal()),
     db: AsyncSession = Depends(get_db),
 ) -> Application:
-    """Get application details by ID."""
+    """Get application details by ID.
+
+    COS-083: authentication + единый резолв домена; чужое приложение —
+    404 ghost (не раскрываем существование).
+    """
     stmt = (
         select(ApplicationModel)
         .where(ApplicationModel.id == app_id)
@@ -174,6 +198,11 @@ async def get_application(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Application '{app_id}' not found",
         )
+    verify_ownership(
+        app_model.domain_id,
+        resolve_caller_domain(principal, caller_domain),
+        f"Application '{app_id}'",
+    )
     return _to_app_schema(app_model)
 
 
@@ -181,8 +210,9 @@ async def get_application(
 async def update_application(
     app_id: str,
     body: UpdateApplicationRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
-    _guard: None = Depends(require_capability(Action.BRICK_MANAGE)),
+    principal: PrincipalContext = Depends(require_capability(Action.BRICK_MANAGE, domain_binding="identity")),
 ) -> Application:
     """Update application attributes."""
     stmt = (
@@ -196,6 +226,14 @@ async def update_application(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Application '{app_id}' not found",
+        )
+
+    # COS-067/COS-083: domain binding — ownership по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            app_model.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Application '{app_id}'",
         )
 
     if body.level is not None:
@@ -223,15 +261,26 @@ async def update_application(
 async def update_repo_binding(
     app_id: str,
     body: UpdateRepoBindingRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_capability(Action.BRICK_MANAGE, domain_binding="identity")),
 ) -> RepositoryBinding:
-    """Update or create the repository binding for an application."""
+    """Update or create the repository binding for an application.
+
+    COS-083: мутация требует capability brick:manage + ownership по единому
+    резолву (было — полностью без guard'ов, adjacent hole из COS-068).
+    """
     app_model = await db.get(ApplicationModel, app_id)
     if app_model is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Application '{app_id}' not found",
         )
+    verify_ownership(
+        app_model.domain_id,
+        resolve_caller_domain(principal, caller_domain),
+        f"Application '{app_id}'",
+    )
 
     stmt = select(RepoBindingModel).where(RepoBindingModel.app_id == app_id)
     res = await db.execute(stmt)
@@ -267,8 +316,9 @@ async def update_repo_binding(
 @router.delete("/api/v1/apps/{app_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_application(
     app_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
-    _guard: None = Depends(require_capability(Action.BRICK_MANAGE)),
+    principal: PrincipalContext = Depends(require_capability(Action.BRICK_MANAGE, domain_binding="identity")),
 ) -> None:
     """Delete application and its repo bindings."""
     app_model = await db.get(ApplicationModel, app_id)
@@ -276,6 +326,13 @@ async def delete_application(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Application '{app_id}' not found",
+        )
+    # COS-067/COS-083: domain binding — ownership по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            app_model.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Application '{app_id}'",
         )
     # Delete repo bindings first
     await db.execute(delete(RepoBindingModel).where(RepoBindingModel.app_id == app_id))
@@ -288,11 +345,19 @@ async def delete_application(
 @router.get("/api/v1/groups", response_model=list[Group])
 async def list_groups(
     domain_id: Optional[str] = Query(None, description="Filter by domain ID"),
+    principal: PrincipalContext = Depends(require_principal()),
     db: AsyncSession = Depends(get_db),
 ) -> list[Group]:
-    """List application groups."""
+    """List application groups.
+
+    COS-083: authentication required; не-админ видит только группы своего
+    домена (клиентский фильтр не может расширить выборку).
+    """
     stmt = select(GroupModel)
-    if domain_id:
+    if not principal.is_system_admin:
+        caller = resolve_caller_domain(principal, domain_id)
+        stmt = stmt.where(GroupModel.domain_id == caller)
+    elif domain_id:
         stmt = stmt.where(GroupModel.domain_id == domain_id)
     stmt = stmt.order_by(GroupModel.id)
 
@@ -314,13 +379,25 @@ async def list_groups(
 async def create_group(
     body: Group,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_capability(Action.BRICK_MANAGE, domain_binding="identity")),
 ) -> Group:
-    """Create a new group."""
+    """Create a new group.
+
+    COS-083: write требует capability brick:manage; не-админ создаёт
+    группу только в своём домене (было — полностью анонимная запись).
+    """
     domain = await db.get(DomainModel, body.domain_id)
     if domain is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain '{body.domain_id}' not found",
+        )
+
+    # COS-067/COS-083: domain binding — не-админ создаёт только в своём домене
+    if not principal.is_system_admin and body.domain_id != principal.domain_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"domain_id '{body.domain_id}' does not match authenticated principal domain",
         )
 
     existing = await db.get(GroupModel, body.id)
@@ -361,14 +438,22 @@ async def create_group(
 @router.get("/api/v1/groups/{group_id}", response_model=Group)
 async def get_group(
     group_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_principal()),
     db: AsyncSession = Depends(get_db),
 ) -> Group:
-    """Get group details by ID."""
+    """Get group details by ID. COS-083: доменный scoping для не-админа."""
     g = await db.get(GroupModel, group_id)
     if g is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Group '{group_id}' not found",
+        )
+    if not principal.is_system_admin:
+        verify_ownership(
+            g.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Group '{group_id}'",
         )
     return Group(
         id=g.id,
@@ -382,14 +467,22 @@ async def get_group(
 @router.delete("/api/v1/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_capability(Action.BRICK_MANAGE, domain_binding="identity")),
 ) -> None:
-    """Delete a group."""
+    """Delete a group. COS-083: мутация требует capability + ownership не-админа."""
     g = await db.get(GroupModel, group_id)
     if g is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Group '{group_id}' not found",
+        )
+    if not principal.is_system_admin:
+        verify_ownership(
+            g.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Group '{group_id}'",
         )
     await db.delete(g)
     await db.commit()
@@ -398,12 +491,32 @@ async def delete_group(
 # ── SAN-014: Lifecycle Config Endpoints ───────────────────────────────
 
 @router.get("/api/v1/apps/{app_id}/lc-config")
-async def get_lifecycle_config(app_id: str):
-    """Get 8-step lifecycle configuration for an application."""
+async def get_lifecycle_config(
+    app_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_principal()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get 8-step lifecycle configuration for an application.
+
+    COS-083: authentication + доменный scoping для не-админа.
+    """
     from orchestrator.cosmo.control_plane.lifecycle_resolver import (
         LifecycleResolver, LCStepConfig, CANONICAL_8_STEPS,
         BuildBatch, StaticScanBatch, DeployBatch,
     )
+    app_model = await db.get(ApplicationModel, app_id)
+    if app_model is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Application '{app_id}' not found",
+        )
+    if not principal.is_system_admin:
+        verify_ownership(
+            app_model.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Application '{app_id}'",
+        )
     # For now, return canonical defaults + any app-level overrides
     resolver = LifecycleResolver()
     steps = resolver.resolve_as_list()
@@ -418,15 +531,36 @@ async def get_lifecycle_config(app_id: str):
 
 
 @router.put("/api/v1/apps/{app_id}/lc-config")
-async def update_lifecycle_config(app_id: str, body: dict):
+async def update_lifecycle_config(
+    app_id: str,
+    body: dict,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_capability(Action.BRICK_MANAGE, domain_binding="identity")),
+    db: AsyncSession = Depends(get_db),
+):
     """Update lifecycle config overrides for an application.
 
     Body: {"overrides": {"build": {"step_enabled": false}, ...}}
     Required steps cannot be disabled.
+
+    COS-083: мутация требует capability + доменный scoping не-админа
+    (было — полностью анонимная запись).
     """
     from orchestrator.cosmo.control_plane.lifecycle_resolver import (
         LifecycleResolver, CANONICAL_8_STEPS,
     )
+    app_model = await db.get(ApplicationModel, app_id)
+    if app_model is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Application '{app_id}' not found",
+        )
+    if not principal.is_system_admin:
+        verify_ownership(
+            app_model.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Application '{app_id}'",
+        )
     overrides = body.get("overrides", {})
     resolver = LifecycleResolver(app_overrides=overrides)
     steps = resolver.resolve_as_list()
@@ -436,4 +570,146 @@ async def update_lifecycle_config(app_id: str, body: dict):
         "overrides_applied": list(overrides.keys()),
         "steps": [s.model_dump() for s in steps],
         "coverage": coverage,
+    }
+
+
+# ── COS-096: Live forge surface (ПУ видит коммиты) ─────────────────────
+
+class ForgeLastPushResponse(BaseModel):
+    """Честный статус forge-привязки приложения."""
+    app_id: str
+    repo_path: str
+    bound: bool = True
+    last_push: Optional[dict] = Field(
+        default=None,
+        description="Последний принятый webhook'ом push; null — пушей не было",
+    )
+    recent_commits: list[dict] = Field(
+        default_factory=list,
+        description="Живые коммиты из Gitea (новые впереди); пусто если forge недоступен",
+    )
+    forge_unreachable: Optional[str] = Field(
+        default=None,
+        description="Честная причина, почему живые коммиты не показаны",
+    )
+
+
+@router.get("/api/v1/apps/{app_id}/forge/last-push", response_model=ForgeLastPushResponse)
+async def get_app_forge_last_push(
+    app_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> ForgeLastPushResponse:
+    """Forge-статус приложения: последний webhook-пуш + живые коммиты Gitea.
+
+    Пусто = пусто: без пушей last_push=None (никаких выдуманных коммитов).
+    Gitea недоступен → forge_unreachable с причиной, recent_commits=[],
+    но last_push из кэша всё равно показывается.
+    """
+    from orchestrator.cosmo.api import forge_events
+    from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
+
+    app_model = await db.get(ApplicationModel, app_id)
+    if app_model is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Application '{app_id}' not found",
+        )
+    stmt = (
+        select(RepoBindingModel)
+        .where(RepoBindingModel.app_id == app_id)
+        .order_by(RepoBindingModel.id)
+        .limit(1)
+    )
+    res = await db.execute(stmt)
+    binding = res.scalars().first()
+    if binding is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Application '{app_id}' has no repo binding",
+        )
+
+    repo_path = binding.repo_path
+    last = forge_events.last_push(repo_path)
+
+    recent: list[dict] = []
+    unreachable: Optional[str] = None
+    try:
+        adapter = build_adapter()
+        owner, _, name = repo_path.partition("/")
+        ref = binding.default_branch or "main"
+        commits = adapter.list_commits(owner, name, ref=ref, limit=5)
+        recent = [
+            {"sha": c.sha, "message": c.message, "author": c.author, "timestamp": c.timestamp}
+            for c in commits
+        ]
+    except Exception as exc:  # noqa: BLE001 — честная деградация, не фейл
+        err = forge_http_error(exc, f"commits for {repo_path}")
+        unreachable = err.detail
+
+    return ForgeLastPushResponse(
+        app_id=app_id,
+        repo_path=repo_path,
+        bound=True,
+        last_push=last,
+        recent_commits=recent,
+        forge_unreachable=unreachable,
+    )
+
+
+@router.post("/api/v1/apps/{app_id}/forge/webhook-setup", status_code=status.HTTP_200_OK)
+async def setup_app_forge_webhook(
+    app_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(
+        require_capability(Action.PIPELINE_CONFIGURE, domain_binding="identity")
+    ),
+) -> dict:
+    """Идемпотентный setup webhook живого Gitea для привязанного репо.
+
+    Reuse существующего hook по URL (без дублей); секрет ротируется, если
+    изменился. Возвращает {webhook_id, created}.
+    """
+    from orchestrator.cosmo.api.forge_client import (
+        build_adapter, forge_http_error, webhook_secret,
+    )
+
+    app_model = await db.get(ApplicationModel, app_id)
+    if app_model is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Application '{app_id}' not found",
+        )
+    stmt = (
+        select(RepoBindingModel)
+        .where(RepoBindingModel.app_id == app_id)
+        .order_by(RepoBindingModel.id)
+        .limit(1)
+    )
+    res = await db.execute(stmt)
+    binding = res.scalars().first()
+    if binding is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Application '{app_id}' has no repo binding",
+        )
+
+    owner, _, name = binding.repo_path.partition("/")
+    hook_url = f"{os.getenv('PK_PUBLIC_API_URL', 'http://cosmo-api:8100').rstrip('/')}/api/v1/webhooks/gitea"
+    try:
+        adapter = build_adapter()
+        hook_id, created = adapter.ensure_webhook(
+            owner, name, hook_url, webhook_secret(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"webhook setup for {binding.repo_path}") from exc
+
+    binding.webhook_id = str(hook_id)
+    await db.commit()
+    return {
+        "app_id": app_id,
+        "repo_path": binding.repo_path,
+        "webhook_id": hook_id,
+        "created": created,
+        "url": hook_url,
     }

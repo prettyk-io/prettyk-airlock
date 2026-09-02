@@ -8,19 +8,19 @@ from __future__ import annotations
 import datetime
 import uuid
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db, get_current_principal
-from orchestrator.cosmo.api.domain_guard import require_domain, verify_ownership
+from orchestrator.cosmo.api.deps import get_db, get_current_principal, require_capability
+from orchestrator.cosmo.api.domain_guard import resolve_caller_domain, verify_ownership
 from orchestrator.cosmo.db.models import (
     Application as ApplicationModel,
     Build as BuildModel,
 )
 from orchestrator.cosmo.domain.build_model import Build, BuildStatus
-from orchestrator.cosmo.domain.rbac import PrincipalContext
+from orchestrator.cosmo.domain.rbac import Action, PrincipalContext
 
 router = APIRouter(tags=["builds"])
 
@@ -60,6 +60,7 @@ async def list_app_builds(
     status_f: Optional[str] = Query(None, alias="status", description="Фильтр по статусу"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     principal: PrincipalContext = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> List[Build]:
@@ -68,7 +69,8 @@ async def list_app_builds(
     if not app:
         raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
 
-    verify_ownership(app.domain_id, principal.domain_id, f"Application '{app_id}'")
+    # COS-083: единый резолв домена caller'а (админ — context switch по заголовку)
+    verify_ownership(app.domain_id, resolve_caller_domain(principal, caller_domain), f"Application '{app_id}'")
 
     stmt = select(BuildModel).where(BuildModel.app_id == app_id).order_by(BuildModel.created_at.desc())
     if branch:
@@ -87,15 +89,20 @@ async def list_app_builds(
 async def trigger_app_build(
     app_id: str,
     body: TriggerBuildRequest,
-    principal: PrincipalContext = Depends(get_current_principal),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_capability(Action.BUILD_RUN, domain_binding="identity")),
     db: AsyncSession = Depends(get_db),
 ) -> Build:
-    """Запуск новой сборки приложения с фиксацией commit SHA."""
+    """Запуск новой сборки приложения с фиксацией commit SHA.
+
+    COS-083: write требует capability build:run (не просто principal).
+    """
     app = await db.get(ApplicationModel, app_id)
     if not app:
         raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
 
-    verify_ownership(app.domain_id, principal.domain_id, f"Application '{app_id}'")
+    # COS-083: единый резолв домена caller'а
+    verify_ownership(app.domain_id, resolve_caller_domain(principal, caller_domain), f"Application '{app_id}'")
 
     build_id = f"bld-{uuid.uuid4().hex[:8]}"
     now = datetime.datetime.utcnow()
@@ -104,10 +111,11 @@ async def trigger_app_build(
         id=build_id,
         app_id=app.id,
         domain_id=app.domain_id,
+        title=f"Build {app.id}@{body.commit_sha[:8]}",
         commit_sha=body.commit_sha,
         branch=body.branch,
         status="running",
-        artifacts=[f"oci://registry.kits.corp/{app.name}:{body.commit_sha[:8]}"],
+        artifacts=[f"oci://registry.kits.corp/{app.id}:{body.commit_sha[:8]}"],
         initiator_user_id=body.initiator_user_id or principal.user_id,
         build_logs="Build started in isolated container runner...\nCompilation successful.\n",
         meta=body.meta or {},
@@ -123,6 +131,7 @@ async def trigger_app_build(
 @router.get("/api/v1/builds/{build_id}", response_model=Build)
 async def get_build_details(
     build_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     principal: PrincipalContext = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> Build:
@@ -131,22 +140,26 @@ async def get_build_details(
     if not bm:
         raise HTTPException(status_code=404, detail=f"Build '{build_id}' not found")
 
-    verify_ownership(bm.domain_id, principal.domain_id, f"Build '{build_id}'")
+    verify_ownership(bm.domain_id, resolve_caller_domain(principal, caller_domain), f"Build '{build_id}'")
     return _to_build_schema(bm)
 
 
 @router.post("/api/v1/builds/{build_id}/abort", response_model=Build)
 async def abort_build(
     build_id: str,
-    principal: PrincipalContext = Depends(get_current_principal),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_capability(Action.BUILD_RUN, domain_binding="identity")),
     db: AsyncSession = Depends(get_db),
 ) -> Build:
-    """Прервать выполняющуюся сборку."""
+    """Прервать выполняющуюся сборку.
+
+    COS-083: write требует capability build:run.
+    """
     bm = await db.get(BuildModel, build_id)
     if not bm:
         raise HTTPException(status_code=404, detail=f"Build '{build_id}' not found")
 
-    verify_ownership(bm.domain_id, principal.domain_id, f"Build '{build_id}'")
+    verify_ownership(bm.domain_id, resolve_caller_domain(principal, caller_domain), f"Build '{build_id}'")
 
     if bm.status not in ("pending", "running"):
         raise HTTPException(

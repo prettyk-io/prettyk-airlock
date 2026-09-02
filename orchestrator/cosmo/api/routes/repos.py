@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_capability, require_principal
+from orchestrator.cosmo.domain.rbac import Action, CBRRole, PrincipalContext, Role
 from orchestrator.cosmo.db.models import (
     Run as RunModel,
     PipelinePlan as PlanModel,
@@ -85,11 +86,16 @@ _MOCK_REPO_FILES: dict[str, dict[str, str]] = {
 # ── Schemas ────────────────────────────────────────────────────────────
 
 class FileTreeNode(BaseModel):
-    name: string_name = Field(..., alias="name")
+    name: str = Field(..., alias="name")
     path: str
     kind: str = Field(..., description="'file' | 'dir'")
     size: Optional[int] = None
-    children: Optional[list[FileTreeNode]] = None
+    children: Optional[list["FileTreeNode"]] = None
+
+
+# COS-058: self-referencing forward-ref must be resolved, иначе /openapi.json
+# падает с PydanticUserError (class-not-fully-defined) при построении схемы.
+FileTreeNode.model_rebuild()
 
 
 class FileContentResponse(BaseModel):
@@ -141,8 +147,12 @@ class CommitResponse(BaseModel):
 @router.get("/tree", response_model=list[FileTreeNode])
 async def get_repo_tree(
     repo: str = Query(..., description="Repository full name, e.g. payments/api"),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> list[FileTreeNode]:
-    """Get recursive file tree for a repository."""
+    """Get recursive file tree for a repository.
+
+    COS-068: authentication required (было — анонимный доступ).
+    """
     repo_files = _MOCK_REPO_FILES.get(repo)
     if not repo_files:
         # Generate default structured tree if custom repo
@@ -196,8 +206,12 @@ async def get_repo_tree(
 async def get_repo_file(
     repo: str = Query(..., description="Repository identifier"),
     path: str = Query(..., description="Relative file path"),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> FileContentResponse:
-    """Get text content of a file."""
+    """Get text content of a file.
+
+    COS-068: authentication required.
+    """
     repo_files = _MOCK_REPO_FILES.setdefault(repo, {})
     content = repo_files.get(path)
     if content is None:
@@ -218,8 +232,14 @@ async def get_repo_file(
 @router.put("/file", response_model=FileContentResponse)
 async def save_repo_file(
     body: SaveFileRequest,
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> FileContentResponse:
-    """Save content of a file."""
+    """Save content of a file.
+
+    COS-068: authentication required. TODO(COS-0xx): при переходе с
+    in-memory VFS на реальные forge-репозитории добавить ownership-чек
+    repo → app → domain (сейчас ресурс виртуальный, владельца нет).
+    """
     repo_files = _MOCK_REPO_FILES.setdefault(body.repo, {})
     repo_files[body.path] = body.content
     sha = hashlib.sha256(body.content.encode()).hexdigest()
@@ -229,8 +249,13 @@ async def save_repo_file(
 @router.post("/commit", response_model=CommitResponse)
 async def commit_and_push(
     body: CommitAndPushRequest,
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> CommitResponse:
-    """Commit modified files and push to remote forge branch."""
+    """Commit modified files and push to remote forge branch.
+
+    COS-068: authentication required. TODO(COS-0xx): ownership-чек при
+    переходе на реальные forge-репозитории.
+    """
     repo_files = _MOCK_REPO_FILES.setdefault(body.repo, {})
     for item in body.files:
         repo_files[item.path] = item.content
@@ -249,8 +274,23 @@ async def commit_and_push(
 async def commit_and_run(
     body: CommitAndRunRequest,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(
+        require_capability(Action.SCAN_START, domain_binding="identity")
+    ),
 ) -> CommitResponse:
-    """Commit modified files, push to branch, and immediately trigger pipeline Run."""
+    """Commit modified files, push to branch, and immediately trigger pipeline Run.
+
+    COS-068: creates a Run — same contract as POST /runs (COS-067):
+    SCAN_START capability + identity binding (не-админ триггерит только
+    в своём домене, 403 на чужой body.domain_id).
+    """
+    # COS-068: domain binding — не-админ создаёт Run только в своём домене
+    if not principal.is_system_admin and (body.domain_id or "") != (principal.domain_id or ""):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"domain_id '{body.domain_id}' does not match authenticated principal domain",
+        )
+
     # 1. Save committed files
     repo_files = _MOCK_REPO_FILES.setdefault(body.repo, {})
     for item in body.files:
@@ -260,12 +300,17 @@ async def commit_and_run(
 
     # 2. Trigger Run in database
     run_id = f"run-{uuid.uuid4().hex[:8]}"
+    initiator_role = (
+        principal.roles[0].value
+        if principal.roles and isinstance(principal.roles[0], (Role, CBRRole))
+        else (str(principal.roles[0]) if principal.roles else "user")
+    )
     run = RunModel(
         id=run_id,
         plan_id=body.plan_id,
         trigger="manual",
-        initiator_user_id="web-ide-operator",
-        initiator_role="developer",
+        initiator_user_id=principal.user_id,
+        initiator_role=initiator_role,
         domain_id=body.domain_id,
         status="running",
         findings_refs=[],

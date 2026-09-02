@@ -101,6 +101,11 @@ class Action:
     ZPE_DEPLOY = "zpe:deploy"
     ZPE_ROLLBACK = "zpe:rollback"
 
+    # First-class entity writes (COS-083 capability granularity pass 2)
+    BUILD_RUN = "build:run"          # trigger / abort builds
+    DEPLOY_MANAGE = "deploy:manage"  # create deployments / rollback
+    PROJECT_WRITE = "project:write"  # create/update projects, attach apps, KITS tags
+
 
 # ── Canonical Base Permission Matrix (COS-096) ───────────────────────────────
 
@@ -147,6 +152,10 @@ _PERMISSIONS: Dict[Role, FrozenSet[str]] = {
         "evidence:view_all",
         "report:export",
         "read",
+        # COS-083: service admin — first-class entity writes
+        "build:run",
+        "deploy:manage",
+        "project:write",
     }),
     Role.USER: frozenset({
         "read",
@@ -221,6 +230,10 @@ _CBR_ROLE_CAPABILITIES: Dict[CBRRole, FrozenSet[str]] = {
         Action.DOMAIN_CONFIGURE,
         Action.FINDING_VIEW_ALL,
         Action.EVIDENCE_VIEW_ALL,
+        # COS-083: first-class entity writes
+        Action.BUILD_RUN,
+        Action.DEPLOY_MANAGE,
+        Action.PROJECT_WRITE,
     }),
     CBRRole.DEVELOPER_LEAD: frozenset({
         Action.READ,
@@ -233,6 +246,10 @@ _CBR_ROLE_CAPABILITIES: Dict[CBRRole, FrozenSet[str]] = {
         Action.RELEASE_SUBMIT,
         Action.RELEASE_DEPLOY,
         Action.ENVELOPE_EXPORT,
+        # COS-083: first-class entity writes
+        Action.BUILD_RUN,
+        Action.DEPLOY_MANAGE,
+        Action.PROJECT_WRITE,
     }),
     CBRRole.DEVELOPER: frozenset({
         Action.READ,
@@ -240,6 +257,8 @@ _CBR_ROLE_CAPABILITIES: Dict[CBRRole, FrozenSet[str]] = {
         Action.REPORT_EXPORT,
         Action.SCAN_START,
         Action.FINDING_VIEW_TEAM,
+        # COS-083: developer triggers builds
+        Action.BUILD_RUN,
     }),
     CBRRole.QA_ENGINEER: frozenset({
         Action.READ,
@@ -249,6 +268,8 @@ _CBR_ROLE_CAPABILITIES: Dict[CBRRole, FrozenSet[str]] = {
         Action.FINDING_VIEW_ALL,
         Action.EVIDENCE_VIEW_ALL,
         Action.ENVELOPE_VERIFY,
+        # COS-083: QA triggers builds for testing
+        Action.BUILD_RUN,
     }),
     CBRRole.AUDITOR_INTERNAL: frozenset({
         Action.READ,
@@ -283,6 +304,8 @@ _CBR_ROLE_CAPABILITIES: Dict[CBRRole, FrozenSet[str]] = {
         Action.ENVELOPE_EXPORT,
         Action.ENVELOPE_IMPORT,
         Action.ENVELOPE_VERIFY,
+        # COS-083: release manager operates deployments
+        Action.DEPLOY_MANAGE,
     }),
     CBRRole.ZONE_OPERATOR_ZPE: frozenset({
         Action.READ,
@@ -292,6 +315,8 @@ _CBR_ROLE_CAPABILITIES: Dict[CBRRole, FrozenSet[str]] = {
         Action.ZPE_ROLLBACK,
         Action.ENVELOPE_IMPORT,
         Action.ENVELOPE_VERIFY,
+        # COS-083: zone operator operates deployments in own zone
+        Action.DEPLOY_MANAGE,
     }),
     CBRRole.PRODUCT_OWNER: frozenset({
         Action.READ,
@@ -299,6 +324,8 @@ _CBR_ROLE_CAPABILITIES: Dict[CBRRole, FrozenSet[str]] = {
         Action.TELEMETRY_VIEW,
         Action.REPORT_EXPORT,
         Action.FINDING_VIEW_TEAM,
+        # COS-083: product owner owns КИТС project structure
+        Action.PROJECT_WRITE,
     }),
 }
 
@@ -326,6 +353,8 @@ _ZONE_ZR_ACTIONS: FrozenSet[str] = frozenset({
     Action.ACT_SIGN, Action.ACT_VIEW_ALL, Action.ACT_VERIFY,
     Action.ENVELOPE_EXPORT, Action.ENVELOPE_VERIFY,
     Action.PIPELINE_CONFIGURE, Action.BRICK_MANAGE, Action.DOMAIN_CONFIGURE, Action.RBAC_MANAGE, Action.AUDIT_READ_ALL,
+    # COS-083: first-class entity writes in ЗР (development zone)
+    Action.BUILD_RUN, Action.DEPLOY_MANAGE, Action.PROJECT_WRITE,
 })
 
 _ZONE_ZT_ACTIONS: FrozenSet[str] = frozenset({
@@ -339,6 +368,8 @@ _ZONE_ZT_ACTIONS: FrozenSet[str] = frozenset({
     Action.ACT_SIGN, Action.ACT_VIEW_ALL, Action.ACT_VERIFY,
     Action.ENVELOPE_EXPORT, Action.ENVELOPE_IMPORT, Action.ENVELOPE_VERIFY,
     Action.AUDIT_READ_ALL,
+    # COS-083: builds и деплои в тестовой зоне; администрация проектов — ЗР
+    Action.BUILD_RUN, Action.DEPLOY_MANAGE,
 })
 
 _ZONE_ZPE_ACTIONS: FrozenSet[str] = frozenset({
@@ -348,6 +379,8 @@ _ZONE_ZPE_ACTIONS: FrozenSet[str] = frozenset({
     Action.ENVELOPE_IMPORT, Action.ENVELOPE_VERIFY,
     Action.ACT_VIEW_ALL, Action.ACT_VERIFY,
     Action.AUDIT_READ_ALL,
+    # COS-083: эксплуатационные деплои/откаты в продуктиве
+    Action.DEPLOY_MANAGE,
 })
 
 _ZONE_ALLOWED_ACTIONS: Dict[ZoneType, FrozenSet[str]] = {

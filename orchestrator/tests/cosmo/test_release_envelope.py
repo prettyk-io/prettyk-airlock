@@ -18,7 +18,7 @@ import copy
 import hashlib
 import json
 import pytest
-
+from cosmo.domain.rbac import PrincipalContext, Role
 from cosmo.ledger.release_envelope import (
     DigitalReleaseEnvelope,
     EnvelopeArtifactDigest,
@@ -413,6 +413,15 @@ async def test_api_get_envelope_route():
         release_id="rel-api-03",
         signer="officer_alex",
         caller_domain="dom-corp",
+        # COS-067: хендлер резолвит caller через principal (identity-путь)
+        principal=PrincipalContext(
+            user_id="unit_officer",
+            roles=[Role.ADMIN_SEC],
+            domain_id="dom-corp",
+            zone="zr",
+            is_authenticated=True,
+            is_system_admin=False,
+        ),
         db=mock_db,
     )
 

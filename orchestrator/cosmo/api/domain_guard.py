@@ -52,3 +52,26 @@ def verify_ownership(
     """
     if not resource_domain_id or resource_domain_id != caller_domain_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{resource_name} not found")
+
+
+def resolve_caller_domain(principal, requested_domain: Optional[str]) -> str:
+    """COS-067 + COS-083: единый контракт резолва домена caller'а.
+
+    Один путь резолва для всех route-поверхностей (инвариант проверяется
+    тестом-сканером test_domain_resolve_invariant.py):
+
+      system admin : X-Cosmo-Domain (легитимный context switch)
+                     → principal.domain_id (identity fallback, None-override
+                       в тестах остаётся валидным)
+                     → "default"
+      не-админ     : principal.domain_id (заголовок НЕ может расширить
+                     чтение/запись на чужой домен)
+                     → legacy-fallback requested_domain → "default"
+    """
+    # COS-083: прямой вызов хендлера (unit-стиль) даёт дефолт FastAPI —
+    # объект Header вместо строки; трактуем не-str как отсутствующий.
+    if not isinstance(requested_domain, str):
+        requested_domain = None
+    if principal.is_system_admin:
+        return (requested_domain or principal.domain_id or "default").strip()
+    return (principal.domain_id or requested_domain or "default").strip()

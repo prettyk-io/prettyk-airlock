@@ -14,14 +14,14 @@ from __future__ import annotations
 
 import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db, require_capability
-from orchestrator.cosmo.api.domain_guard import require_domain, verify_ownership
-from orchestrator.cosmo.domain.rbac import Action
+from orchestrator.cosmo.api.deps import get_current_principal, get_db, require_capability
+from orchestrator.cosmo.api.domain_guard import resolve_caller_domain, verify_ownership
+from orchestrator.cosmo.domain.rbac import Action, PrincipalContext
 from orchestrator.cosmo.db.models import (
     Release as ReleaseModel,
     Run as RunModel,
@@ -113,9 +113,11 @@ def _to_release_schema(r: ReleaseModel) -> Release:
         domain_id=r.domain_id,
         plan_id=r.plan_id,
         run_ids=r.run_ids or [],
-        trigger=r.trigger,  # type: ignore
+        # COS-067: у Release-модели нет колонок trigger/changelog —
+        # читаем безопасно, Pydantic-схема имеет дефолты.
+        trigger=getattr(r, "trigger", None) or "manual",  # type: ignore
         status=r.status,  # type: ignore
-        changelog=r.changelog or "",
+        changelog=getattr(r, "changelog", None) or "",
         version=r.version or "",
         artifacts=r.artifacts or [],
         approvals=[
@@ -136,12 +138,15 @@ def _to_release_schema(r: ReleaseModel) -> Release:
 async def list_releases(
     domain_id: str | None = Query(None),
     status_f: str | None = Query(None, alias="status"),
-    caller_domain: str = Depends(require_domain),
+    # COS-067 UX: заголовок не обязателен — не-админ резолвится по identity
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> list[Release]:
     stmt = select(ReleaseModel).order_by(ReleaseModel.created_at.desc())
-    # COS-061: scope to caller's domain
-    stmt = stmt.where(ReleaseModel.domain_id == caller_domain)
+    # COS-061 + COS-067: scope to caller's domain; не-админ — по identity
+    caller = resolve_caller_domain(principal, caller_domain)
+    stmt = stmt.where(ReleaseModel.domain_id == caller)
     if status_f:
         stmt = stmt.where(ReleaseModel.status == status_f)
     res = await db.execute(stmt)
@@ -151,12 +156,21 @@ async def list_releases(
 @router.post("", response_model=Release, status_code=status.HTTP_201_CREATED)
 async def create_release(
     body: CreateReleaseRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
-    _guard: None = Depends(require_capability(Action.RELEASE_CREATE)),
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_CREATE, domain_binding="identity")),
 ) -> Release:
     domain = await db.get(DomainModel, body.domain_id)
     if domain is None:
         raise HTTPException(404, f"Domain '{body.domain_id}' not found")
+
+    # COS-091: in-body auth-решение заменено единым резолв-контрактом —
+    # не-админ создаёт релиз только в своём (резолвнутом) домене
+    if not principal.is_system_admin and body.domain_id != resolve_caller_domain(principal, caller_domain):
+        raise HTTPException(
+            403,
+            f"domain_id '{body.domain_id}' does not match authenticated principal domain",
+        )
 
     plan = await db.get(PlanModel, body.plan_id)
     if plan is None:
@@ -183,10 +197,10 @@ async def create_release(
         domain_id=body.domain_id,
         plan_id=body.plan_id,
         run_ids=body.run_ids,
-        trigger=body.trigger,
+        # COS-067: Release-модель не имеет колонок trigger/changelog —
+        # передача вызывала TypeError → 500 на валидном теле.
         status="draft",
-        changelog=body.changelog,
-        version=body.version,
+        version=body.version or "1.0.0",
         artifacts=[],
         approvals=[],
     )
@@ -197,19 +211,38 @@ async def create_release(
 
 
 @router.get("/{release_id}", response_model=Release)
-async def get_release(release_id: str, caller_domain: str = Depends(require_domain), db: AsyncSession = Depends(get_db)) -> Release:
+async def get_release(
+    release_id: str,
+    # COS-067 UX: заголовок не обязателен — не-админ резолвится по identity
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> Release:
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
-    verify_ownership(rel.domain_id, caller_domain, f"Release '{release_id}'")
+    verify_ownership(rel.domain_id, resolve_caller_domain(principal, caller_domain), f"Release '{release_id}'")
     return _to_release_schema(rel)
 
 
 @router.post("/{release_id}/submit", response_model=Release)
-async def submit_release(release_id: str, db: AsyncSession = Depends(get_db)) -> Release:
+async def submit_release(
+    release_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    # COS-091: было анонимно — guard pass 4 ( RELEASE_SUBMIT: lead/relmgr, ЗР)
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_SUBMIT, domain_binding="identity")),
+) -> Release:
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
+    # COS-091: ghost-404 по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
     if rel.status != "draft":
         raise HTTPException(400, f"Release not in draft status (current: {rel.status})")
     rel.status = "pending_review"
@@ -222,11 +255,22 @@ async def submit_release(release_id: str, db: AsyncSession = Depends(get_db)) ->
 async def approve_release(
     release_id: str,
     body: ApprovalRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    # COS-091: было анонимно — guard pass 4 (RELEASE_APPROVE: security officer —
+    # SoD: создатель/релиз-менеджер утверждать не может)
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_APPROVE, domain_binding="identity")),
 ) -> Release:
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
+    # COS-091: ghost-404 по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
     if rel.status != "pending_review":
         raise HTTPException(400, f"Release not in pending_review (current: {rel.status})")
 
@@ -236,13 +280,27 @@ async def approve_release(
         comment=body.comment,
         signature=body.signature,
     )
+    # COS-091: mode="json" — decided_at (datetime) сериализуется для JSONB,
+    # иначе asyncpg падает на UPDATE approvals.
     approvals = list(rel.approvals or [])
-    approvals.append(approval.model_dump())
+    approvals.append(approval.model_dump(mode="json"))
 
     rel.status = "approved"
     rel.approvals = approvals
     await db.commit()
     await db.refresh(rel)
+
+    # COS-055: durable notification (non-blocking, не ломает ответ)
+    try:
+        from orchestrator.cosmo.notifications.integration import notify_release_approved_safe
+        notify_release_approved_safe(
+            release_id=rel.id,
+            domain_id=rel.domain_id or "",
+            decided_by=body.decided_by or "",
+        )
+    except Exception:
+        pass
+
     return _to_release_schema(rel)
 
 
@@ -250,11 +308,21 @@ async def approve_release(
 async def reject_release(
     release_id: str,
     body: ApprovalRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    # COS-091: было анонимно — guard pass 4 (RELEASE_REJECT: security officer)
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_REJECT, domain_binding="identity")),
 ) -> Release:
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
+    # COS-091: ghost-404 по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
     if rel.status != "pending_review":
         raise HTTPException(400, f"Release not in pending_review (current: {rel.status})")
 
@@ -264,8 +332,9 @@ async def reject_release(
         comment=body.comment,
         signature=body.signature,
     )
+    # COS-091: mode="json" — см. approve (datetime → JSONB)
     approvals = list(rel.approvals or [])
-    approvals.append(approval.model_dump())
+    approvals.append(approval.model_dump(mode="json"))
 
     rel.status = "rejected"
     rel.approvals = approvals
@@ -277,11 +346,21 @@ async def reject_release(
 @router.post("/{release_id}/deploy", response_model=Release)
 async def deploy_release(
     release_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    # COS-091: было анонимно — guard pass 4 (RELEASE_DEPLOY: lead/relmgr, ЗТ)
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_DEPLOY, domain_binding="identity")),
 ) -> Release:
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
+    # COS-091: ghost-404 по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
     if rel.status != "approved":
         raise HTTPException(400, f"Release must be approved before deploy (current: {rel.status})")
     rel.status = "deploying"
@@ -291,10 +370,25 @@ async def deploy_release(
 
 
 @router.delete("/{release_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_release(release_id: str, db: AsyncSession = Depends(get_db)) -> None:
+async def delete_release(
+    release_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    # COS-091: было анонимно — guard pass 4. Отдельного release:delete нет —
+    # владелец жизненного цикла определяется RELEASE_CREATE (автор управляет
+    # своим релизом); зонная матрица ЗР допускает.
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_CREATE, domain_binding="identity")),
+) -> None:
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
+    # COS-091: ghost-404 по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
     await db.delete(rel)
     await db.commit()
 
@@ -307,8 +401,9 @@ async def delete_release(release_id: str, db: AsyncSession = Depends(get_db)) ->
 async def transfer_release(
     release_id: str,
     body: TransferRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
-    _guard: None = Depends(require_capability(Action.RELEASE_TRANSFER)),
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_TRANSFER, domain_binding="identity")),
 ) -> Release:
     """COS-054: трансфер релиза в следующую зону (ЗР→ЗТ→ЗПЭ).
 
@@ -324,6 +419,14 @@ async def transfer_release(
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
+
+    # COS-067/COS-083: domain binding — ownership по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
 
     # 1. Статус должен быть deployed
     if rel.status != "deployed":
@@ -383,15 +486,39 @@ async def transfer_release(
     )
 
     # 5. Обновляем release
+    # COS-095: mode="json" для единообразия с approve/reject (COS-091) —
+    # datetime-поля сериализуются, JSONB-запись не зависит от типов Python
     history = list(rel.transfer_history or [])
-    history.append(transfer.model_dump())
+    history.append(transfer.model_dump(mode="json"))
     rel.transfer_history = history
     rel.current_zone = target
+
+    # COS-055: transactional outbox — событие transfer в той же транзакции,
+    # что и сам transfer. Перезапуск процесса не теряет событие.
+    from orchestrator.cosmo.notifications.manager import get_manager
+    manager = get_manager()
+    await manager.record_event(
+        db,
+        event_type="transfer_completed",
+        aggregate_type="transfer",
+        aggregate_id=f"{rel.id}:{current}->{target}",
+        correlation_id=rel.id,
+        title=f"Release {rel.id} transferred to {target.upper()}",
+        message=f"Release {rel.id}: {current.upper()} → {target.upper()}",
+        payload={
+            "release_id": rel.id,
+            "domain_id": rel.domain_id,
+            "plan_id": rel.plan_id,
+            "from_zone": current,
+            "to_zone": target,
+            "initiated_by": body.initiated_by,
+        },
+    )
 
     await db.commit()
     await db.refresh(rel)
 
-    # COS-065: нотификация о трансфере
+    # COS-065: in-memory каналы о трансфере (log/webhook — legacy fan-out)
     _try_notify_transfer(rel, current, target, body.initiated_by)
 
     return _to_release_schema(rel)
@@ -401,8 +528,9 @@ async def transfer_release(
 async def transfer_release_v2(
     release_id: str,
     body: TransferReleaseRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
-    _guard: None = Depends(require_capability(Action.RELEASE_TRANSFER)),
+    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_TRANSFER, domain_binding="identity")),
 ) -> Release:
     """SAN-009: Трансфер релиза с цифровой подписью, 2FA и линейной валидацией зон.
 
@@ -414,6 +542,14 @@ async def transfer_release_v2(
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
+
+    # COS-067/COS-083: domain binding — ownership по единому резолву для не-админа
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
 
     if rel.status != "deployed":
         raise HTTPException(400, f"Release must be deployed before transfer (current: {rel.status})")
@@ -454,7 +590,8 @@ async def transfer_release_v2(
         comment=body.transfer_notes or "",
     )
     # Add SAN-009 fields to the transfer record
-    transfer_dict = transfer.model_dump()
+    # COS-095: mode="json" — см. transfer v1 (единообразие сериализации)
+    transfer_dict = transfer.model_dump(mode="json")
     transfer_dict["officer_name"] = body.officer_name
     transfer_dict["signature"] = body.sign_signature
     transfer_dict["token_2fa"] = body.token_2fa
@@ -465,8 +602,33 @@ async def transfer_release_v2(
     rel.transfer_history = history
     rel.current_zone = expected_next
 
+    # COS-055: transactional outbox (v2 transfer, SAN-009 signature flow)
+    from orchestrator.cosmo.notifications.manager import get_manager
+    manager = get_manager()
+    await manager.record_event(
+        db,
+        event_type="transfer_completed",
+        aggregate_type="transfer",
+        aggregate_id=f"{rel.id}:{current}->{expected_next}",
+        correlation_id=rel.id,
+        title=f"Release {rel.id} transferred to {expected_next.upper()}",
+        message=f"Release {rel.id}: {current.upper()} → {expected_next.upper()}",
+        payload={
+            "release_id": rel.id,
+            "domain_id": rel.domain_id,
+            "plan_id": rel.plan_id,
+            "from_zone": current,
+            "to_zone": expected_next,
+            "initiated_by": body.officer_name,
+            "signed": True,
+        },
+    )
+
     await db.commit()
     await db.refresh(rel)
+
+    # COS-065: in-memory каналы (legacy fan-out)
+    _try_notify_transfer(rel, current, expected_next, body.officer_name)
 
     return _to_release_schema(rel)
 
@@ -476,6 +638,9 @@ async def transfer_release_v2(
 @router.post("/envelope/verify", response_model=VerifyEnvelopeResponse)
 async def verify_release_envelope(
     body: dict,
+    # COS-091: было анонимно — закрытие crypto-oracle (ENVELOPE_VERIFY:
+    # qa/relmgr/auditors); pure-функция, доменного якоря нет
+    principal: PrincipalContext = Depends(require_capability(Action.ENVELOPE_VERIFY, domain_binding="identity")),
 ) -> VerifyEnvelopeResponse:
     """COS-109: Проверить цифровую подпись и целостность конверта релиза."""
     is_valid = verify_envelope_body(body)
@@ -492,14 +657,16 @@ async def verify_release_envelope(
 async def get_release_envelope(
     release_id: str,
     signer: str = Query("sec_officer", description="ID оператора/офицера ИБ для подписи"),
-    caller_domain: str = Depends(require_domain),
+    # COS-067 UX: заголовок не обязателен — не-админ резолвится по identity
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """COS-109: Выгрузить подписанный криптографический цифровой конверт релиза."""
     rel = await db.get(ReleaseModel, release_id)
     if rel is None:
         raise HTTPException(404, f"Release '{release_id}' not found")
-    verify_ownership(rel.domain_id, caller_domain, f"Release '{release_id}'")
+    verify_ownership(rel.domain_id, resolve_caller_domain(principal, caller_domain), f"Release '{release_id}'")
 
     current_z = rel.current_zone or "zr"
     target_z = next_zone(current_z) or current_z
@@ -520,19 +687,20 @@ async def get_release_envelope(
 
 
 def _try_notify_transfer(rel: ReleaseModel, from_zone: str, to_zone: str, initiated_by: str) -> None:
-    """COS-065: фоновая нотификация о трансфере (не блокирует ответ)."""
-    try:
-        from cosmo.notifications.service import get_dispatcher, notify_transfer_completed
+    """COS-055: durable notification о трансфере (не блокирует ответ).
 
-        dispatcher = get_dispatcher()
-        notify_transfer_completed(
-            dispatcher,
-            domain_id=rel.domain_id,
-            run_id="",
-            plan_id=rel.plan_id,
+    Event идёт в NotificationManager outbox (PostgreSQL) + legacy in-memory
+    dispatcher внутри менеджера. Ошибки не ломают ответ.
+    """
+    try:
+        from orchestrator.cosmo.notifications.integration import notify_transfer_durable_safe
+
+        notify_transfer_durable_safe(
             release_id=rel.id,
+            domain_id=rel.domain_id or "",
             from_zone=from_zone,
             to_zone=to_zone,
+            initiated_by=initiated_by or "",
         )
     except Exception:
         pass  # нотификация не должна ломать ответ

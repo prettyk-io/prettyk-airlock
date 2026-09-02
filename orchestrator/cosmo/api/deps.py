@@ -8,7 +8,7 @@ import base64
 import json
 from collections.abc import AsyncGenerator
 from typing import Any, List, Optional
-from fastapi import Cookie, Depends, Header, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,7 +73,13 @@ async def get_current_principal(
 
     1. Читает заголовок Authorization: Bearer <token> или cookie session_token.
     2. Если авторизация отсутствует или токен невалиден -> HTTP 401.
-    3. Извлекает пользователя, email, роли (включая 12 ролей ЦБ из CBRRole),
+    3. COS-085: legacy opaque-bearer контракт ЗАКРЫТ — принимаются только
+       JWT-формат токены (ey... с payload-сегментом). Ранее любой opaque
+       токен (`garbage.sig.x`) аутентифицировался как Role.USER, а `:`-формат
+       (`sub:roles:email`) и keyword-формат (`*admin*` в строке токена)
+       позволяли подделать роли вплоть до system admin — всё это теперь 401.
+       Проверка подписи/сессии (Better Auth wiring) — отдельный шаг интеграции.
+    4. Извлекает пользователя, email, роли (включая 12 ролей ЦБ из CBRRole),
        зону (X-Cosmo-Zone) и team scopes.
     """
     auth_str = _clean_str(authorization)
@@ -107,10 +113,15 @@ async def get_current_principal(
             detail="401_UNAUTHORIZED: Missing or invalid credentials",
         )
 
-    if any(bad in raw_token.lower() for bad in ("invalid", "expired", "corrupted", "null", "none", "0000")):
+    # COS-085: opaque-bearer legacy контракт закрыт. Единственный легитимный
+    # формат — JWT (ey... с payload-сегментом). Бывший keyword-blacklist
+    # ("invalid"/"expired"/.../"0000") поглощён этим правилом; он же давал
+    # ложные 401 на валидные JWT, чей base64-payload содержал подстроку
+    # вроде "0000".
+    if not (raw_token.startswith("ey") and raw_token.count(".") >= 1):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="401_UNAUTHORIZED: Missing or invalid credentials",
+            detail="401_UNAUTHORIZED: opaque bearer tokens are not accepted",
         )
 
     # Дефолтные значения
@@ -121,43 +132,26 @@ async def get_current_principal(
     is_admin = False
     auth_claims: dict[str, Any] = {}
 
-    # Попытка парсинга структурированного / JWT токена
-    if raw_token.startswith("ey") and raw_token.count(".") >= 1:
-        try:
-            payload_b64 = raw_token.split(".")[1]
-            padded = payload_b64 + "=" * (-len(payload_b64) % 4)
-            claims = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-            user_id = claims.get("sub") or claims.get("user_id") or user_id
-            email = claims.get("email") or email
-            if "roles" in claims:
-                roles = [_parse_role(r) for r in claims["roles"]]
-            if "scopes" in claims:
-                scopes = list(claims["scopes"])
-            is_admin = bool(claims.get("is_admin", False))
-            auth_claims = claims
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="401_UNAUTHORIZED: Missing or invalid credentials",
-            )
-    elif ":" in raw_token:
-        parts = raw_token.split(":")
-        user_id = parts[0]
-        if len(parts) > 1 and parts[1]:
-            roles = [_parse_role(r) for r in parts[1].split(",")]
-        if len(parts) > 2 and parts[2]:
-            email = parts[2]
-    else:
-        if "admin" in raw_token.lower() or "officer" in raw_token.lower():
-            if "officer" in raw_token.lower():
-                roles.append(CBRRole.SECURITY_OFFICER)
-            else:
-                roles.append(Role.ADMIN_SEC)
-            is_admin = True
-        elif "developer" in raw_token.lower():
-            roles.append(CBRRole.DEVELOPER)
-        elif "qa" in raw_token.lower():
-            roles.append(CBRRole.QA_ENGINEER)
+    # COS-031/COS-085: единственный путь аутентификации — JWT claims.
+    # Подпись на этом слое не проверяется (контракт COS-031; проверка
+    # сессии — зона будущего Better Auth wiring). Невалидный payload → 401.
+    try:
+        payload_b64 = raw_token.split(".")[1]
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        user_id = claims.get("sub") or claims.get("user_id") or user_id
+        email = claims.get("email") or email
+        if "roles" in claims:
+            roles = [_parse_role(r) for r in claims["roles"]]
+        if "scopes" in claims:
+            scopes = list(claims["scopes"])
+        is_admin = bool(claims.get("is_admin", False))
+        auth_claims = claims
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="401_UNAUTHORIZED: Missing or invalid credentials",
+        )
 
     # Если роли переданы в явном заголовке
     if roles_hdr:
@@ -195,20 +189,68 @@ async def get_current_principal(
 
 # ── Guard factory (COS-032) ──
 
-def require_capability(action: str, target_scope: str | None = None):
-    """Фабрика FastAPI dependency для проверки RBAC-доступа."""
+def require_capability(
+    action: str,
+    target_scope: str | None = None,
+    domain_binding: str = "header",
+):
+    """Фабрика FastAPI dependency для проверки RBAC-доступа.
+
+    domain_binding (COS-067 domain binding hardening):
+      - "header" (default, legacy COS-032/COS-058): контекст домена берётся
+        из X-Cosmo-Domain/domain_id (400 — нет, 404 — домена нет в БД).
+        Заголовок НЕ связывается с identity. Используется transfer-маршрутами:
+        их binding реализован на уровне обработчика (COS-066, anti-spoofing).
+      - "header_bound": то же + явный отказ 403, если запрошенный домен не
+        совпадает с principal.domain_id не-админа (spoof → 403 до проверки
+        существования — без утечки существования доменов).
+      - "identity" (рекомендуемый): контекст домена = principal.domain_id;
+        клиентский заголовок не требуется и не влияет на решение (UX:
+        избыточный 400 устранён). Binding по построению.
+    """
 
     async def _guard(
         principal: PrincipalContext = Depends(get_current_principal),
         db: AsyncSession = Depends(get_db),
+        x_cosmo_domain: Optional[str] = Header(None, alias="X-Cosmo-Domain"),
+        domain_id_query: Optional[str] = Query(None),
     ) -> PrincipalContext:
         # COS-032: System admin bypasses domain and RBAC checks
         if principal.is_system_admin:
             return principal
 
-        # Non-admin: check domain + RBAC
-        from orchestrator.cosmo.api.domain_guard import require_domain as _rd
-        domain_id = await _rd()
+        identity_domain = (principal.domain_id or "").strip()
+
+        if domain_binding == "identity":
+            # COS-067: контекст = identity домен principal; заголовок игнорируется
+            domain_id = identity_domain or "default"
+        elif domain_binding == "header_bound":
+            raw_requested = x_cosmo_domain or domain_id_query
+            requested = raw_requested.strip() if raw_requested else None
+            if not requested:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="X-Cosmo-Domain header or domain_id query parameter required",
+                )
+            # COS-067: binding ДО проверки существования — spoof чужого домена
+            # даёт единообразный 403 без утечки существования доменов.
+            if identity_domain and requested != identity_domain:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        f"X-Cosmo-Domain '{requested}' does not match "
+                        f"authenticated principal domain"
+                    ),
+                )
+            from orchestrator.cosmo.api.domain_guard import require_domain as _rd
+            domain_id = await _rd(x_cosmo_domain=x_cosmo_domain, domain_id=domain_id_query, db=db)
+        else:
+            # "header" — legacy поведение (COS-058 fix: реальные значения,
+            # а не marker-объекты Header/Query).
+            from orchestrator.cosmo.api.domain_guard import require_domain as _rd
+            domain_id = await _rd(x_cosmo_domain=x_cosmo_domain, domain_id=domain_id_query, db=db)
+
+        # Non-admin: check domain + RBAC.
 
         rbac = await _load_domain_rbac(domain_id, db)
 
@@ -231,6 +273,43 @@ def require_capability(action: str, target_scope: str | None = None):
                 detail=f"Action '{action}' forbidden for roles {role_names} in zone '{principal.zone}'",
             )
 
+        return principal
+
+    return _guard
+
+
+def require_principal():
+    """COS-068: authentication-only guard (без capability и домена).
+
+    Базовый барьер для read-поверхностей: get_current_principal сам
+    возвращает 401 для анонима. Любой аутентифицированный principal
+    проходит; domain-scoping при необходимости выполняет хендлер.
+    """
+
+    async def _guard(
+        principal: PrincipalContext = Depends(get_current_principal),
+    ) -> PrincipalContext:
+        return principal
+
+    return _guard
+
+
+def require_system_admin():
+    """COS-068: system-admin-only guard для привилегированных мутаций.
+
+    Применяется там, где capability-модель не покрывает операцию
+    (управление доменами, прямая запись в audit trail, очистка
+    артефактов): 401 — аноним, 403 — аутентифицированный не-админ.
+    """
+
+    async def _guard(
+        principal: PrincipalContext = Depends(get_current_principal),
+    ) -> PrincipalContext:
+        if not principal.is_system_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="System administrator role required",
+            )
         return principal
 
     return _guard

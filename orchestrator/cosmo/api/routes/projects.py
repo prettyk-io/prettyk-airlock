@@ -13,14 +13,14 @@ LR-001 / LR-005: Projects & KITS REST API.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_current_principal, get_db
-from orchestrator.cosmo.api.domain_guard import verify_ownership
+from orchestrator.cosmo.api.deps import get_current_principal, get_db, require_capability, require_principal
+from orchestrator.cosmo.api.domain_guard import resolve_caller_domain, verify_ownership
 from orchestrator.cosmo.db.models import (
     Application as ApplicationModel,
 )
@@ -36,7 +36,7 @@ from orchestrator.cosmo.domain.project_model import (
     ProjectTeam,
     KitsTag,
 )
-from orchestrator.cosmo.domain.rbac import PrincipalContext
+from orchestrator.cosmo.domain.rbac import Action, PrincipalContext
 
 router = APIRouter(tags=["projects"])
 
@@ -85,6 +85,16 @@ class ApplicationListItem(BaseModel):
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
+async def _caller_domain_app_ids(db: AsyncSession, caller_domain: str) -> Set[str]:
+    """COS-083: id приложений домена caller'а.
+
+    Project не имеет собственного domain_id (LR-001, миграции заморожены),
+    поэтому доменная видимость проекта выводится из его приложений.
+    """
+    res = await db.execute(select(ApplicationModel.id).where(ApplicationModel.domain_id == caller_domain))
+    return {row[0] for row in res.all()}
+
+
 def _to_project_schema(pm: ProjectModel) -> Project:
     return Project(
         id=pm.id,
@@ -114,26 +124,52 @@ async def list_projects(
     owner_team: Optional[str] = Query(None, description="Фильтр по команде владельца"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> List[Project]:
-    """Список проектов с фильтрацией."""
+    """Список проектов с фильтрацией.
+
+    COS-068: authentication required (было — анонимный листинг).
+    COS-083: доменный scoping — не-админ видит только проекты, у которых
+    есть хотя бы одно приложение его домена; application_ids в payload
+    отфильтрованы до приложений своего домена (без утечки чужих привязок).
+    """
     stmt = select(ProjectModel).order_by(ProjectModel.created_at.desc())
     if search:
         stmt = stmt.where(ProjectModel.name.ilike(f"%{search}%"))
     if owner_team:
         stmt = stmt.where(ProjectModel.owner_team == owner_team)
-    stmt = stmt.offset(offset).limit(limit)
     res = await db.execute(stmt)
-    return [_to_project_schema(p) for p in res.scalars().all()]
+    projects = list(res.scalars().all())
+
+    if not principal.is_system_admin:
+        caller = resolve_caller_domain(principal, caller_domain)
+        visible_ids = await _caller_domain_app_ids(db, caller)
+        scoped: list[Project] = []
+        for p in projects:
+            own = sorted(set(p.application_ids or []) & visible_ids)
+            if not own:
+                continue
+            schema = _to_project_schema(p)
+            schema.application_ids = own
+            scoped.append(schema)
+        return scoped[offset:offset + limit]
+
+    projects = projects[offset:offset + limit]
+    return [_to_project_schema(p) for p in projects]
 
 
 @router.post("/api/v1/projects", response_model=Project, status_code=status.HTTP_201_CREATED)
 async def create_project(
     body: CreateProjectRequest,
-    principal: PrincipalContext = Depends(get_current_principal),
+    principal: PrincipalContext = Depends(require_capability(Action.PROJECT_WRITE, domain_binding="identity")),
     db: AsyncSession = Depends(get_db),
 ) -> Project:
-    """Создать новый проект."""
+    """Создать новый проект.
+
+    COS-083: write требует capability project:write (не просто principal).
+    """
     existing = await db.get(ProjectModel, body.id)
     if existing:
         raise HTTPException(status_code=409, detail=f"Project '{body.id}' already exists")
@@ -156,23 +192,47 @@ async def create_project(
 
 
 @router.get("/api/v1/projects/{project_id}", response_model=Project)
-async def get_project(project_id: str, db: AsyncSession = Depends(get_db)) -> Project:
+async def get_project(
+    project_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> Project:
+    """COS-068: authentication required. COS-083: доменный scoping для не-админа."""
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
-    return _to_project_schema(pm)
+
+    schema = _to_project_schema(pm)
+    if not principal.is_system_admin:
+        caller = resolve_caller_domain(principal, caller_domain)
+        visible_ids = await _caller_domain_app_ids(db, caller)
+        own = sorted(set(pm.application_ids or []) & visible_ids)
+        if not own:
+            # ghost: чужой (или пустой в чужих доменах) проект не раскрываем
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        schema.application_ids = own
+    return schema
 
 
 @router.put("/api/v1/projects/{project_id}", response_model=Project)
 async def update_project(
     project_id: str,
     body: UpdateProjectRequest,
-    principal: PrincipalContext = Depends(get_current_principal),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_capability(Action.PROJECT_WRITE, domain_binding="identity")),
     db: AsyncSession = Depends(get_db),
 ) -> Project:
+    """COS-083: write требует capability project:write + доменная видимость."""
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    if not principal.is_system_admin:
+        caller = resolve_caller_domain(principal, caller_domain)
+        visible_ids = await _caller_domain_app_ids(db, caller)
+        if not (set(pm.application_ids or []) & visible_ids):
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
     if body.name is not None:
         pm.name = body.name
@@ -195,8 +255,11 @@ async def update_project(
 @router.get("/api/v1/projects/{project_id}/apps")
 async def list_project_apps(
     project_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ):
+    """COS-068: authentication required. COS-083: не-админ видит только apps своего домена."""
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
@@ -204,6 +267,14 @@ async def list_project_apps(
     app_ids = pm.application_ids or []
     if not app_ids:
         return []
+
+    caller_domain_ids: Set[str] | None = None
+    if not principal.is_system_admin:
+        caller = resolve_caller_domain(principal, caller_domain)
+        caller_domain_ids = await _caller_domain_app_ids(db, caller)
+        app_ids = [a for a in app_ids if a in caller_domain_ids]
+        if not app_ids:
+            return []
 
     stmt = select(ApplicationModel).where(ApplicationModel.id.in_(app_ids))
     res = await db.execute(stmt)
@@ -234,8 +305,12 @@ async def list_project_apps(
 async def add_app_to_project(
     project_id: str,
     body: AddAppToProjectRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_capability(Action.PROJECT_WRITE, domain_binding="identity")),
 ):
+    """COS-068: authentication required. COS-083: capability project:write +
+    единый резолв домена — чужое приложение не раскрываем (404 ghost)."""
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
@@ -243,6 +318,12 @@ async def add_app_to_project(
     app = await db.get(ApplicationModel, body.app_id)
     if not app:
         raise HTTPException(status_code=404, detail=f"Application '{body.app_id}' not found")
+
+    verify_ownership(
+        getattr(app, "domain_id", None),
+        resolve_caller_domain(principal, caller_domain),
+        f"Application '{body.app_id}'",
+    )
 
     current_ids = list(pm.application_ids or [])
     if body.app_id not in current_ids:
@@ -256,18 +337,48 @@ async def add_app_to_project(
 # ── Project Graph & Team Endpoints ────────────────────────────────────────
 
 @router.get("/api/v1/projects/{project_id}/graph")
-async def get_project_graph(project_id: str, db: AsyncSession = Depends(get_db)):
+async def get_project_graph(
+    project_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+):
+    """COS-068: authentication required. COS-083: доменный scoping узлов."""
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
-    return {"project_id": project_id, "nodes": pm.application_ids or [], "edges": pm.graph_edges or []}
+
+    nodes = pm.application_ids or []
+    if not principal.is_system_admin and nodes:
+        caller = resolve_caller_domain(principal, caller_domain)
+        visible_ids = await _caller_domain_app_ids(db, caller)
+        nodes = [a for a in nodes if a in visible_ids]
+    return {"project_id": project_id, "nodes": nodes, "edges": pm.graph_edges or []}
 
 
 @router.get("/api/v1/projects/{project_id}/team")
-async def get_project_team(project_id: str, db: AsyncSession = Depends(get_db)):
+async def get_project_team(
+    project_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+):
+    """COS-068: authentication required (состав команды был публичен).
+
+    COS-086: доменный якорь ProjectTeam через резолв-контракт —
+    ProjectTeam не имеет собственного domain_id (миграции заморожены),
+    видимость выводится из приложений проекта: не-админ получает ghost-404,
+    если у проекта нет ни одного приложения его домена.
+    """
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+
+    if not principal.is_system_admin:
+        caller = resolve_caller_domain(principal, caller_domain)
+        visible_ids = await _caller_domain_app_ids(db, caller)
+        if not (set(pm.application_ids or []) & visible_ids):
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 
     team_stmt = select(ProjectTeamModel).where(ProjectTeamModel.project_id == project_id)
     team_res = await db.execute(team_stmt)
@@ -291,14 +402,24 @@ kits_router = APIRouter(tags=["kits"])
 
 
 @kits_router.get("/api/v1/kits", response_model=List[KitsTag])
-async def list_kits_tags(db: AsyncSession = Depends(get_db)) -> List[KitsTag]:
+async def list_kits_tags(
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> List[KitsTag]:
+    """COS-068: authentication required."""
     res = await db.execute(select(KitsTagModel).order_by(KitsTagModel.label))
     tags = res.scalars().all()
     return [KitsTag(id=t.id, label=t.label, color=t.color, description=t.description) for t in tags]
 
 
 @kits_router.post("/api/v1/kits", response_model=KitsTag, status_code=status.HTTP_201_CREATED)
-async def create_kits_tag(body: CreateKitTagRequest, db: AsyncSession = Depends(get_db)) -> KitsTag:
+async def create_kits_tag(
+    body: CreateKitTagRequest,
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_capability(Action.PROJECT_WRITE, domain_binding="identity")),
+) -> KitsTag:
+    """COS-068: authentication required (мутация справочника была анонимной).
+    COS-083: write требует capability project:write."""
     existing = await db.get(KitsTagModel, body.id)
     if existing:
         raise HTTPException(status_code=409, detail=f"KITS tag '{body.id}' already exists")
@@ -311,8 +432,14 @@ async def create_kits_tag(body: CreateKitTagRequest, db: AsyncSession = Depends(
 
 
 @kits_router.get("/api/v1/kits/tags", response_model=List[KitsTag])
-async def list_kits_tags_alias(db: AsyncSession = Depends(get_db)) -> List[KitsTag]:
-    """NX-LUNA-03: Eдиный alias для /api/v1/kits/tags → /api/v1/kits."""
+async def list_kits_tags_alias(
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> List[KitsTag]:
+    """NX-LUNA-03: Eдиный alias для /api/v1/kits/tags → /api/v1/kits.
+
+    COS-068: authentication required.
+    """
     res = await db.execute(select(KitsTagModel).order_by(KitsTagModel.label))
     tags = res.scalars().all()
     return [KitsTag(id=t.id, label=t.label, color=t.color, description=t.description) for t in tags]

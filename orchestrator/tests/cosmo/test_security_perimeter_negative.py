@@ -61,10 +61,19 @@ class Test401UnauthorizedPerimeter:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("invalid_token", [
-        "invalid", "expired", "corrupted", "0000", "null", "none"
+        "invalid", "expired", "corrupted", "0000", "null", "none",
+        # COS-085: legacy opaque-форматы закрыты — все дают 401
+        "garbage.sig.x",          # главный кейс находки: был 200 как Role.USER
+        "admin",                  # keyword-ветка: был system admin
+        "officer-token",          # keyword-ветка: был SECURITY_OFFICER + admin
+        "dev:developer",          # colon-формат: forged роль
+        "bob:admin_sec:bob@corp", # colon-формат: forged system admin
+        "qa-engineer-123",        # keyword-ветка: была QA роль
+        "valid_officer_token",    # бывший «валидный» opaque из старых тестов
+        "plainkey123456",         # произвольный opaque
     ])
     async def test_invalid_tokens_rejected_with_401(self, invalid_token):
-        """Все варианты невалидных и просроченных токенов вызывают 401."""
+        """Все невалидные, просроченные и opaque-токены вызывают 401 (COS-085)."""
         with pytest.raises(HTTPException) as exc_info:
             await get_current_principal(authorization=f"Bearer {invalid_token}")
 

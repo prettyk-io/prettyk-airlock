@@ -36,7 +36,7 @@ EXPECTED_BASE_ROLE_CAPABILITY_ROWS = {
     Role.ADMIN_SEC: 15,      # 15 capabilities
     Role.SEC_EXPERT: 7,
     Role.ADMIN_ABNORMAL: 6,
-    Role.ADMIN_SERVICE: 7,
+    Role.ADMIN_SERVICE: 10,  # COS-083: +build:run, +deploy:manage, +project:write
     Role.USER: 2,
 }
 
@@ -44,29 +44,29 @@ EXPECTED_CBR_ROLE_CAPABILITY_ROWS = {
     CBRRole.SECURITY_OFFICER: 24,
     CBRRole.SECURITY_ANALYST: 12,
     CBRRole.ABNORMAL_ADMIN: 9,
-    CBRRole.SERVICE_ADMIN: 9,
-    CBRRole.DEVELOPER_LEAD: 10,
-    CBRRole.DEVELOPER: 5,
-    CBRRole.QA_ENGINEER: 7,
+    CBRRole.SERVICE_ADMIN: 12,        # COS-083: +build:run, +deploy:manage, +project:write
+    CBRRole.DEVELOPER_LEAD: 13,       # COS-083: +build:run, +deploy:manage, +project:write
+    CBRRole.DEVELOPER: 6,             # COS-083: +build:run
+    CBRRole.QA_ENGINEER: 8,           # COS-083: +build:run
     CBRRole.AUDITOR_INTERNAL: 11,
     CBRRole.AUDITOR_EXTERNAL: 7,
-    CBRRole.RELEASE_MANAGER: 10,
-    CBRRole.ZONE_OPERATOR_ZPE: 7,
-    CBRRole.PRODUCT_OWNER: 5,
+    CBRRole.RELEASE_MANAGER: 11,      # COS-083: +deploy:manage
+    CBRRole.ZONE_OPERATOR_ZPE: 8,     # COS-083: +deploy:manage
+    CBRRole.PRODUCT_OWNER: 6,         # COS-083: +project:write
 }
 
 EXPECTED_ZONE_ACTIONS = {
-    "zr": 32,
-    "zt": 25,
-    "zpe": 12,
-    "all": 36,
+    "zr": 35,   # COS-083: +build:run, +deploy:manage, +project:write
+    "zt": 27,   # COS-083: +build:run, +deploy:manage
+    "zpe": 13,  # COS-083: +deploy:manage
+    "all": 39,  # COS-083: +build:run, +deploy:manage, +project:write
 }
 
 EXPECTED_TOTAL_CAPABILITY_ASSIGNMENTS = {
-    "base_roles": 37,
-    "cbr_roles": 116,
-    "zones": 105,
-    "total": 258,
+    "base_roles": 40,   # COS-083: 37 + 3
+    "cbr_roles": 127,   # COS-083: 116 + 11
+    "zones": 114,       # COS-083: 105 + 9
+    "total": 281,       # COS-083: 258 + 23
 }
 
 

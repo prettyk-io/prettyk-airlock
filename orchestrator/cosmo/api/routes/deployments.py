@@ -8,13 +8,13 @@ from __future__ import annotations
 import datetime
 import uuid
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db, get_current_principal
-from orchestrator.cosmo.api.domain_guard import verify_ownership
+from orchestrator.cosmo.api.deps import get_current_principal, get_db, require_capability  # COS-083 WIP: get_current_principal ещё жив на строках 78/153
+from orchestrator.cosmo.api.domain_guard import resolve_caller_domain, verify_ownership
 from orchestrator.cosmo.db.models import (
     Application as ApplicationModel,
     Build as BuildModel,
@@ -26,7 +26,7 @@ from orchestrator.cosmo.domain.deployment_model import (
     DeploymentStatus,
     DeploymentZone,
 )
-from orchestrator.cosmo.domain.rbac import PrincipalContext
+from orchestrator.cosmo.domain.rbac import Action, PrincipalContext
 
 router = APIRouter(tags=["deployments"])
 
@@ -74,6 +74,7 @@ async def list_app_deployments(
     status_f: Optional[str] = Query(None, alias="status", description="Фильтр по статусу"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     principal: PrincipalContext = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> List[Deployment]:
@@ -82,7 +83,8 @@ async def list_app_deployments(
     if not app:
         raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
 
-    verify_ownership(app.domain_id, principal.domain_id, f"Application '{app_id}'")
+    # COS-083: единый резолв домена caller'а
+    verify_ownership(app.domain_id, resolve_caller_domain(principal, caller_domain), f"Application '{app_id}'")
 
     stmt = select(DeploymentModel).where(DeploymentModel.app_id == app_id).order_by(DeploymentModel.created_at.desc())
     if target_zone:
@@ -101,15 +103,19 @@ async def list_app_deployments(
 async def create_deployment(
     app_id: str,
     body: CreateDeploymentRequest,
-    principal: PrincipalContext = Depends(get_current_principal),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_capability(Action.DEPLOY_MANAGE, domain_binding="identity")),
     db: AsyncSession = Depends(get_db),
 ) -> Deployment:
-    """Создать новое развертывание сборки в указанную зону."""
+    """Создать новое развертывание сборки в указанную зону.
+
+    COS-083: write требует capability deploy:manage.
+    """
     app = await db.get(ApplicationModel, app_id)
     if not app:
         raise HTTPException(status_code=404, detail=f"Application '{app_id}' not found")
 
-    verify_ownership(app.domain_id, principal.domain_id, f"Application '{app_id}'")
+    verify_ownership(app.domain_id, resolve_caller_domain(principal, caller_domain), f"Application '{app_id}'")
 
     build = await db.get(BuildModel, body.build_id)
     if not build or build.app_id != app_id:
@@ -117,7 +123,7 @@ async def create_deployment(
 
     dep_id = f"dep-{uuid.uuid4().hex[:8]}"
     now = datetime.datetime.utcnow()
-    endpoint_url = body.custom_url or f"https://{app.name}.{body.target_zone}.kits.bank.corp:8443"
+    endpoint_url = body.custom_url or f"https://{app.id}.{body.target_zone}.kits.bank.corp:8443"
 
     dm = DeploymentModel(
         id=dep_id,
@@ -143,6 +149,7 @@ async def create_deployment(
 @router.get("/api/v1/deploys/{id}", response_model=Deployment)
 async def get_deployment_details(
     id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     principal: PrincipalContext = Depends(get_current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> Deployment:
@@ -151,7 +158,7 @@ async def get_deployment_details(
     if not dm:
         raise HTTPException(status_code=404, detail=f"Deployment '{id}' not found")
 
-    verify_ownership(dm.domain_id, principal.domain_id, f"Deployment '{id}'")
+    verify_ownership(dm.domain_id, resolve_caller_domain(principal, caller_domain), f"Deployment '{id}'")
     return _to_deployment_schema(dm)
 
 
@@ -159,15 +166,19 @@ async def get_deployment_details(
 async def rollback_deployment(
     id: str,
     body: RollbackDeploymentRequest,
-    principal: PrincipalContext = Depends(get_current_principal),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(require_capability(Action.DEPLOY_MANAGE, domain_binding="identity")),
     db: AsyncSession = Depends(get_db),
 ) -> Deployment:
-    """Инициировать откат развертывания (Rollback)."""
+    """Инициировать откат развертывания (Rollback).
+
+    COS-083: write требует capability deploy:manage.
+    """
     dm = await db.get(DeploymentModel, id)
     if not dm:
         raise HTTPException(status_code=404, detail=f"Deployment '{id}' not found")
 
-    verify_ownership(dm.domain_id, principal.domain_id, f"Deployment '{id}'")
+    verify_ownership(dm.domain_id, resolve_caller_domain(principal, caller_domain), f"Deployment '{id}'")
 
     # Ищем предыдущий успешный деплой в эту же зону
     prev_stmt = (

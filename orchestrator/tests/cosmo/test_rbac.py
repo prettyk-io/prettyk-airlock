@@ -78,7 +78,9 @@ class TestPermissionMatrix:
                  "release:approve", "act:sign", "scan:start", "scan:stop",
                  "finding:tag", "finding:view_all", "evidence:view_all",
                  "pipeline:configure", "rbac:manage", "domain:configure",
-                 "report:export", "read"}
+                 "report:export", "read",
+                 # COS-083: capability-гранулярные guard'ы
+                 "build:run", "deploy:manage", "project:write"}
         assert all_actions.issubset(known)
 
 

@@ -136,7 +136,12 @@ class TestLR002KITSTags:
         mock_res.scalars.return_value.all.return_value = [mock_tag]
         mock_db.execute = AsyncMock(return_value=mock_res)
 
-        tags = await list_kits_tags(db=mock_db)
+        # COS-068: handler now requires principal (auth-only guard)
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
+        tags = await list_kits_tags(db=mock_db, principal=admin)
         assert len(tags) == 1
         assert tags[0].id == "kits-auth"
 
@@ -254,8 +259,12 @@ class TestLR005ProjectsKITSApi:
         mock_db = AsyncMock()
         mock_db.get = AsyncMock(return_value=None)
 
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
         with pytest.raises(HTTPException) as exc_info:
-            await get_project(project_id="nonexistent", db=mock_db)
+            await get_project(project_id="nonexistent", db=mock_db, principal=admin)
 
         assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
 
@@ -273,11 +282,19 @@ class TestLR005ProjectsKITSApi:
 
         mock_app = MagicMock(spec=ApplicationModel)
         mock_app.id = "app-auth-svc"
+        # COS-083: ghost-контракт — домен мок-приложения должен совпадать
+        # с резолвнутым доменом caller'а (админ без заголовка → "default").
+        mock_app.domain_id = "default"
 
         mock_db.get = AsyncMock(side_effect=[mock_project, mock_app])
 
         body = AddAppToProjectRequest(app_id="app-auth-svc")
-        res = await add_app_to_project(project_id="proj-add-app", body=body, db=mock_db)
+        # COS-068: handler now requires principal
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
+        res = await add_app_to_project(project_id="proj-add-app", body=body, db=mock_db, principal=admin)
 
         assert res["status"] == "added"
         assert "app-auth-svc" in mock_project.application_ids
@@ -366,7 +383,12 @@ class TestLR006ReleaseTypesBatch:
         mock_db.commit = AsyncMock(side_effect=fake_commit)
         mock_db.refresh = AsyncMock(side_effect=fake_refresh)
 
-        created = await create_release_type(body=req, db=mock_db)
+        # COS-068: create_release_type is now system-admin only
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
+        created = await create_release_type(body=req, db=mock_db, principal=admin)
         assert created.id == "rt-emergency"
         assert created.required_approvals == 1
 

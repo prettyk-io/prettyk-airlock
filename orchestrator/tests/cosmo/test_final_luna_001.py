@@ -129,7 +129,12 @@ class TestOneCanonicalKITSContract:
         mock_res.scalars.return_value.all.return_value = [t1]
         mock_db.execute = AsyncMock(return_value=mock_res)
 
-        tags = await list_kits_tags(db=mock_db)
+        # COS-068: handler now requires principal (auth-only guard)
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
+        tags = await list_kits_tags(db=mock_db, principal=admin)
         assert len(tags) == 1
         assert tags[0].id == "kits-core"
         assert hasattr(tags[0], "id")
@@ -148,12 +153,18 @@ class TestOneCanonicalKITSContract:
 
 class TestCleanDatabase:
 
-    def test_twenty_three_tables(self):
+    def test_core_tables_present(self):
+        """Schema-aware: реестр >= 27 core-таблиц (23 + CBR scanner + ...).
+
+        Точный счётчик снят: рост реестра легитимен при принятых миграциях
+        (COS-055: +4 notification-таблицы; далее — новые карточки). Потеря
+        core-таблицы ловится падением ниже границы.
+        """
         from orchestrator.cosmo.db.session import Base
         import orchestrator.cosmo.db.models as _m
         import orchestrator.cosmo.db.models_lr as _ml
         tables = sorted(Base.metadata.tables.keys())
-        assert len(tables) == 27, f"Expected 27 tables (CBR-LUNA added scanner tables), got {len(tables)}"
+        assert len(tables) >= 27, f"Core tables lost, got {len(tables)}"
 
     def test_lr_tables_present(self):
         from orchestrator.cosmo.db.session import Base
@@ -242,7 +253,13 @@ class TestDomainFreeFixtures:
         assert list_fn is not None
         sig = inspect.signature(list_fn)
         params = list(sig.parameters.keys())
-        assert "caller_domain" not in params, "list_projects must not require caller_domain"
+        # COS-083: caller_domain разрешён как ОПЦИОНАЛЬНЫЙ заголовок
+        # (админский context-switch); обязательным быть не должен —
+        # идентичность principal остаётся первичным резолвом домена.
+        if "caller_domain" in params:
+            assert sig.parameters["caller_domain"].default is not inspect.Parameter.empty, (
+                "caller_domain must stay optional (COS-083)"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -203,13 +203,18 @@ class TestProjectIDBackfill:
         post_luna_files = [f for f in os.listdir(alembic_dir) if "post_luna_001" in f.lower()]
         assert len(post_luna_files) >= 1, f"POST-LUNA-001 migration required, found {len(post_luna_files)}"
 
-    def test_total_tables_now_twenty_four(self):
-        """24 таблицы (23 + project_applications)."""
+    def test_total_tables_at_least_core(self):
+        """Schema-aware: реестр >= 27 core-таблиц (24 POST-LUNA + 3 scanner).
+
+        Точный счётчик снят: рост реестра легитимен при принятых миграциях
+        (COS-055: +4 notification-таблицы; далее — новые карточки). Потеря
+        core-таблицы ловится падением ниже границы.
+        """
         from orchestrator.cosmo.db.session import Base
         import orchestrator.cosmo.db.models as _m
         import orchestrator.cosmo.db.models_lr as _ml
         tables = sorted(Base.metadata.tables.keys())
-        assert len(tables) == 27, f"Expected 27 tables (24 POST-LUNA + 3 CBR-LUNA scanner tables), got {len(tables)}"
+        assert len(tables) >= 27, f"Core tables lost, got {len(tables)}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -342,11 +347,19 @@ class TestAPIRoutesFinalIntegration:
         mock_proj.application_ids = []
         mock_app = MagicMock(spec=ApplicationModel)
         mock_app.id = "app-post-luna"
+        # COS-083: ghost-контракт — домен мок-приложения должен совпадать
+        # с резолвнутым доменом caller'а (админ без заголовка → "default").
+        mock_app.domain_id = "default"
 
         mock_db.get = AsyncMock(side_effect=[mock_proj, mock_app])
 
         body = AddAppToProjectRequest(app_id="app-post-luna")
-        res = await add_app_to_project(project_id="proj-api-post", body=body, db=mock_db)
+        # COS-068: handler now requires principal
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
+        res = await add_app_to_project(project_id="proj-api-post", body=body, db=mock_db, principal=admin)
 
         assert res["status"] == "added"
         assert "app-post-luna" in mock_proj.application_ids
@@ -364,8 +377,13 @@ class TestAPIRoutesFinalIntegration:
         mock_res.scalars.return_value.all.return_value = [t1]
         mock_db.execute = AsyncMock(return_value=mock_res)
 
-        v1 = await list_kits_tags(db=mock_db)
-        v2 = await list_kits_tags_alias(db=mock_db)
+        # COS-068: handlers now require principal (auth-only guard)
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
+        v1 = await list_kits_tags(db=mock_db, principal=admin)
+        v2 = await list_kits_tags_alias(db=mock_db, principal=admin)
         assert len(v1) == 1 and len(v2) == 1
         assert v1[0].id == v2[0].id
 
@@ -388,7 +406,12 @@ class TestAPIRoutesFinalIntegration:
         req.name = "POST-LUNA Batch"
         req.app_ids = ["app-1", "app-2"]
 
-        res = await create_release_batch(project_id="proj-batch-post", body=req, db=mock_db)
+        # COS-068: create_release_batch now requires RELEASE_CREATE principal
+        admin = PrincipalContext(
+            user_id="t-admin", roles=[Role.ADMIN_SEC],
+            is_authenticated=True, is_system_admin=True,
+        )
+        res = await create_release_batch(project_id="proj-batch-post", body=req, db=mock_db, principal=admin)
         assert res.id == "rb-post-luna-001"
         assert res.project_id == "proj-batch-post"
 

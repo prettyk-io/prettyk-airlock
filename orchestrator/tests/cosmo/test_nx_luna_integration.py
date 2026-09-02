@@ -348,7 +348,12 @@ async def test_kits_tags_api_list_endpoint():
     mock_res.scalars.return_value.all.return_value = [t1, t2]
     mock_db.execute = AsyncMock(return_value=mock_res)
 
-    tags = await list_kits_tags_alias(db=mock_db)
+    # COS-068: handler now requires principal (auth-only guard)
+    admin = PrincipalContext(
+        user_id="t-admin", roles=[Role.ADMIN_SEC],
+        is_authenticated=True, is_system_admin=True,
+    )
+    tags = await list_kits_tags_alias(db=mock_db, principal=admin)
     assert len(tags) == 2
     assert tags[0].id == "kits-1"
     assert tags[1].id == "kits-2"
@@ -464,7 +469,10 @@ async def test_update_project_api_route():
     mock_project.updated_at = datetime.datetime.utcnow()
     mock_db.get = AsyncMock(return_value=mock_project)
 
-    principal = PrincipalContext(user_id="admin", roles=[Role.ADMIN_SEC], is_authenticated=True)
+    # COS-083: scoping ветка не-админа требует доменных данных БД; тест
+    # проверяет обновление полей — авторизация как system admin.
+    principal = PrincipalContext(user_id="admin", roles=[Role.ADMIN_SEC],
+                                 is_authenticated=True, is_system_admin=True)
     body = UpdateProjectRequest(name="New Project Name", owner_team="devops_team")
 
     res = await update_project(project_id="proj-update", body=body, principal=principal, db=mock_db)
@@ -492,6 +500,11 @@ async def test_create_release_batch_api_route():
     req.name = "Batch Test"
     req.app_ids = ["app-1"]
 
-    res = await create_release_batch(project_id="proj-batch", body=req, db=mock_db)
+    # COS-068: create_release_batch now requires RELEASE_CREATE principal
+    admin = PrincipalContext(
+        user_id="t-admin", roles=[Role.ADMIN_SEC],
+        is_authenticated=True, is_system_admin=True,
+    )
+    res = await create_release_batch(project_id="proj-batch", body=req, db=mock_db, principal=admin)
     assert res.id == "rb-integration-01"
     assert res.project_id == "proj-batch"

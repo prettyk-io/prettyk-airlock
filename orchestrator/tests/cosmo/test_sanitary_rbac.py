@@ -52,9 +52,15 @@ async def test_get_current_principal_invalid_token_raises_401():
 
 @pytest.mark.asyncio
 async def test_get_current_principal_valid_bearer_token():
-    """Валидный Bearer токен успешно извлекает PrincipalContext."""
+    """Валидный Bearer JWT + header-инжектированная идентичность → PrincipalContext.
+
+    COS-085: opaque-токены (бывший `valid_officer_token`, аутентифицировавший
+    через keyword-ветку как admin) больше не легальны — только JWT (ey...).
+    Идентичность/роли приходят из trusted-заголовков (контракт COS-031)."""
+    empty_claims = base64.urlsafe_b64encode(b"{}").decode().rstrip("=")
+    token = f"eyJhbGciOiJIUzI1NiJ9.{empty_claims}.sig"
     principal = await get_current_principal(
-        authorization="Bearer valid_officer_token",
+        authorization=f"Bearer {token}",
         x_user_id="officer_ivanov",
         x_user_email="ivanov@cbr.bank.corp",
         x_user_roles="security_officer,admin_sec",

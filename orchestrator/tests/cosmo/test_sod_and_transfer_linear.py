@@ -26,6 +26,24 @@ from cosmo.api.routes.releases import (
 from cosmo.domain.rbac import CBRRole, PrincipalContext, Role, SeparationOfDutiesEngine
 
 
+def _api_principal() -> PrincipalContext:
+    """COS-067: system-admin principal для прямых (unit) вызовов хендлеров.
+
+    Guard-зависимости при прямом вызове не резолвятся FastAPI, поэтому
+    хендлеры с domain-binding-чеком в теле требуют явный principal.
+    System-admin пропускает ownership-чек; SoD-логика тестируется через
+    decided_by / initiator, как и раньше.
+    """
+    return PrincipalContext(
+        user_id="unit_test_admin",
+        roles=[Role.ADMIN_SEC],
+        domain_id="dom-kits",
+        zone="zr",
+        is_authenticated=True,
+        is_system_admin=True,
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 1. ТЕСТЫ 401 UNAUTHORIZED (Отсечка без токена)
 # ═══════════════════════════════════════════════════════════════════════
@@ -103,6 +121,7 @@ async def test_author_gate_approval_sod_violation_raises_409():
             gate_id="gate-sod-01",
             body=decision_req,
             db=mock_db,
+            principal=_api_principal(),
         )
 
     assert exc_info.value.status_code == status.HTTP_409_CONFLICT
@@ -155,6 +174,7 @@ async def test_independent_officer_gate_approval_passes_200():
         gate_id="gate-sod-02",
         body=decision_req,
         db=mock_db,
+        principal=_api_principal(),
     )
 
     assert mock_gate.decision == "pass"
@@ -208,6 +228,7 @@ async def test_direct_transfer_zr_to_zpe_raises_400():
             release_id="rel-promo-01",
             body=req,
             db=mock_db,
+            principal=_api_principal(),
         )
 
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -256,6 +277,7 @@ async def test_linear_transfer_step_by_step_succeeds_200():
         release_id="rel-promo-02",
         body=req_step1,
         db=mock_db,
+        principal=_api_principal(),
     )
     assert mock_rel.current_zone == "zt"
 
@@ -271,6 +293,7 @@ async def test_linear_transfer_step_by_step_succeeds_200():
         release_id="rel-promo-02",
         body=req_step2,
         db=mock_db,
+        principal=_api_principal(),
     )
     assert mock_rel.current_zone == "zpe"
     assert len(mock_rel.transfer_history) == 2
@@ -328,7 +351,7 @@ async def test_cln007_record_gate_decision_sod_conflict_409():
             gate_id="gate-sod-01",
             body=req,
             db=mock_db,
-            _guard=mock_principal,
+            principal=_api_principal(),
         )
 
     assert exc_info.value.status_code == status.HTTP_409_CONFLICT
@@ -373,6 +396,7 @@ async def test_cln008_transfer_v1_direct_zr_to_zpe_blocked_400():
             release_id="rel-v1-01",
             body=req,
             db=mock_db,
+            principal=_api_principal(),
         )
 
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -392,6 +416,7 @@ async def test_cln007_create_gate_author_sod_conflict_409():
         PipelinePlan as PlanModel,
         Release as ReleaseModel,
         Run as RunModel,
+        Application as ApplicationModel,
     )
     from orchestrator.cosmo.domain.gate_model import GatePolicyRule
 
@@ -401,7 +426,12 @@ async def test_cln007_create_gate_author_sod_conflict_409():
     mock_plan.id = "plan-007-01"
     mock_plan.app_id = "app-auth"
 
-    mock_db.get = AsyncMock(return_value=mock_plan)
+    # COS-068: ownership chain — db.get вызывается и для ApplicationModel
+    mock_app = MagicMock(spec=ApplicationModel)
+    mock_app.id = "app-auth"
+    mock_app.domain_id = "dom-kits"
+
+    mock_db.get = AsyncMock(side_effect=[mock_plan, mock_app])
 
     mock_rel = MagicMock(spec=ReleaseModel)
     mock_rel.id = "rel-007-01"
@@ -451,6 +481,7 @@ async def test_cln007_create_gate_independent_admin_succeeds_201():
         PipelinePlan as PlanModel,
         Release as ReleaseModel,
         Run as RunModel,
+        Application as ApplicationModel,
     )
     from orchestrator.cosmo.domain.gate_model import GatePolicyRule
 
@@ -460,8 +491,12 @@ async def test_cln007_create_gate_independent_admin_succeeds_201():
     mock_plan.id = "plan-007-02"
     mock_plan.app_id = "app-auth"
 
-    # Первый db.get → возвращает план. Второй db.get(GateModel, id) → None (гейт не существует).
-    mock_db.get = AsyncMock(side_effect=[mock_plan, None])
+    # COS-068: ownership chain — db.get: план → приложение → gate (не существует)
+    mock_app = MagicMock(spec=ApplicationModel)
+    mock_app.id = "app-auth"
+    mock_app.domain_id = "dom-kits"
+
+    mock_db.get = AsyncMock(side_effect=[mock_plan, mock_app, None])
 
     mock_rel = MagicMock(spec=ReleaseModel)
     mock_rel.id = "rel-007-02"
