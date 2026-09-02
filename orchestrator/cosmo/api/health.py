@@ -1,7 +1,11 @@
 """Cosmoport 2.0 — Health & Readiness endpoints.
 
 /live   — процесс жив (всегда 200 если FastAPI отвечает).
-/ready  — PG+Valkey готовы к приёму трафика (200/503).
+/ready  — K8s readiness-семантика: 200 только когда ядро способно
+          обслуживать трафик. Hard-dep PostgreSQL недоступен → 503 +
+          честный компонент-мап в теле. Soft-деградации (Valkey → SSE
+          in-memory fallback COS-088, anchor → unknown_anchor на verify)
+          НЕ роняют readiness — видны в теле.
 /health — расширенная диагностика без раскрытия credentials.
 """
 from __future__ import annotations
@@ -13,7 +17,8 @@ import platform
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -32,10 +37,15 @@ class LiveResponse(BaseModel):
 
 
 class ReadyResponse(BaseModel):
-    """GET /ready — готовность принимать трафик."""
+    """GET /ready — компонент-мап готовности.
+
+    database/cache: "connected" | "unavailable";
+    anchor:         "connected" | "disabled" | "unavailable".
+    """
     status: str                  # "ok" | "degraded" | "not_ready"
-    database: str                # "connected" | "unavailable"
-    cache: str                   # "connected" | "unavailable"
+    database: str                # hard-dep: 503 при "unavailable"
+    cache: str                   # soft: SSE in-memory fallback
+    anchor: str = "disabled"     # soft: evidence anchor sink (COS-087)
 
 
 class DependencyStatus(BaseModel):
@@ -117,6 +127,93 @@ async def _probe_valkey(timeout: float = 3.0) -> DependencyStatus:
         )
 
 
+def _probe_anchor() -> DependencyStatus:
+    """Проверить evidence anchor sink (COS-087/093): file | s3 backend.
+
+    Soft-зависимость: недоступность НЕ роняет readiness — verify-сторона
+    честно скажет unknown_anchor. Сами данные не трогаем (append-only!):
+    file-режим проверяет доступность директории/файла; s3-режим — доступность
+    бакета (HEAD, без записи).
+
+    Статус: disabled (backend не сконфигурирован) | healthy | unhealthy.
+    Не раскрывает путь к sink и креды.
+    """
+    try:
+        from orchestrator.cosmo.ledger import evidence_anchor
+
+        if evidence_anchor.backend() == "s3":
+            cfg = evidence_anchor.s3_config()
+            if cfg is None:
+                return DependencyStatus(name="anchor", status="disabled")
+            t0 = time.monotonic()
+            try:
+                import httpx
+                # MinIO Basic auth не принимает — SigV4 (COS-093)
+                sig = evidence_anchor.s3_sigv4_headers(
+                    "HEAD", httpx.URL(cfg["endpoint"]).host + (
+                        f":{httpx.URL(cfg['endpoint']).port}"
+                        if httpx.URL(cfg["endpoint"]).port else ""
+                    ),
+                    f"/{cfg['bucket']}", None,
+                    cfg["access_key"], cfg["secret_key"], cfg["region"],
+                )
+                with httpx.Client(
+                    base_url=cfg["endpoint"],
+                    timeout=httpx.Timeout(5.0),
+                ) as client:
+                    r = client.head(f"/{cfg['bucket']}", headers=sig)
+            except Exception:
+                return DependencyStatus(
+                    name="anchor", status="unhealthy",
+                    latency_ms=round((time.monotonic() - t0) * 1000, 1),
+                    error="anchor object-store unreachable",
+                )
+            # 403 = бакет существует, но list-права нет — ok для anchor-проб
+            if r.status_code in (200, 403):
+                return DependencyStatus(
+                    name="anchor", status="healthy",
+                    latency_ms=round((time.monotonic() - t0) * 1000, 1),
+                )
+            return DependencyStatus(
+                name="anchor", status="unhealthy",
+                latency_ms=round((time.monotonic() - t0) * 1000, 1),
+                error=f"anchor bucket check failed (HTTP {r.status_code})",
+            )
+
+        path = evidence_anchor.sink_path()
+        if not path:
+            return DependencyStatus(name="anchor", status="disabled")
+        t0 = time.monotonic()
+        parent = os.path.dirname(path) or "."
+        if not os.path.isdir(parent):
+            return DependencyStatus(
+                name="anchor", status="unhealthy",
+                latency_ms=round((time.monotonic() - t0) * 1000, 1),
+                error="sink directory missing",
+            )
+        if not os.access(parent, os.W_OK):
+            return DependencyStatus(
+                name="anchor", status="unhealthy",
+                latency_ms=round((time.monotonic() - t0) * 1000, 1),
+                error="sink directory not writable",
+            )
+        if os.path.exists(path) and not os.access(path, os.R_OK):
+            return DependencyStatus(
+                name="anchor", status="unhealthy",
+                latency_ms=round((time.monotonic() - t0) * 1000, 1),
+                error="sink not readable",
+            )
+        return DependencyStatus(
+            name="anchor", status="healthy",
+            latency_ms=round((time.monotonic() - t0) * 1000, 1),
+        )
+    except Exception as exc:
+        return DependencyStatus(
+            name="anchor", status="unhealthy",
+            error=_sanitize_error(exc),
+        )
+
+
 def _sanitize_error(exc: Exception) -> str:
     """Убрать потенциально чувствительные данные из сообщения об ошибке.
 
@@ -140,32 +237,49 @@ async def live() -> LiveResponse:
 
 
 @router.get("/ready", response_model=ReadyResponse)
-async def ready() -> ReadyResponse:
-    """Готовность принимать трафик.
+async def ready() -> object:
+    """Готовность принимать трафик (K8s readiness-семантика).
 
-    200: PG и Valkey доступны.
-    503: одна из зависимостей недоступна.
+    200: ядро способно обслуживать запросы (PostgreSQL жив). Мягкие
+         деградации (Valkey → SSE in-memory fallback, anchor sink) видны
+         в теле как status="degraded", но НЕ выводят инстанс из ротации.
+    503: недоступен hard-dep PostgreSQL + честный компонент-мап в теле,
+         чтобы Caddy/upstream вывел инстанс из ротации.
     """
     pg, vk = await asyncio.gather(
         _probe_postgres(timeout=2.0),
         _probe_valkey(timeout=2.0),
         return_exceptions=True,
     )
+    anchor = _probe_anchor()
 
     db_status = "connected" if isinstance(pg, DependencyStatus) and pg.status == "healthy" else "unavailable"
     cache_status = "connected" if isinstance(vk, DependencyStatus) and vk.status == "healthy" else "unavailable"
+    anchor_token = {
+        "healthy": "connected",
+        "disabled": "disabled",
+    }.get(anchor.status, "unavailable")
 
-    if db_status == "connected" and cache_status == "connected":
-        response = ReadyResponse(status="ok", database=db_status, cache=cache_status)
-    elif db_status == "connected" or cache_status == "connected":
-        response = ReadyResponse(status="degraded", database=db_status, cache=cache_status)
-    else:
-        raise HTTPException(
+    if db_status == "unavailable":
+        # Hard-dep упал: 503 с честным компонент-мапом (не HTTPException,
+        # чтобы тело не заворачивалось в {"detail": ...}).
+        return JSONResponse(
             status_code=503,
-            detail=ReadyResponse(status="not_ready", database=db_status, cache=cache_status).model_dump(),
+            content=ReadyResponse(
+                status="not_ready",
+                database=db_status,
+                cache=cache_status,
+                anchor=anchor_token,
+            ).model_dump(),
         )
 
-    return response
+    soft_ok = cache_status == "connected" and anchor_token in ("connected", "disabled")
+    return ReadyResponse(
+        status="ok" if soft_ok else "degraded",
+        database=db_status,
+        cache=cache_status,
+        anchor=anchor_token,
+    )
 
 
 @router.get("/health", response_model=HealthResponse)

@@ -494,3 +494,18 @@ from orchestrator.cosmo.db.models_scanner import (  # noqa: E402, F401
     ScanFinding,
     ScanResult,
 )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Auto-register COS-055 notification manager models (shared Base)
+# ══════════════════════════════════════════════════════════════════════════════
+from orchestrator.cosmo.db.models_notifications import (  # noqa: E402, F401
+    NotificationChannelConfig,
+    NotificationEventRow,
+    NotificationRow,
+    NotificationSubscription,
+)
+# [Luna/COS-055 collision] Мой второй registration block отозван: параллельный
+# worker владеет db/models_notifications.py (классы NotificationDelivery /
+# NotificationEvent / NotificationInbox там отсутствуют). Мои остаточные
+# COS-055-файлы (manager/recipients/providers/integration, миграция b7c8d9e0f1a2)
+# не подключены в shared registry — решение о владельце карточки за Максимом.

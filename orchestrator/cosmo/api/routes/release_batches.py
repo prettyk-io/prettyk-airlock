@@ -17,7 +17,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_current_principal, get_db
+from orchestrator.cosmo.api.deps import (
+    get_db,
+    require_capability,
+    require_principal,
+    require_system_admin,
+)
+from orchestrator.cosmo.domain.rbac import Action, PrincipalContext
 from orchestrator.cosmo.db.models_lr import (
     ReleaseType as ReleaseTypeModel,
     ReleaseBatch as ReleaseBatchModel,
@@ -80,7 +86,11 @@ def _to_rt_schema(rm: ReleaseTypeModel) -> ReleaseType:
 
 
 @router.get("/api/v1/release-types", response_model=List[ReleaseType])
-async def list_release_types(db: AsyncSession = Depends(get_db)) -> List[ReleaseType]:
+async def list_release_types(
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> List[ReleaseType]:
+    """COS-068: authentication required (было — анонимно)."""
     res = await db.execute(select(ReleaseTypeModel).order_by(ReleaseTypeModel.name))
     return [_to_rt_schema(rt) for rt in res.scalars().all()]
 
@@ -89,7 +99,10 @@ async def list_release_types(db: AsyncSession = Depends(get_db)) -> List[Release
 async def create_release_type(
     body: CreateReleaseTypeRequest,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_system_admin()),
 ) -> ReleaseType:
+    """COS-068: system-admin only (платформенный справочник требуемых
+    согласований был доступен анонимно)."""
     existing = await db.get(ReleaseTypeModel, body.id)
     if existing:
         raise HTTPException(status_code=409, detail=f"Release type '{body.id}' already exists")
@@ -110,7 +123,12 @@ async def create_release_type(
 
 
 @router.get("/api/v1/release-types/{release_type_id}", response_model=ReleaseType)
-async def get_release_type(release_type_id: str, db: AsyncSession = Depends(get_db)) -> ReleaseType:
+async def get_release_type(
+    release_type_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> ReleaseType:
+    """COS-068: authentication required."""
     rm = await db.get(ReleaseTypeModel, release_type_id)
     if not rm:
         raise HTTPException(status_code=404, detail=f"Release type '{release_type_id}' not found")
@@ -122,7 +140,9 @@ async def update_release_type(
     release_type_id: str,
     body: UpdateReleaseTypeRequest,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_system_admin()),
 ) -> ReleaseType:
+    """COS-068: system-admin only (справочник согласований)."""
     rm = await db.get(ReleaseTypeModel, release_type_id)
     if not rm:
         raise HTTPException(status_code=404, detail=f"Release type '{release_type_id}' not found")
@@ -168,7 +188,9 @@ def _to_rb_schema(rb_model: ReleaseBatchModel) -> ReleaseBatch:
 async def list_project_release_batches(
     project_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> List[ReleaseBatch]:
+    """COS-068: authentication required."""
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
@@ -185,7 +207,11 @@ async def create_release_batch(
     project_id: str,
     body: CreateReleaseBatchRequest,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(
+        require_capability(Action.RELEASE_CREATE, domain_binding="identity")
+    ),
 ) -> ReleaseBatch:
+    """COS-068: RELEASE_CREATE (release-менеджерская операция, была анонимной)."""
     pm = await db.get(ProjectModel, project_id)
     if not pm:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
@@ -209,7 +235,12 @@ async def create_release_batch(
 
 
 @router.get("/api/v1/release-batches/{batch_id}", response_model=ReleaseBatch)
-async def get_release_batch(batch_id: str, db: AsyncSession = Depends(get_db)) -> ReleaseBatch:
+async def get_release_batch(
+    batch_id: str,
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> ReleaseBatch:
+    """COS-068: authentication required."""
     rb = await db.get(ReleaseBatchModel, batch_id)
     if not rb:
         raise HTTPException(status_code=404, detail=f"Release batch '{batch_id}' not found")
@@ -220,7 +251,11 @@ async def get_release_batch(batch_id: str, db: AsyncSession = Depends(get_db)) -
 async def run_release_batch(
     batch_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(
+        require_capability(Action.RELEASE_CREATE, domain_binding="identity")
+    ),
 ) -> ReleaseBatch:
+    """COS-068: RELEASE_CREATE (запуск релизного батча был анонимным)."""
     rb = await db.get(ReleaseBatchModel, batch_id)
     if not rb:
         raise HTTPException(status_code=404, detail=f"Release batch '{batch_id}' not found")

@@ -11,7 +11,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_principal, require_system_admin
 from orchestrator.cosmo.db.models import (
     Domain as DomainModel,
     Application as ApplicationModel,
@@ -20,6 +20,7 @@ from orchestrator.cosmo.db.models import (
 )
 from orchestrator.cosmo.domain.domain_model import Domain, DomainQuota, ForgeBinding
 from orchestrator.cosmo.domain.app_graph import AppGraph, Application, Group, RepositoryBinding
+from orchestrator.cosmo.domain.rbac import PrincipalContext
 
 router = APIRouter(prefix="/api/v1/domains", tags=["domains"])
 
@@ -52,8 +53,15 @@ def _db_to_domain(db_d: DomainModel) -> Domain:
 
 
 @router.get("", response_model=list[Domain])
-async def list_domains(db: AsyncSession = Depends(get_db)) -> list[Domain]:
-    """List all registered domains."""
+async def list_domains(
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> list[Domain]:
+    """List all registered domains.
+
+    COS-068: authentication required. Список доменов нужен любому
+    аутентифицированному UI (выбор контекста), секреты не раскрываются.
+    """
     stmt = select(DomainModel).order_by(DomainModel.id)
     result = await db.execute(stmt)
     domains = result.scalars().all()
@@ -64,8 +72,12 @@ async def list_domains(db: AsyncSession = Depends(get_db)) -> list[Domain]:
 async def create_domain(
     body: Domain,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_system_admin()),
 ) -> Domain:
-    """Create a new domain."""
+    """Create a new domain.
+
+    COS-068: system-admin only — домен несёт forge-токены и RBAC-конфиг.
+    """
     existing = await db.get(DomainModel, body.id)
     if existing is not None:
         raise HTTPException(
@@ -93,8 +105,12 @@ async def create_domain(
 async def get_domain(
     domain_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> Domain:
-    """Get domain by unique ID."""
+    """Get domain by unique ID.
+
+    COS-068: authentication required.
+    """
     db_domain = await db.get(DomainModel, domain_id)
     if db_domain is None:
         raise HTTPException(
@@ -109,8 +125,12 @@ async def update_domain(
     domain_id: str,
     body: UpdateDomainRequest,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_system_admin()),
 ) -> Domain:
-    """Update domain configuration."""
+    """Update domain configuration.
+
+    COS-068: system-admin only (forge-токены, rbac_config, квоты).
+    """
     db_domain = await db.get(DomainModel, domain_id)
     if db_domain is None:
         raise HTTPException(
@@ -140,8 +160,12 @@ async def update_domain(
 async def delete_domain(
     domain_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_system_admin()),
 ) -> None:
-    """Delete domain and its dependencies."""
+    """Delete domain and its dependencies.
+
+    COS-068: system-admin only (деструктивная операция уровня платформы).
+    """
     db_domain = await db.get(DomainModel, domain_id)
     if db_domain is None:
         raise HTTPException(
@@ -156,8 +180,12 @@ async def delete_domain(
 async def get_domain_app_graph(
     domain_id: str,
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> AppGraph:
-    """Get complete AppGraph for a domain (groups + apps + libraries)."""
+    """Get complete AppGraph for a domain (groups + apps + libraries).
+
+    COS-068: authentication required.
+    """
     db_domain = await db.get(DomainModel, domain_id)
     if db_domain is None:
         raise HTTPException(

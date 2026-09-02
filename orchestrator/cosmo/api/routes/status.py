@@ -21,8 +21,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_principal
 from orchestrator.cosmo.api.health import _STARTED_AT, _probe_postgres, _probe_valkey
+from orchestrator.cosmo.domain.rbac import PrincipalContext
 from orchestrator.cosmo.db.models import (
     Application,
     Batch,
@@ -112,8 +113,14 @@ async def _safe_count(stmt, db: AsyncSession, default: int = 0) -> int:
 @router.get("/dashboard", response_model=StatusDashboardResponse)
 async def get_status_dashboard(
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> StatusDashboardResponse:
-    """Агрегированный дашборд состояния Cosmoport 2.0."""
+    """Агрегированный дашборд состояния Cosmoport 2.0.
+
+    COS-068: authentication required (liveness-пробы /health остаются
+    открытыми для Docker/Caddy healthcheck — это отдельная поверхность
+    api/health.py, зона Buddy).
+    """
     now_ts = time.time()
     uptime = round(now_ts - _STARTED_AT, 1)
     now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)

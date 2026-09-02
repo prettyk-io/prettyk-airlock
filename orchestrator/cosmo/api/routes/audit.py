@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_principal, require_system_admin
+from orchestrator.cosmo.domain.rbac import PrincipalContext
 
 router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
@@ -127,6 +128,36 @@ _AUDIT_LOG_RECORDS: list[AuditEvent] = [
 ]
 
 
+def record_system_event(
+    *,
+    user_id: str,
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    status: str = "success",
+    details: Optional[dict] = None,
+) -> AuditEvent:
+    """COS-096: системная audit-запись без HTTP-запроса (webhook и т.п.).
+
+    Тот же in-memory surface, что и POST /audit: видно в /api/v1/audit
+    и CSV-экспорте. Переживает только процесс приложения (честная
+    граница; durable-таблица — follow-up вне миграционного freeze).
+    """
+    event = AuditEvent(
+        id=f"aud-sys-{uuid.uuid4().hex[:12]}",
+        timestamp=datetime.datetime.now(datetime.timezone.utc),
+        user_id=user_id,
+        role="forge",
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        status=status,
+        details_json=details or {},
+    )
+    _AUDIT_LOG_RECORDS.insert(0, event)
+    return event
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[AuditEvent])
@@ -137,8 +168,13 @@ async def list_audit_events(
     audit_status: Optional[str] = Query(None, alias="status", description="Filter by status"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> list[AuditEvent]:
-    """List audit trail events with optional filtering."""
+    """List audit trail events with optional filtering.
+
+    COS-068: authentication required — audit trail содержит IP-адреса
+    и персональные действия пользователей.
+    """
     results = list(_AUDIT_LOG_RECORDS)
 
     if user_id:
@@ -158,8 +194,13 @@ async def list_audit_events(
 @router.post("", response_model=AuditEvent, status_code=status.HTTP_201_CREATED)
 async def create_audit_event(
     body: CreateAuditEventRequest,
+    principal: PrincipalContext = Depends(require_system_admin()),
 ) -> AuditEvent:
-    """Record an audit event."""
+    """Record an audit event.
+
+    COS-068: system-admin only — анонимная запись в audit trail позволяла
+    подделывать/отравлять журнал аудита (integrity hole).
+    """
     event = AuditEvent(
         id=f"aud-{uuid.uuid4().hex[:8]}",
         timestamp=datetime.datetime.now(datetime.timezone.utc),
@@ -179,8 +220,12 @@ async def create_audit_event(
 @router.get("/{event_id}", response_model=AuditEvent)
 async def get_audit_event(
     event_id: str,
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> AuditEvent:
-    """Get detailed audit event."""
+    """Get detailed audit event.
+
+    COS-068: authentication required.
+    """
     found = next((e for e in _AUDIT_LOG_RECORDS if e.id == event_id), None)
     if found is None:
         raise HTTPException(
@@ -191,8 +236,13 @@ async def get_audit_event(
 
 
 @router.get("/export/csv")
-async def export_audit_csv() -> Response:
-    """Export audit log as CSV formatted stream."""
+async def export_audit_csv(
+    principal: PrincipalContext = Depends(require_principal()),
+) -> Response:
+    """Export audit log as CSV formatted stream.
+
+    COS-068: authentication required (полный экспорт журнала).
+    """
     lines = ["id,timestamp,user_id,role,action,resource_type,resource_id,status,ip_address"]
     for e in _AUDIT_LOG_RECORDS:
         ts = e.timestamp.isoformat()

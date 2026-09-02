@@ -3,9 +3,11 @@ uvicorn[standard]>=0.34
 pydantic>=2.0
 sqlalchemy[asyncio]>=2.0
 asyncpg>=0.30
+valkey>=6.0
 alembic>=1.14
 psycopg2-binary>=2.9
 python-dotenv
 httpx
+requests>=2.31
 pytest>=8.0
 pytest-asyncio>=0.24

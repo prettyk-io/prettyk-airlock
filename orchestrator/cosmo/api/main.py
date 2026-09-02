@@ -19,6 +19,10 @@ from orchestrator.cosmo.api.routes.gates import router as gates_router
 from orchestrator.cosmo.api.routes.sse import router as sse_router
 from orchestrator.cosmo.api.routes.preferences import router as preferences_router
 from orchestrator.cosmo.api.routes.releases import router as releases_router
+from orchestrator.cosmo.api.routes.transfer import (
+    router as transfer_router,
+    transfer_error_handler,
+)
 from orchestrator.cosmo.api.routes.metrics import router as metrics_router
 from orchestrator.cosmo.api.routes.status import router as status_router
 from orchestrator.cosmo.api.routes.repos import router as repos_router
@@ -31,6 +35,7 @@ from orchestrator.cosmo.api.routes.builds import router as builds_router
 from orchestrator.cosmo.api.routes.deployments import router as deployments_router
 from orchestrator.cosmo.api.routes.projects import router as projects_router, kits_router
 from orchestrator.cosmo.api.routes.release_batches import router as release_batches_router
+from orchestrator.cosmo.api.routes.webhooks import router as webhooks_router
 from orchestrator.cosmo.api.startup import lifespan
 
 app = FastAPI(
@@ -62,6 +67,11 @@ app.include_router(gates_router)
 app.include_router(sse_router)
 app.include_router(preferences_router)
 app.include_router(releases_router)
+# COS-058: transfer boundary API (kernel COS-050/053)
+app.include_router(transfer_router)
+# COS-058: unified error contract {"error": {...}} для dict-detail HTTPException
+from fastapi import HTTPException as _HTTPException  # noqa: E402
+app.add_exception_handler(_HTTPException, transfer_error_handler)
 app.include_router(metrics_router)
 app.include_router(status_router)
 app.include_router(repos_router)
@@ -74,3 +84,4 @@ app.include_router(deployments_router)
 app.include_router(projects_router)
 app.include_router(kits_router)
 app.include_router(release_batches_router)
+app.include_router(webhooks_router)

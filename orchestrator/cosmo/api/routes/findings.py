@@ -5,7 +5,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_principal
+from orchestrator.cosmo.domain.rbac import PrincipalContext
 
 router = APIRouter(prefix="/api/v1/findings", tags=["findings"])
 
@@ -23,6 +24,7 @@ async def search_findings(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ):
     """Поиск по уязвимостям с GIN-оптимизацией.
 
@@ -30,9 +32,18 @@ async def search_findings(
     source tool, диапазон дат, пагинацию.
 
     Returns {items, total, offset, limit}.
+
+    COS-068: authentication required + domain-scoping: не-админ ищет
+    только в своём домене (клиентский domain_id игнорируется), админ
+    может фильтровать любым доменом или искать глобально.
     """
     from orchestrator.cosmo.db.session import get_sync_session
     from orchestrator.cosmo.ledger.finding_search import FindingSearchEngine
+
+    # COS-068: domain-scoping — не-админ не может расширить поиск на чужой домен
+    effective_domain = (
+        domain_id if principal.is_system_admin else (principal.domain_id or "__no_domain__")
+    )
 
     # Parse severity list
     sev_list = [s.strip() for s in severity.split(",")] if severity else None
@@ -40,7 +51,7 @@ async def search_findings(
 
     result = FindingSearchEngine.search_pg(
         db_session_factory=get_sync_session,
-        domain_id=domain_id,
+        domain_id=effective_domain,
         severity=sev_arg,
         cwe=cwe,
         file_path=file,

@@ -1,9 +1,11 @@
 """COS-066: Artifact Retention API — плановая очистка, статус хранилища."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
+from orchestrator.cosmo.api.deps import require_principal, require_system_admin
+from orchestrator.cosmo.domain.rbac import PrincipalContext
 from orchestrator.cosmo.ledger.artifact_store import ArtifactStore
 from orchestrator.cosmo.ledger.retention import ArtifactRetentionManager, RetentionPolicy
 
@@ -39,8 +41,15 @@ class RetentionStatus(BaseModel):
 # ── Endpoints ───────────────────────────────────────────────────────────
 
 @router.post("/cleanup")
-async def trigger_cleanup(body: CleanupRequest):
-    """COS-066: запустить плановую очистку артефактов."""
+async def trigger_cleanup(
+    body: CleanupRequest,
+    principal: PrincipalContext = Depends(require_system_admin()),
+):
+    """COS-066: запустить плановую очистку артефактов.
+
+    COS-068: system-admin only — деструктивная операция (удаление
+    артефактов прогонов) была доступна анонимно.
+    """
     run_ids = body.run_ids or _list_all_run_dirs()
 
     policy = RetentionPolicy(
@@ -54,8 +63,13 @@ async def trigger_cleanup(body: CleanupRequest):
 
 
 @router.get("/retention/status", response_model=RetentionStatus)
-async def retention_status():
-    """COS-066: сводка хранилища — место, кандидаты, защищённые прогоны."""
+async def retention_status(
+    principal: PrincipalContext = Depends(require_principal()),
+):
+    """COS-066: сводка хранилища — место, кандидаты, защищённые прогоны.
+
+    COS-068: authentication required.
+    """
     run_ids = _list_all_run_dirs()
     plan = _manager.evaluate_cleanup(run_ids)
 

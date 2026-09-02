@@ -32,9 +32,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.cosmo.api.deps import get_db
+from orchestrator.cosmo.api.deps import get_db, require_principal
 from orchestrator.cosmo.api.health import _STARTED_AT, _probe_postgres, _probe_valkey
 from orchestrator.cosmo.db.models import Application, Batch, Domain, Gate, Run
+from orchestrator.cosmo.domain.rbac import PrincipalContext
 
 router = APIRouter(tags=["metrics"])
 
@@ -91,8 +92,12 @@ async def trends(
     domain_id: str = Query("all", description="Domain ID filter"),
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ) -> TrendsResponse:
-    """Security trends dashboard: pass rate, findings severity, run duration, flaky gates."""
+    """Security trends dashboard: pass rate, findings severity, run duration, flaky gates.
+
+    COS-068: authentication required (aggregated security posture).
+    """
     now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     start_dt = now_utc - datetime.timedelta(days=days)
 
@@ -209,8 +214,12 @@ async def trends(
 async def sla_monitor(
     domain_id: str = Query("all", description="Domain ID filter"),
     db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
 ):
-    """Сводка по соблюдению SLA (ЦБ РФ: Critical=24h, High=7d, Medium=30d, Low=90d)."""
+    """Сводка по соблюдению SLA (ЦБ РФ: Critical=24h, High=7d, Medium=30d, Low=90d).
+
+    COS-068: authentication required.
+    """
     from orchestrator.cosmo.ledger.sla_tracker import sla_summary
     from orchestrator.cosmo.db.models import Run as RunModel
 
@@ -247,7 +256,13 @@ async def sla_monitor(
 
 @router.get("/metrics")
 async def metrics(db: AsyncSession = Depends(get_db)) -> str:
-    """Prometheus text exposition format — метрики Cosmo Control Plane."""
+    """Prometheus text exposition format — метрики Cosmo Control Plane.
+
+    COS-068: намеренно БЕЗ authentication — scrape-контракт Prometheus
+    (scraper не носит пользовательских credentials). Эндпоинт отдаёт
+    только агрегированные счётчики без пер-пользовательских данных;
+    сетевая изоляция — зона Caddy/infra (Buddy).
+    """
     _inc_request()
     now_ts = time.time()
     uptime = now_ts - _STARTED_AT
@@ -416,11 +431,16 @@ async def metrics(db: AsyncSession = Depends(get_db)) -> str:
 # ── COS-106: Compliance Audit endpoint ──
 
 @router.get("/api/v1/compliance/audit", summary="Security compliance audit across all domains")
-async def compliance_audit(db: AsyncSession = Depends(get_db)):
+async def compliance_audit(
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+):
     """Сводный отчёт аудита по всем КИТС.
 
     Проверяет: устаревшие сканы, неотвеченные гейты, SLA-просрочки.
     Возвращает: список DomainComplianceSnapshot с compliance_index 0-100.
+
+    COS-068: authentication required.
     """
     from orchestrator.cosmo.db.models import Domain as DomainModel, Run as RunModel, Gate as GateModel
     from orchestrator.cosmo.ledger.compliance_auditor import ComplianceAuditor, DomainComplianceSnapshot
