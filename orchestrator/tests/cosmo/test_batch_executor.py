@@ -73,9 +73,10 @@ class TestSubmitBatches:
         executor._update_batch_pg = MagicMock()
 
         s1 = executor.submit_batches(run_record)
+        # COS-097 resubmit-guard: повторный submit не плодит дубли pipeline'ов.
         s2 = executor.submit_batches(run_record)
         assert len(s1) == 2
-        assert len(s2) == 2
+        assert s2 == []
         assert len(executor.active_batches()) == 2
 
     def test_submit_skips_fail_batch_ids(self, executor, run_record):
@@ -122,9 +123,12 @@ class TestPoll:
         executor._query_batches = MagicMock(return_value=[_make_batch_orms()[0]])
         executor._update_batch_pg = MagicMock()
         executor._update_batch_pg_terminal = MagicMock()
-        executor._get_batch_pg_status = MagicMock(return_value="running")
+        # stateful: submit-guard видит "pending", poll — "running"
+        pg = {"status": "pending"}
+        executor._get_batch_pg_status = MagicMock(side_effect=lambda bid: pg["status"])
 
         executor.submit_batches(run_record)
+        pg["status"] = "running"
         executor._status_override["batch-build"] = "success"
 
         results = executor.poll()
@@ -137,9 +141,11 @@ class TestPoll:
     def test_poll_non_terminal_stays_active(self, executor, run_record):
         executor._query_batches = MagicMock(return_value=[_make_batch_orms()[0]])
         executor._update_batch_pg = MagicMock()
-        executor._get_batch_pg_status = MagicMock(return_value="running")
+        pg = {"status": "pending"}
+        executor._get_batch_pg_status = MagicMock(side_effect=lambda bid: pg["status"])
 
         executor.submit_batches(run_record)
+        pg["status"] = "running"
         executor._status_override["batch-build"] = "running"
 
         results = executor.poll()
@@ -163,9 +169,11 @@ class TestPoll:
         executor._query_batches = MagicMock(return_value=_make_batch_orms())
         executor._update_batch_pg = MagicMock()
         executor._update_batch_pg_terminal = MagicMock()
-        executor._get_batch_pg_status = MagicMock(return_value="running")
+        pg = {"status": "pending"}
+        executor._get_batch_pg_status = MagicMock(side_effect=lambda bid: pg["status"])
 
         executor.submit_batches(run_record)
+        pg["status"] = "running"
         executor._status_override["batch-build"] = "success"
         executor._status_override["batch-dast"] = "running"
 
@@ -186,9 +194,11 @@ class TestPoll:
         lt._update_batch_pg = MagicMock()
         lt._update_batch_pg_terminal = MagicMock()
         # After poll marks both terminal, _check_run_terminal читает статусы:
-        lt._get_batch_pg_status = MagicMock(return_value="passed")
+        pg = {"status": "pending"}
+        lt._get_batch_pg_status = MagicMock(side_effect=lambda bid: pg["status"])
 
         lt.submit_batches(run_record)
+        pg["status"] = "passed"
         lt._status_override["batch-build"] = "success"
         lt._status_override["batch-dast"] = "success"
 
@@ -206,9 +216,11 @@ class TestPoll:
         lt._update_batch_pg = MagicMock()
         lt._update_batch_pg_terminal = MagicMock()
         # After poll: оба terminal, но failed
-        lt._get_batch_pg_status = MagicMock(return_value="failed")
+        pg = {"status": "pending"}
+        lt._get_batch_pg_status = MagicMock(side_effect=lambda bid: pg["status"])
 
         lt.submit_batches(run_record)
+        pg["status"] = "failed"
         lt._status_override["batch-build"] = "failure"
         lt._status_override["batch-dast"] = "failure"
 
@@ -225,9 +237,11 @@ class TestPoll:
         lt._query_batches = MagicMock(return_value=_make_batch_orms())
         lt._update_batch_pg = MagicMock()
         lt._update_batch_pg_terminal = MagicMock()
-        lt._get_batch_pg_status = MagicMock(return_value="running")
+        pg = {"status": "pending"}
+        lt._get_batch_pg_status = MagicMock(side_effect=lambda bid: pg["status"])
 
         lt.submit_batches(run_record)
+        pg["status"] = "running"
         lt._status_override["batch-build"] = "success"
 
         lt.poll()
@@ -243,14 +257,17 @@ class TestPoll:
         lt = BatchExecutor(adapter=real_adapter, dry_run=False)
         lt._query_batches = MagicMock(return_value=[_make_batch_orms()[0]])
         lt._update_batch_pg = MagicMock()
-        # old status = "pending" → при ошибке адаптера fallback "pending" → no diff
         lt._get_batch_pg_status = MagicMock(return_value="pending")
 
         lt.submit_batches(run_record)
         assert "batch-build" in lt.active_batches()
 
+        # COS-097 honesty: ошибка транспорта — видимый unknown-result
+        # (счётчик подряд-неизвестных), не тихий no-op.
         results = lt.poll()
-        assert results == []
+        assert len(results) == 1
+        assert results[0].terminal is False
+        assert results[0].raw_status == "unknown"
         assert "batch-build" in lt.active_batches()
 
 
@@ -303,8 +320,11 @@ class TestStatusMapping:
         assert _STATUS_MAP[wp_status] == expected
 
     def test_terminal_wp_statuses(self):
+        # COS-097: declined/skipped — честные terminal-статусы v3.5
+        # (blocked ждёт approval — НЕ terminal).
         from orchestrator.cosmo.control_plane.executor import _TERMINAL_WP
-        assert _TERMINAL_WP == frozenset({"success", "failure", "killed", "error"})
+        assert _TERMINAL_WP == frozenset(
+            {"success", "failure", "killed", "error", "declined", "skipped"})
 
     def test_terminal_batch_statuses(self):
         from orchestrator.cosmo.control_plane.executor import _TERMINAL_BATCH

@@ -94,7 +94,7 @@ async def provision_minio_buckets() -> None:
 
 @asynccontextmanager
 async def lifespan(app):
-    """FastAPI lifespan: Alembic миграции + MinIO bucket provisioning."""
+    """FastAPI lifespan: Alembic миграции + MinIO bucket provisioning + outbox worker."""
     logger.info("Cosmo API starting — provisioning MinIO buckets...")
     await provision_minio_buckets()
 
@@ -108,6 +108,54 @@ async def lifespan(app):
         alembic_cfg = Config("alembic.ini")
         command.upgrade(alembic_cfg, "head")
 
+    # COS-081: gate decision trail — таблица на отдельном GateTrailBase вне
+    # замороженной alembic-цепочки; создаётся idempotent create_all при старте
+    # (миграции выше её не создают, chain править запрещено).
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine as _cae
+        from orchestrator.cosmo.db.session import resolve_database_url
+        from orchestrator.cosmo.db.models_gate_trail import GateTrailBase
+        _boot_engine = _cae(resolve_database_url(), echo=False)
+        async with _boot_engine.begin() as _conn:
+            await _conn.run_sync(GateTrailBase.metadata.create_all)
+        await _boot_engine.dispose()
+    except Exception as exc:  # bootstrap не роняет старт, но факт фиксирует
+        logger.warning("Gate trail bootstrap skipped: %s", exc)
+
+    # ── Notification Delivery Hardening: background outbox worker ──
+    # Доставка уведомлений без ручного POST /process. Endpoint остаётся.
+    outbox_worker = None
+    from orchestrator.cosmo.notifications.worker import OutboxWorker, worker_enabled
+
+    if worker_enabled():
+        outbox_worker = OutboxWorker()
+        outbox_worker.start()
+        app.state.outbox_worker = outbox_worker
+    else:
+        logger.info("Outbox worker disabled via COSMO_OUTBOX_WORKER_ENABLED")
+
+    # ── COS-097: живой Woodpecker execution-контур (opt-in) ──
+    # BatchExecutor + poll loop + honest degraded + evidence из реального
+    # прогона. Выключен по умолчанию: unit-сеты и стенды без Woodpecker
+    # не меняют поведение.
+    exec_service = None
+    from orchestrator.cosmo.control_plane.execution_service import (
+        ExecutionService,
+        execution_enabled,
+    )
+
+    if execution_enabled():
+        from orchestrator.cosmo.db.session import get_sessionmaker
+        exec_service = ExecutionService(get_sessionmaker())
+        await exec_service.start()
+        app.state.execution_service = exec_service
+    else:
+        logger.info("Execution service disabled via COSMO_EXECUTOR_ENABLED")
+
     yield
 
+    if exec_service is not None:
+        await exec_service.stop()
+    if outbox_worker is not None:
+        await outbox_worker.stop()
     logger.info("Cosmo API shutting down")

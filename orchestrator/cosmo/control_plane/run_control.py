@@ -237,12 +237,27 @@ class RunControlPlane:
                 return
 
             if not all_passed:
-                # Batch failure → immediate BLOCKED
+                # COS-097: честный degraded — sustained unknown статусы
+                # Woodpecker (не выдуманный PASS, не молчаливый hang).
+                # failed + FailureClass.INFRA с сохранённой причиной;
+                # обычный batch failure остаётся BLOCKED (parity COS-046).
+                degraded_reason = None
+                if self._executor is not None:
+                    pop_degraded = getattr(self._executor, "pop_degraded_reason", None)
+                    if callable(pop_degraded):
+                        degraded_reason = pop_degraded(run_id)
+
                 self._release_worker_by_run_id(run_id)
-                run.failure_class = FailureClass.GATE
-                run.error = "batch execution failed"
-                run.finished_at = self._clock()
-                self._transition(run, RunState.BLOCKED)
+                if degraded_reason:
+                    run.failure_class = FailureClass.INFRA
+                    run.error = degraded_reason
+                    run.finished_at = self._clock()
+                    self._transition(run, RunState.FAILED)
+                else:
+                    run.failure_class = FailureClass.GATE
+                    run.error = "batch execution failed"
+                    run.finished_at = self._clock()
+                    self._transition(run, RunState.BLOCKED)
                 self._dispatch()
                 return
 
