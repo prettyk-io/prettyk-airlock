@@ -1,39 +1,53 @@
 /**
  * COS-090: Release Transfer Wizard UI.
  *
- * 3-step Stepper wizard for security zone promotion:
- *   Step 1 — Pre-Flight Checks (gates, batches, signature)
- *   Step 2 — Target Zone Selection & Manifest Diff preview
- *   Step 3 — Signoff & 2FA (officer credentials, cryptographic signature, transfer execution)
- *   Success — animated screen with GOST-Act download link
+ * COS-098 (контракт-первым): зона — backend 'zr'|'zt'|'zpe' (не 'ЗР'/'ЗТ');
+ * трансфер — честный TransferReleaseRequest (target_zone, officer_name,
+ * sign_signature, token_2fa, transfer_notes) → POST /transfer; итог —
+ * Release ИЗ ОТВЕТА БЭКЕНДА, не client-side фальсификация. Гост-акт —
+ * реальный эндпоинт /runs/{run_id}/gost-act/html. Трансфер разрешён
+ * бэкендом только из статуса deployed — целевая зона = следующая
+ * в порядке ЗР → ЗТ → ЗПЭ.
+ *
+ *   Step 1 — Pre-Flight Checks (gates плана, approvals с подписью)
+ *   Step 2 — Target Zone (следующая зона) + сводка состава
+ *   Step 3 — Signoff & 2FA (officer credentials, signature, transfer)
+ *   Success — экран с GOST-Act download (реальный endpoint)
  */
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box, Typography, Button, Chip, Paper, Skeleton,
-  Alert, IconButton, Tooltip, Stepper, Step, StepLabel,
-  StepContent, Card, CardContent, Grid, Divider,
-  TextField, Checkbox, FormControlLabel, Dialog,
-  DialogTitle, DialogContent, DialogActions, CircularProgress,
+  Alert, IconButton, Stepper, Step, StepLabel,
+  StepContent, Card, Grid,
+  TextField, Checkbox, FormControlLabel, CircularProgress,
 } from '@mui/material';
 import {
   ArrowForward, ArrowBack, VerifiedUser, CheckCircle,
-  Warning, HourglassEmpty, BugReport, Gavel, Block,
-  TaskAlt, Security, Fingerprint, Download, RocketLaunch,
+  Warning, Gavel, Fingerprint, Download,
+  TaskAlt,
 } from '@mui/icons-material';
 import {
-  api, type Release, type ReleaseZone, type ReleaseNode,
-  type ReleaseEdge, type ReleaseManifest, type Gate,
+  api, type Release, type ReleaseZone, type Gate,
 } from '../api';
 import { ErrorBoundary } from '../../shared/ErrorBoundary';
 import { toast } from '../../shared/toast';
 
-// ── Types ─────────────────────────────────────────────────────────────
+export const ZONE_LABELS: Record<ReleaseZone, string> = {
+  zr: 'ЗР (Разработка)',
+  zt: 'ЗТ (Тестирование)',
+  zpe: 'ЗПЭ (Пром)',
+};
+
+const NEXT_ZONE: Record<ReleaseZone, ReleaseZone | null> = {
+  zr: 'zt',
+  zt: 'zpe',
+  zpe: null,
+};
 
 interface PreFlightResult {
   allGatesPassed: boolean;
   pendingGates: string[];
-  pendingBatches: number;
-  hasIBSignature: boolean;
+  hasOfficerApproval: boolean;
   gateCount: number;
   overallScore: number;
 }
@@ -44,21 +58,20 @@ interface ReleaseTransferWizardProps {
   onClose?: () => void;
 }
 
-// ── Component ──────────────────────────────────────────────────────────
-
 export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseTransferWizardProps) {
+  const targetZone: ReleaseZone | null = NEXT_ZONE[release.current_zone];
+
   const [activeStep, setActiveStep] = useState(0);
-  const [targetZone, setTargetZone] = useState<ReleaseZone>('ЗТ');
   const [gates, setGates] = useState<Gate[]>([]);
   const [loadingPreflight, setLoadingPreflight] = useState(true);
 
   // Signoff form
   const [officerName, setOfficerName] = useState('');
-  const [officerRole, setOfficerRole] = useState('secops_lead');
   const [authToken, setAuthToken] = useState('');
   const [confirmTransfer, setConfirmTransfer] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [transferSuccess, setTransferSuccess] = useState(false);
+  const [updatedRelease, setUpdatedRelease] = useState<Release | null>(null);
   const [transferError, setTransferError] = useState<string | null>(null);
 
   // ── Pre-flight checks ───────────────────────────────────────────────
@@ -68,7 +81,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
     const runPreflight = async () => {
       setLoadingPreflight(true);
       try {
-        const gatesData = await api.getGates();
+        const gatesData = await api.getGates(release.plan_id);
         if (!cancelled) setGates(gatesData || []);
       } catch {
         if (!cancelled) setGates([]);
@@ -78,106 +91,46 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
     };
     runPreflight();
     return () => { cancelled = true; };
-  }, []);
+  }, [release.plan_id]);
 
   const preFlight = useMemo<PreFlightResult>(() => {
     const pendingGates = gates
       .filter((g) => !g.decision || g.decision === 'manual_required')
       .map((g) => g.id);
-    const allGatesPassed = pendingGates.length === 0;
-
-    // Pending batches — fetched from real data (default 0)
-    const pendingBatches = 0;
-
-    const hasIBSignature = release.history.length > 0;
-
-    const score = (allGatesPassed ? 33 : 0) + (pendingBatches === 0 ? 33 : 0) + (hasIBSignature ? 34 : 0);
-
-    return {
-      allGatesPassed,
-      pendingGates,
-      pendingBatches,
-      hasIBSignature,
-      gateCount: gates.length,
-      overallScore: score,
-    };
-  }, [gates, release.history]);
-
-  const preFlightReady = preFlight.overallScore >= 66;
-
-  // ── Manifest diff preview ───────────────────────────────────────────
-
-  const manifestDiff = useMemo(() => {
-    const currentNodes = release.manifest.nodes;
-    const currentEdges = release.manifest.edges;
-
-    const addedNodes: ReleaseNode[] = [];
-    const removedNodes: ReleaseNode[] = [];
-    const modifiedNodes: Array<{ before: ReleaseNode; after: ReleaseNode }> = [];
-
-    if (targetZone === 'ЗПЭ') {
-      addedNodes.push({
-        id: 'node-seal-production',
-        name: 'Production Seal & Audit',
-        type: 'config',
-        version: '1.0.0',
-        repo: 'security/audit-seal',
-        commit: 'auto-generated',
-      });
-      if (currentEdges.length > 0) {
-        currentEdges.push({
-          from: currentEdges[0].to,
-          to: 'node-seal-production',
-          relation: 'verifies',
-        });
-      }
-    }
-
-    return { currentNodes, addedNodes, removedNodes, modifiedNodes, updatedEdges: [...currentEdges] };
-  }, [release, targetZone]);
+    const allGatesPassed = gates.length > 0 && pendingGates.length === 0;
+    // COS-098: подпись офицера ИБ = approved-approval с подписью (backend-поля)
+    const hasOfficerApproval = release.approvals.some(
+      (a) => a.decision === 'approved' && !!a.signature,
+    );
+    const score = (allGatesPassed ? 50 : 0) + (hasOfficerApproval ? 50 : 0);
+    return { allGatesPassed, pendingGates, hasOfficerApproval, gateCount: gates.length, overallScore: score };
+  }, [gates, release.approvals]);
 
   // ── Step handlers ───────────────────────────────────────────────────
 
-  const handleNext = () => {
-    setActiveStep((prev) => prev + 1);
-  };
-
-  const handleBack = () => {
-    setActiveStep((prev) => prev - 1);
-  };
+  const handleNext = () => setActiveStep((prev) => prev + 1);
+  const handleBack = () => setActiveStep((prev) => prev - 1);
 
   const handleSubmitTransfer = async () => {
-    if (!officerName.trim() || !authToken.trim()) return;
+    if (!officerName.trim() || !authToken.trim() || !targetZone) return;
     setSubmitting(true);
     setTransferError(null);
 
     try {
-      await api.transferRelease(release.id, {
-        to_zone: targetZone,
-        operator: officerName.trim(),
-        signature: `transfer-request:${officerName.trim()}:${targetZone}`,
+      // COS-098: честный TransferReleaseRequest → Release из ответа бэкенда
+      const released = await api.transferRelease(release.id, {
+        target_zone: targetZone,
+        officer_name: officerName.trim(),
+        sign_signature: `transfer-request:${officerName.trim()}:${targetZone}`,
+        token_2fa: authToken,
+        transfer_notes: confirmTransfer ? 'Подтверждено офицером ИБ' : undefined,
       });
+      setUpdatedRelease(released);
       setTransferSuccess(true);
-      toast.success(`Релиз ${release.id} успешно трансферирован в контур «${targetZone}»`);
+      toast.success(`Релиз ${release.id} трансферирован в контур «${ZONE_LABELS[targetZone]}»`);
 
       if (onComplete) {
-        const updatedRelease: Release = {
-          ...release,
-          zone: targetZone,
-          status: targetZone === 'ЗПЭ' ? 'deployed' : 'validating',
-          manifest: { ...release.manifest, zone: targetZone },
-          history: [
-            ...release.history,
-            {
-              from_zone: release.zone,
-              to_zone: targetZone,
-              timestamp: new Date().toISOString(),
-              operator: officerName.trim(),
-              signature: `transfer-request:${officerName}:${targetZone}`,
-            },
-          ],
-        };
-        setTimeout(() => onComplete(updatedRelease), 1500);
+        setTimeout(() => onComplete(released), 1500);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка трансфера релиза';
@@ -189,36 +142,25 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
   };
 
   const handleDownloadGOST = () => {
-    const actContent = `
-      <html><body>
-        <h1>ГОСТ-Акт приёмочного тестирования</h1>
-        <p>Релиз: ${release.id} (${release.version})</p>
-        <p>Зона: ${release.zone} → ${targetZone}</p>
-        <p>Офицер безопасности: ${officerName}</p>
-        <p>Подпись сгенерирована бэкендом</p>
-        <p>Дата: ${new Date().toISOString()}</p>
-      </body></html>
-    `.trim();
-    const blob = new Blob([actContent], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ГОСТ-Акт-${release.id}-${targetZone}.html`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // COS-098: реальный ГОСТ-Акт эндпоинт по первому прогону релиза
+    if (release.run_ids.length === 0) {
+      toast.error('В релизе нет прогонов — ГОСТ-Акт недоступен');
+      return;
+    }
+    window.open(`/api/v1/runs/${encodeURIComponent(release.run_ids[0])}/gost-act/html`, '_blank');
   };
 
   // ── Step labels ─────────────────────────────────────────────────────
 
   const steps = [
     { label: 'Pre-Flight Checks (Проверка допуска)', description: 'Автоматическая верификация критериев' },
-    { label: 'Target Zone & Manifest Diff', description: 'Выбор зоны и превью изменений' },
+    { label: 'Target Zone & Состав', description: `Целевая зона: ${targetZone ? ZONE_LABELS[targetZone] : '—'}` },
     { label: 'Signoff & 2FA (Подтверждение)', description: 'Авторизация офицера безопасности' },
   ];
 
-  // ── Render ───────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────
 
-  if (transferSuccess) {
+  if (transferSuccess && updatedRelease) {
     return (
       <Card variant="outlined" sx={{ borderRadius: 2, p: 4, textAlign: 'center', borderColor: 'success.main' }}>
         <Box sx={{ py: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
@@ -227,13 +169,13 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
             Трансфер успешно выполнен!
           </Typography>
           <Typography variant="body1" color="text.secondary">
-            Релиз <strong>{release.name}</strong> (v{release.version}) перемещен
-            {' '}из <Chip label={release.zone} size="small" color="primary" sx={{ fontWeight: 700 }} />
-            {' '}в <Chip label={targetZone} size="small" color="success" sx={{ fontWeight: 700 }} />
+            Релиз <strong>{updatedRelease.id}</strong> ({updatedRelease.version || 'без версии'}) перемещён
+            {' '}из <Chip label={ZONE_LABELS[updatedRelease.transfer_history.at(-1)?.from_zone ?? 'zr']} size="small" color="primary" sx={{ fontWeight: 700 }} />
+            {' '}в <Chip label={ZONE_LABELS[updatedRelease.current_zone]} size="small" color="success" sx={{ fontWeight: 700 }} />
           </Typography>
           <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'action.hover', mt: 1, width: '100%', maxWidth: 400 }}>
             <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', display: 'block', textAlign: 'left', wordBreak: 'break-all' }}>
-              Подпись сгенерирована бэкендом
+              Зона подтверждена ответом бэкенда: {updatedRelease.current_zone}
             </Typography>
             <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: 'text.secondary' }}>
               Сертифицировал: <strong>{officerName}</strong>
@@ -247,7 +189,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
               onClick={handleDownloadGOST}
               sx={{ textTransform: 'none', fontWeight: 600 }}
             >
-              Скачать подписанный ГОСТ-Акт
+              Скачать ГОСТ-Акт
             </Button>
             {onClose && (
               <Button variant="outlined" onClick={onClose} sx={{ textTransform: 'none' }}>
@@ -271,7 +213,8 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                 Мастер трансфера релиза
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {release.name} (v{release.version}) — текущая зона: <Chip label={release.zone} size="small" color="primary" sx={{ fontWeight: 700, fontSize: 12 }} />
+                {release.id} ({release.version || 'без версии'}) — текущая зона:{' '}
+                <Chip label={ZONE_LABELS[release.current_zone]} size="small" color="primary" sx={{ fontWeight: 700, fontSize: 12 }} />
               </Typography>
             </Box>
             {onClose && (
@@ -286,6 +229,12 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
           </Alert>
         )}
 
+        {!targetZone && (
+          <Alert severity="warning" sx={{ mx: 2, mt: 2 }}>
+            Релиз уже в конечной зоне (ЗПЭ) — трансфер недоступен.
+          </Alert>
+        )}
+
         {/* Stepper */}
         <Box sx={{ p: 2.5 }}>
           <Stepper activeStep={activeStep} orientation="vertical">
@@ -295,10 +244,10 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                 icon={
                   loadingPreflight ? (
                     <CircularProgress size={20} />
-                  ) : preFlightReady ? (
+                  ) : preFlight.overallScore >= 100 ? (
                     <CheckCircle sx={{ color: 'success.main' }} />
                   ) : (
-                    <Warning sx={{ color: preFlight.overallScore >= 33 ? 'warning.main' : 'error.main' }} />
+                    <Warning sx={{ color: preFlight.overallScore >= 50 ? 'warning.main' : 'error.main' }} />
                   )
                 }
               >
@@ -307,15 +256,15 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                     Pre-Flight Checks (Проверка готовности)
                   </Typography>
                   <Chip
-                    label={preFlightReady ? 'ГОТОВ' : 'ТРЕБУЕТ ВНИМАНИЯ'}
+                    label={preFlight.overallScore >= 100 ? 'ГОТОВ' : 'ТРЕБУЕТ ВНИМАНИЯ'}
                     size="small"
-                    color={preFlightReady ? 'success' : preFlight.overallScore >= 33 ? 'warning' : 'error'}
+                    color={preFlight.overallScore >= 100 ? 'success' : preFlight.overallScore >= 50 ? 'warning' : 'error'}
                     sx={{ fontWeight: 700, fontSize: 10 }}
                   />
                   <Chip label={`${preFlight.overallScore}%`} size="small" variant="outlined" sx={{ fontSize: 10 }} />
                 </Box>
                 <Typography variant="caption" color="text.secondary">
-                  Автоматическая верификация Security Gates, активных батчей и подписей.
+                  Автоматическая верификация Security Gates плана и подписанных approvals.
                 </Typography>
               </StepLabel>
               <StepContent>
@@ -329,9 +278,11 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                           Security Gates ({preFlight.gateCount})
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {preFlight.allGatesPassed
-                            ? 'Все гейты имеют вердикт PASS'
-                            : `${preFlight.pendingGates.length} гейтов без вердикта: ${preFlight.pendingGates.join(', ')}`}
+                          {preFlight.gateCount === 0
+                            ? 'В плане релиза нет гейтов'
+                            : preFlight.allGatesPassed
+                              ? 'Все гейты имеют вердикт PASS'
+                              : `${preFlight.pendingGates.length} гейтов без вердикта: ${preFlight.pendingGates.join(', ')}`}
                         </Typography>
                       </Box>
                     </Box>
@@ -342,44 +293,22 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                     )}
                   </Paper>
 
-                  {/* Batch Check */}
+                  {/* Approval/Signature Check */}
                   <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <HourglassEmpty sx={{ color: preFlight.pendingBatches === 0 ? 'success.main' : 'warning.main', fontSize: 22 }} />
-                      <Box>
-                        <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                          Незавершенные батчи
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {preFlight.pendingBatches === 0
-                            ? '0 активных батчей, пайплайн завершен'
-                            : `${preFlight.pendingBatches} батчей в статусе running/pending`}
-                        </Typography>
-                      </Box>
-                    </Box>
-                    {preFlight.pendingBatches === 0 ? (
-                      <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
-                    ) : (
-                      <Warning sx={{ color: 'warning.main', fontSize: 20 }} />
-                    )}
-                  </Paper>
-
-                  {/* Signature Check */}
-                  <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Fingerprint sx={{ color: preFlight.hasIBSignature ? 'success.main' : 'error.main', fontSize: 22 }} />
+                      <Fingerprint sx={{ color: preFlight.hasOfficerApproval ? 'success.main' : 'error.main', fontSize: 22 }} />
                       <Box>
                         <Typography variant="body2" sx={{ fontWeight: 600 }}>
                           Подпись офицера ИБ
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          {preFlight.hasIBSignature
-                            ? 'Предыдущий трансфер подписан'
-                            : 'Требуется ручная подпись офицера безопасности'}
+                          {preFlight.hasOfficerApproval
+                            ? 'Есть approved-решение с подписью'
+                            : 'Требуется approval с подписью офицера безопасности'}
                         </Typography>
                       </Box>
                     </Box>
-                    {preFlight.hasIBSignature ? (
+                    {preFlight.hasOfficerApproval ? (
                       <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
                     ) : (
                       <Warning sx={{ color: 'error.main', fontSize: 20 }} />
@@ -391,7 +320,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                       variant="contained"
                       size="small"
                       onClick={handleNext}
-                      disabled={loadingPreflight}
+                      disabled={loadingPreflight || !targetZone}
                       endIcon={<ArrowForward />}
                       sx={{ textTransform: 'none', fontWeight: 600 }}
                     >
@@ -410,103 +339,47 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
             {/* ═══ Step 2: Target Zone ═══ */}
             <Step>
               <StepLabel
-                icon={activeStep >= 2 ? <CheckCircle sx={{ color: 'success.main' }} /> : <RocketLaunch sx={{ color: 'primary.main' }} />}
+                icon={activeStep >= 2 ? <CheckCircle sx={{ color: 'success.main' }} /> : <VerifiedUser sx={{ color: 'primary.main' }} />}
               >
                 <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                  Target Zone & Manifest Diff
+                  Target Zone & Состав
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Выбор целевой зоны и предпросмотр изменений в манифесте.
+                  Целевая зона — следующая в порядке ЗР → ЗТ → ЗПЭ (правило бэкенда).
                 </Typography>
               </StepLabel>
               <StepContent>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, py: 1 }}>
-                  {/* Zone Selection */}
+                  {/* Zone Summary */}
                   <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5 }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.5 }}>
-                      Выберите целевую зону безопасности
+                      Целевая зона безопасности
                     </Typography>
                     <Grid container spacing={1.5}>
-                      {release.zone !== 'ЗТ' && (
-                        <Grid size={{ xs: 12, sm: 6 }}>
-                          <Paper
-                            variant="outlined"
-                            onClick={() => setTargetZone('ЗТ')}
-                            sx={{
-                              p: 2, cursor: 'pointer', borderRadius: 1.5,
-                              borderColor: targetZone === 'ЗТ' ? 'warning.main' : 'divider',
-                              bgcolor: targetZone === 'ЗТ' ? 'rgba(245,158,11,0.05)' : 'background.paper',
-                              borderWidth: targetZone === 'ЗТ' ? 2 : 1,
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                              <Chip label="ЗТ" size="small" color="warning" sx={{ fontWeight: 700 }} />
-                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                                Зона Тестирования
-                              </Typography>
-                            </Box>
-                            <Typography variant="caption" color="text.secondary">
-                              DAST/SAST сканирование, аудит Security Gates, песочница CI/CD.
-                            </Typography>
-                          </Paper>
-                        </Grid>
-                      )}
-                      {release.zone !== 'ЗПЭ' && (
-                        <Grid size={{ xs: 12, sm: 6 }}>
-                          <Paper
-                            variant="outlined"
-                            onClick={() => setTargetZone('ЗПЭ')}
-                            sx={{
-                              p: 2, cursor: 'pointer', borderRadius: 1.5,
-                              borderColor: targetZone === 'ЗПЭ' ? 'success.main' : 'divider',
-                              bgcolor: targetZone === 'ЗПЭ' ? 'rgba(16,185,129,0.05)' : 'background.paper',
-                              borderWidth: targetZone === 'ЗПЭ' ? 2 : 1,
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                              <Chip label="ЗПЭ" size="small" color="success" sx={{ fontWeight: 700 }} />
-                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                                Промышленная Эксплуатация
-                              </Typography>
-                            </Box>
-                            <Typography variant="caption" color="text.secondary">
-                              Боевой контур, криптографическая подпись, airgap-изоляция.
-                            </Typography>
-                          </Paper>
-                        </Grid>
-                      )}
+                      <Grid size={{ xs: 6 }}>
+                        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5, borderColor: 'divider' }}>
+                          <Typography variant="caption" color="text.secondary">Из</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>{ZONE_LABELS[release.current_zone]}</Typography>
+                        </Paper>
+                      </Grid>
+                      <Grid size={{ xs: 6 }}>
+                        <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5, borderColor: targetZone === 'zpe' ? 'success.main' : 'warning.main', bgcolor: 'rgba(245,158,11,0.05)' }}>
+                          <Typography variant="caption" color="text.secondary">В</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>{targetZone ? ZONE_LABELS[targetZone] : '—'}</Typography>
+                        </Paper>
+                      </Grid>
                     </Grid>
                   </Paper>
 
-                  {/* Manifest Diff Preview */}
+                  {/* Release Composition Summary (честный состав) */}
                   <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                        Предпросмотр манифеста после трансфера
-                      </Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Chip label={release.zone} size="small" color="primary" variant="outlined" sx={{ fontWeight: 700 }} />
-                        <ArrowForward sx={{ fontSize: 14, color: 'text.disabled' }} />
-                        <Chip label={targetZone} size="small" color={targetZone === 'ЗПЭ' ? 'success' : 'warning'} sx={{ fontWeight: 700 }} />
-                      </Box>
-                    </Box>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      {manifestDiff.currentNodes.map((node) => (
-                        <Box key={node.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, fontSize: 12, p: 1, border: 1, borderColor: 'divider', borderRadius: 1 }}>
-                          <Chip label="EXISTS" size="small" variant="outlined" sx={{ fontSize: 9, height: 16, color: 'text.secondary' }} />
-                          <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{node.name}</span>
-                          <span style={{ color: 'text.secondary' }}>@{node.version}</span>
-                        </Box>
-                      ))}
-                      {manifestDiff.addedNodes.map((node) => (
-                        <Box key={node.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, fontSize: 12, p: 1, border: 1, borderColor: 'success.light', borderRadius: 1, bgcolor: 'rgba(16,185,129,0.05)' }}>
-                          <Chip icon={<span style={{ fontSize: 12 }}>+</span>} label="NEW" size="small" color="success" sx={{ fontSize: 9, height: 16, fontWeight: 700 }} />
-                          <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{node.name}</span>
-                          <span style={{ color: 'text.secondary' }}>{node.type}</span>
-                        </Box>
-                      ))}
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.5 }}>
+                      Состав релиза
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: 12 }}>
+                      <div><strong>Прогонов:</strong> {release.run_ids.length}</div>
+                      <div><strong>Артефактов:</strong> {release.artifacts.length}</div>
+                      <div><strong>Approvals:</strong> {release.approvals.length}</div>
                     </Box>
                   </Paper>
 
@@ -534,8 +407,6 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                 icon={
                   submitting ? (
                     <CircularProgress size={20} />
-                  ) : transferSuccess ? (
-                    <CheckCircle sx={{ color: 'success.main' }} />
                   ) : (
                     <VerifiedUser sx={{ color: 'primary.main' }} />
                   )
@@ -545,24 +416,21 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                   Signoff & 2FA (Подтверждение трансфера)
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Авторизация офицера безопасности, генерация криптографической подписи.
+                  Авторизация офицера безопасности, передача подписи в бэкенд.
                 </Typography>
               </StepLabel>
               <StepContent>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, py: 1 }}>
                   {/* Summary */}
                   <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                        Сводка трансфера
-                      </Typography>
-                    </Box>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 2 }}>
+                      Сводка трансфера
+                    </Typography>
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: 12 }}>
-                      <div><strong>Релиз:</strong> {release.name} ({release.version})</div>
-                      <div><strong>Текущая зона:</strong> {release.zone}</div>
-                      <div><strong>Целевая зона:</strong> <Chip label={targetZone} size="small" color={targetZone === 'ЗПЭ' ? 'success' : 'warning'} sx={{ fontWeight: 700, ml: 1 }} /></div>
-                      <div><strong>Сервисов в составе:</strong> {release.manifest.nodes.length}</div>
-                      <div><strong>Статус Pre-Flight:</strong> <Chip label={`${preFlight.overallScore}%`} size="small" color={preFlightReady ? 'success' : 'warning'} sx={{ fontWeight: 700 }} /></div>
+                      <div><strong>Релиз:</strong> {release.id} ({release.version || 'без версии'})</div>
+                      <div><strong>Текущая зона:</strong> {ZONE_LABELS[release.current_zone]}</div>
+                      <div><strong>Целевая зона:</strong> <Chip label={targetZone ? ZONE_LABELS[targetZone] : '—'} size="small" color={targetZone === 'zpe' ? 'success' : 'warning'} sx={{ fontWeight: 700, ml: 1 }} /></div>
+                      <div><strong>Статус Pre-Flight:</strong> <Chip label={`${preFlight.overallScore}%`} size="small" color={preFlight.overallScore >= 100 ? 'success' : 'warning'} sx={{ fontWeight: 700 }} /></div>
                     </Box>
                   </Paper>
 
@@ -580,7 +448,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                         size="small"
                         fullWidth
                         required
-                        helperText="Данные будут зафиксированы в неизменяемом журнале аудита"
+                        helperText="Уйдёт в бэкенд как officer_name (SAN-009)"
                       />
                       <TextField
                         label="2FA Токен подтверждения / Пароль подписи"
@@ -603,7 +471,7 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                         }
                         label={
                           <Typography variant="caption" color="text.secondary">
-                            Я подтверждаю трансфер релиза в контур <strong>{targetZone}</strong> и принимаю на себя ответственность за соответствие требованиям безопасности.
+                            Я подтверждаю трансфер релиза в контур <strong>{targetZone ? ZONE_LABELS[targetZone] : ''}</strong> и принимаю на себя ответственность за соответствие требованиям безопасности.
                           </Typography>
                         }
                       />
@@ -616,14 +484,14 @@ export function ReleaseTransferWizard({ release, onComplete, onClose }: ReleaseT
                     </Button>
                     <Button
                       variant="contained"
-                      color={targetZone === 'ЗПЭ' ? 'success' : 'warning'}
+                      color={targetZone === 'zpe' ? 'success' : 'warning'}
                       size="small"
                       onClick={handleSubmitTransfer}
-                      disabled={submitting || !officerName.trim() || !authToken.trim() || !confirmTransfer}
+                      disabled={submitting || !officerName.trim() || !authToken.trim() || !confirmTransfer || !targetZone}
                       startIcon={submitting ? <CircularProgress size={16} /> : <VerifiedUser />}
                       sx={{ textTransform: 'none', fontWeight: 700 }}
                     >
-                      {submitting ? 'Выполнение трансфера...' : `Подтвердить трансфер в ${targetZone}`}
+                      {submitting ? 'Выполнение трансфера...' : `Подтвердить трансфер в ${targetZone ? ZONE_LABELS[targetZone] : ''}`}
                     </Button>
                   </Box>
                 </Box>

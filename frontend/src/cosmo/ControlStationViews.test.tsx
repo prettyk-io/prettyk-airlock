@@ -30,7 +30,8 @@ import { ProjectReleaseDashboard } from './station/views/ProjectReleaseDashboard
 import { ProjectCreateWizard } from './station/views/ProjectCreateWizard';
 import { CreateStandaloneApp } from './station/views/CreateStandaloneApp';
 import { CreateLibrary } from './station/views/CreateLibrary';
-import type { Application } from './station/api';
+import { NotificationOps } from './station/views/NotificationOps';
+import type { Application, Release } from './station/api';
 import { WebIDEShell } from './ide/WebIDEShell';
 
 vi.mock('@monaco-editor/react', () => ({
@@ -152,6 +153,14 @@ const mockGates = [
 ];
 
 beforeEach(() => {
+  // COS-061: Mock EventSource for AlertHUD SSE
+  vi.stubGlobal('EventSource', class MockEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    addEventListener(_type: string, _fn: (e: unknown) => void) {}
+    close() {}
+  });
+
   // Mock global fetch for API calls
   globalThis.fetch = vi.fn().mockImplementation((url: string) => {
     if (url.includes('/graph')) {
@@ -184,6 +193,17 @@ beforeEach(() => {
       }), { status: 200 }));
     }
     // SAN-017: Builds & Deployments — return empty by default (honest EmptyState)
+    // COS-061: Notification inbox endpoints
+    if (url.includes('/api/v1/notifications/inbox/unread-count')) {
+      return Promise.resolve(new Response(JSON.stringify({ unread: 0 }), { status: 200 }));
+    }
+    if (url.includes('/api/v1/notifications/inbox')) {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
+    // COS-075: SSE ticket endpoint (AlertHUD connect flow)
+    if (url.includes('/api/v1/notifications/sse-ticket')) {
+      return Promise.resolve(new Response(JSON.stringify({ ticket: 'test-ticket', recipient_id: 'operator', expires_in: 60 }), { status: 200 }));
+    }
     if (url.includes('/api/v1/builds')) return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
     if (url.includes('/api/v1/deployments')) return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
     // FR-003/004: Projects & KITS mocks
@@ -588,29 +608,20 @@ describe('COS-022: Control Station Core Views', () => {
   });
 
   it('COS-090: ReleaseTransferWizard — рендерит 3-шаговый Stepper Pre-Flight/Zone/Signoff', async () => {
-    const mockRelease = {
+    // COS-098: честный Release-контракт (release_model.Release)
+    const mockRelease: Release = {
       id: 'rel-test-001',
       version: 'v2.0.0',
-      name: 'Test Release',
       domain_id: 'cbr',
-      zone: 'ЗР' as const,
-      status: 'draft' as const,
-      created_at: new Date().toISOString(),
-      manifest: {
-        release_id: 'rel-test-001',
-        version: 'v2.0.0',
-        domain_id: 'cbr',
-        zone: 'ЗР' as const,
-        created_at: new Date().toISOString(),
-        created_by: 'test@cosmo.local',
-        nodes: [
-          { id: 'node-1', name: 'Wallet API', type: 'service' as const, version: '2.0.0', repo: 'cbr/wallet', commit: 'abc123' },
-        ],
-        edges: [],
-        metadata: {},
-        signature: 'sha256:test',
-      },
-      history: [],
+      plan_id: 'plan-test-001',
+      run_ids: ['run-1'],
+      trigger: 'manual',
+      status: 'deployed',
+      changelog: '',
+      artifacts: [],
+      approvals: [{ decided_by: 'sec_expert', decision: 'approved', comment: '', decided_at: new Date().toISOString(), signature: 'sha256:test' }],
+      current_zone: 'zr',
+      transfer_history: [],
     };
 
     render(
@@ -621,13 +632,12 @@ describe('COS-022: Control Station Core Views', () => {
 
     expect(screen.getByText('Мастер трансфера релиза')).toBeTruthy();
     expect(screen.getByText('Pre-Flight Checks (Проверка готовности)')).toBeTruthy();
-    expect(screen.getByText('Target Zone & Manifest Diff')).toBeTruthy();
+    expect(screen.getByText('Target Zone & Состав')).toBeTruthy();
     expect(screen.getByText('Signoff & 2FA (Подтверждение трансфера)')).toBeTruthy();
 
     // Pre-flight items (loaded async)
     await waitFor(() => {
       expect(screen.getAllByText(/Security Gates/).length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('Незавершенные батчи')).toBeTruthy();
       expect(screen.getByText('Подпись офицера ИБ')).toBeTruthy();
     });
     expect(screen.getByText('Подтвердить и продолжить')).toBeTruthy();
@@ -694,23 +704,26 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Isolate')).toBeTruthy();
   });
 
-  it('COS-084: AlertHUD — рендерит колокольчик с бейджем, открывает шторку и показывает оповещения', async () => {
+  it('COS-061: AlertHUD — рендерит колокольчик, открывает шторку с durable inbox', async () => {
     render(
       <CosmoThemeProvider>
         <AlertHUD />
       </CosmoThemeProvider>
     );
 
-    // Bell icon button exists
-    const bellBtn = screen.getByLabelText('open notifications');
+    // Bell icon (accessible label)
+    const bellBtn = screen.getByLabelText(/Центр уведомлений/);
     expect(bellBtn).toBeTruthy();
 
-    // Click to open drawer
+    // Open drawer
     fireEvent.click(bellBtn);
     expect(screen.getByText('Центр уведомлений')).toBeTruthy();
-    expect(screen.getByText('Все чисто — инцидентов нет')).toBeTruthy();
+
+    // Wait for async fetch to complete → empty inbox state
+    await waitFor(() => {
+      expect(screen.getByText(/Все чисто/)).toBeTruthy();
+    });
     expect(screen.getByText('Прочитано')).toBeTruthy();
-expect(screen.getByText('Очистить')).toBeTruthy();
   });
 
   it('SAN-005: BuildsRegistry — рендерит заголовок, фильтры и модалку создания сборки (честный EmptyState)', async () => {
@@ -987,5 +1000,130 @@ describe('POST-FLASH-001 / POST-FLASH-002: Project Composition Wizard & Correcti
     // Click Public card
     fireEvent.click(screen.getByText('Public'));
     expect(screen.getByText('Public')).toBeTruthy();
+  });
+});
+
+describe('COS-079: NotificationOps (DLQ) — honest operator surface', () => {
+  it('рендерит честный EmptyState на пустой DLQ', async () => {
+    render(
+      <CosmoThemeProvider>
+        <NotificationOps />
+      </CosmoThemeProvider>
+    );
+
+    expect(screen.getByText('Dead Letter Queue')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('DLQ пуста')).toBeTruthy();
+    });
+  });
+
+  it('рендерит DLQ-таблицу с честным last_error и делает replay', async () => {
+    const dlqRow = {
+      id: 'dlq-e2e-1',
+      event_id: 'evt-1',
+      event_type: 'run_failed',
+      severity: 'high',
+      title: 'Run r-1 failed',
+      recipient_id: 'ops@company.io',
+      channel: 'email',
+      state: 'failed',
+      attempts: 5,
+      max_attempts: 5,
+      last_error: 'smtp down',
+      created_at: '2026-09-01T10:00:00',
+      updated_at: '2026-09-01T10:05:00',
+    };
+    let replayCalls = 0;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/v1/notifications/dlq/dlq-e2e-1/replay')) {
+        replayCalls += 1;
+        return Promise.resolve(new Response(JSON.stringify({
+          id: 'dlq-e2e-1', state: 'sent', attempts: 6, last_error: null,
+        }), { status: 200 }));
+      }
+      if (url.includes('/api/v1/notifications/dlq')) {
+        return Promise.resolve(new Response(JSON.stringify(replayCalls ? [] : [dlqRow]), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    });
+
+    render(
+      <CosmoThemeProvider>
+        <NotificationOps />
+      </CosmoThemeProvider>
+    );
+
+    // Row visible with honest last_error and attempts
+    await waitFor(() => {
+      expect(screen.getByText('smtp down')).toBeTruthy();
+    });
+    expect(screen.getByText('5/5')).toBeTruthy();
+
+    // Replay → provider accepts → honest success notice, row leaves DLQ
+    fireEvent.click(screen.getByLabelText('replay-dlq-e2e-1'));
+    await waitFor(() => {
+      expect(screen.getByText(/доставлено \(attempt 6\)/)).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(screen.getByText('DLQ пуста')).toBeTruthy();
+    });
+  });
+
+  it('показывает честный warning, когда провайдер отказал при replay', async () => {
+    const dlqRow = {
+      id: 'dlq-e2e-2',
+      event_id: 'evt-2',
+      event_type: 'run_failed',
+      severity: 'critical',
+      title: 'Run r-2 failed',
+      recipient_id: 'ops@company.io',
+      channel: 'email',
+      state: 'failed',
+      attempts: 5,
+      max_attempts: 5,
+      last_error: 'mailbox unknown',
+      created_at: '2026-09-01T10:00:00',
+      updated_at: '2026-09-01T10:05:00',
+    };
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/replay')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          id: 'dlq-e2e-2', state: 'failed', attempts: 6, last_error: 'mailbox unknown',
+        }), { status: 200 }));
+      }
+      if (url.includes('/api/v1/notifications/dlq')) {
+        return Promise.resolve(new Response(JSON.stringify([dlqRow]), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    });
+
+    render(
+      <CosmoThemeProvider>
+        <NotificationOps />
+      </CosmoThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('mailbox unknown')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText('replay-dlq-e2e-2'));
+    await waitFor(() => {
+      expect(screen.getByText(/состояние failed \(честно\)/)).toBeTruthy();
+    });
+  });
+
+  it('показывает честную ошибку при недоступности API', async () => {
+    globalThis.fetch = vi.fn().mockImplementation((_url: string) =>
+      Promise.reject(new Error('connection refused')));
+
+    render(
+      <CosmoThemeProvider>
+        <NotificationOps />
+      </CosmoThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/connection refused/)).toBeTruthy();
+    });
   });
 });

@@ -27,7 +27,7 @@ import {
 import { ErrorBoundary } from '../../shared/ErrorBoundary';
 import { EmptyState } from '../../shared/EmptyState';
 import { toast } from '../../shared/toast';
-import { api, type Application, type Build as BuildRecord, type Deployment as DeploymentRecord } from '../api';
+import { api, type Application, type Build as BuildRecord, type Deployment as DeploymentRecord, type ForgeLastPush } from '../api';
 
 // ── Status helpers ──────────────────────────────────────────────────
 
@@ -98,6 +98,10 @@ export function ApplicationDetail({ app, onBack }: ApplicationDetailProps) {
   const [createBranch, setCreateBranch] = useState('main');
   const [createCommit, setCreateCommit] = useState('');
 
+  // COS-096: live forge surface
+  const [forge, setForge] = useState<ForgeLastPush | null>(null);
+  const [forgeLoading, setForgeLoading] = useState(false);
+
   const fetchBuilds = useCallback(async () => {
     setBuildsLoading(true);
     try { setBuilds(await api.getAppBuilds(app.id) ?? []); } catch { setBuilds([]); }
@@ -110,7 +114,14 @@ export function ApplicationDetail({ app, onBack }: ApplicationDetailProps) {
     finally { setDeploysLoading(false); }
   }, [app.id]);
 
-  useEffect(() => { fetchBuilds(); fetchDeployments(); }, [fetchBuilds, fetchDeployments]);
+  const fetchForge = useCallback(async () => {
+    setForgeLoading(true);
+    try { setForge(await api.getAppForgeLastPush(app.id)); }
+    catch { setForge(null); } // честный empty — не выдумываем статус
+    finally { setForgeLoading(false); }
+  }, [app.id]);
+
+  useEffect(() => { fetchBuilds(); fetchDeployments(); fetchForge(); }, [fetchBuilds, fetchDeployments, fetchForge]);
 
   const handleCreateBuild = async () => {
     if (!createCommit.trim() || !createBranch.trim()) return;
@@ -235,6 +246,63 @@ export function ApplicationDetail({ app, onBack }: ApplicationDetailProps) {
             </CardContent>
           </Card>
         </Grid>
+
+            {/* COS-096: Live Forge */}
+            <Grid size={12}>
+              <Card variant="outlined" sx={{ borderRadius: 2 }}>
+                <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Git-активность (live forge)</Typography>
+                  <IconButton size="small" onClick={fetchForge} disabled={forgeLoading} data-testid="forge-refresh">
+                    <Refresh sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Box>
+                <CardContent>
+                  {forgeLoading && !forge ? (
+                    <Skeleton variant="rectangular" height={64} sx={{ borderRadius: 1 }} />
+                  ) : !forge ? (
+                    <Typography variant="body2" color="text.secondary">
+                      Статус forge недоступен — проверьте подключение к API.
+                    </Typography>
+                  ) : (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                      {forge.last_push ? (
+                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <Chip size="small" color="success" label={`push · ${forge.last_push.branch}`} />
+                          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                            {forge.last_push.head_sha.slice(0, 8)}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {forge.last_push.pusher} · {forge.last_push.commit_count} коммит(ов) · {new Date(forge.last_push.received_at).toLocaleString()}
+                          </Typography>
+                        </Box>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">
+                          Пушей с момента старта ПУ не было (пусто = пусто).
+                        </Typography>
+                      )}
+                      {forge.forge_unreachable ? (
+                        <Alert severity="warning" sx={{ py: 0.5 }}>
+                          Forge недоступен: {forge.forge_unreachable}
+                        </Alert>
+                      ) : forge.recent_commits.length > 0 ? (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                          {forge.recent_commits.slice(0, 3).map((c) => (
+                            <Box key={c.sha} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                              <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, minWidth: 64 }}>
+                                {c.sha.slice(0, 7)}
+                              </Typography>
+                              <Typography variant="caption" color="text.secondary" noWrap>
+                                {c.message}
+                              </Typography>
+                            </Box>
+                          ))}
+                        </Box>
+                      ) : null}
+                    </Box>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
           </Grid>
         )}
 

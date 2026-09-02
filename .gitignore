@@ -70,3 +70,7 @@ reports/load-test*
 .DS_Store
 Thumbs.db
 _rt.py
+
+# Frontend test artifacts (Playwright)
+frontend/test-results/
+frontend/playwright-report/

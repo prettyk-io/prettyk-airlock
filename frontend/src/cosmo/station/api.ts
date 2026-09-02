@@ -29,6 +29,30 @@ export interface Application {
   status?: string;
 }
 
+// ── COS-096: live forge surface ─────────────────────────────────────
+
+export interface ForgeLastPush {
+  app_id: string;
+  repo_path: string;
+  bound: boolean;
+  last_push: {
+    repo_path: string;
+    branch: string;
+    head_sha: string;
+    pusher: string;
+    commit_count: number;
+    received_at: string;
+    source: string;
+  } | null;
+  recent_commits: Array<{
+    sha: string;
+    message: string;
+    author: string;
+    timestamp: string;
+  }>;
+  forge_unreachable: string | null;
+}
+
 // ── FR-003: Project types ──────────────────────────────────────────
 
 export interface Project {
@@ -242,53 +266,146 @@ export interface EvidenceEntry {
   created_at: string;
 }
 
-export type ReleaseZone = 'ЗР' | 'ЗТ' | 'ЗПЭ';
+/**
+ * COS-098 (контракт-первым): Release-типы сверены с backend
+ * domain/release_model.Release + api/routes/releases.py (response_model).
+ * Старый FE-прототип (name / manifest / zone 'ЗР' / history) на бэкенде
+ * не существовал — удалён, чтобы UI не рендерил выдуманные поля.
+ */
+export type ReleaseZone = 'zr' | 'zt' | 'zpe';
 
-export interface ReleaseNode {
-  id: string;
-  name: string;
-  type: 'service' | 'library' | 'config' | 'artifact';
-  version: string;
-  repo: string;
-  commit: string;
-  hash?: string;
+export type ReleaseStatus =
+  | 'draft'
+  | 'pending_review'
+  | 'approved'
+  | 'rejected'
+  | 'deploying'
+  | 'deployed'
+  | 'rollback';
+
+export type ReleaseTrigger = 'scheduled' | 'pre_release' | 'emergency' | 'manual';
+
+export interface ReleaseApproval {
+  decided_by: string;
+  decision: 'approved' | 'rejected';
+  comment: string;
+  decided_at: string;
+  signature?: string | null;
 }
 
-export interface ReleaseEdge {
-  from: string;
-  to: string;
-  relation: 'depends_on' | 'includes' | 'verifies';
-}
-
-export interface ReleaseManifest {
-  release_id: string;
-  version: string;
-  domain_id: string;
-  zone: ReleaseZone;
-  created_at: string;
-  created_by: string;
-  nodes: ReleaseNode[];
-  edges: ReleaseEdge[];
-  metadata: Record<string, unknown>;
-  signature?: string;
+export interface TransferRecord {
+  from_zone: ReleaseZone;
+  to_zone: ReleaseZone;
+  initiated_by: string;
+  gate_check_passed: boolean;
+  transferred_at: string;
+  comment: string;
 }
 
 export interface Release {
   id: string;
-  version: string;
-  name: string;
   domain_id: string;
-  zone: ReleaseZone;
-  status: 'draft' | 'validating' | 'approved' | 'deployed' | 'rejected';
-  created_at: string;
-  manifest: ReleaseManifest;
-  history: Array<{
-    from_zone: ReleaseZone;
-    to_zone: ReleaseZone;
-    timestamp: string;
-    operator: string;
-    signature: string;
-  }>;
+  plan_id: string;
+  run_ids: string[];
+  trigger: ReleaseTrigger;
+  status: ReleaseStatus;
+  changelog: string;
+  version: string;
+  artifacts: string[];
+  approvals: ReleaseApproval[];
+  current_zone: ReleaseZone;
+  transfer_history: TransferRecord[];
+}
+
+/** COS-098: POST /api/v1/releases (CreateReleaseRequest). */
+export interface CreateReleaseRequest {
+  id: string;
+  domain_id: string;
+  plan_id: string;
+  run_ids: string[];
+  trigger?: ReleaseTrigger;
+  changelog?: string;
+  version?: string;
+}
+
+/** COS-098: POST /api/v1/releases/{id}/transfer (SAN-009 TransferReleaseRequest). */
+export interface TransferReleaseRequest {
+  target_zone: ReleaseZone;
+  officer_name: string;
+  sign_signature: string;
+  token_2fa?: string;
+  transfer_notes?: string;
+}
+
+/** COS-098: GET /api/v1/domains (domain_model.Domain). */
+export interface CosmoDomain {
+  id: string;
+  label: string;
+  forge_binding: Record<string, unknown>;
+  rbac_config: Record<string, unknown>;
+  quota: Record<string, unknown>;
+}
+
+/** COS-098: GET /api/v1/gates/trail/runs/{run_id} (gate_trail_repo._to_dict). */
+export interface GateDecisionRecord {
+  id: number;
+  gate_id: string;
+  plan_id: string;
+  run_id: string | null;
+  batch_id: string | null;
+  decision: string;
+  decided_by: string;
+  initiator: string;
+  signature: string | null;
+  policy_snapshot: Record<string, unknown>;
+  evidence_ids: string[];
+  decided_at: string | null;
+  created_at: string | null;
+}
+
+/** COS-098: GET /api/v1/runs/{run_id}/evidence (EvidenceLedger.verify_and_get). */
+export interface EvidenceChain {
+  entries: EvidenceEntry[];
+  length: number;
+  verified: boolean;
+  last_hash: string | null;
+}
+
+export interface EvidenceTamperDetail {
+  index: number;
+  entry_id: string;
+  reason: string;
+  stored_hash: string | null;
+  recomputed_hash: string | null;
+}
+
+export interface EvidenceBrokenLink {
+  index: number;
+  entry_id: string;
+  expected_prev_hash: string | null;
+  stored_prev_hash: string | null;
+}
+
+export interface EvidenceChainResult {
+  chain: EvidenceChain;
+  verified: boolean;
+  integrity: 'ok' | 'tampered' | 'unsealed' | 'head_mismatch';
+  anchor: {
+    enabled: boolean;
+    status: 'ok' | 'head_mismatch' | 'unknown_anchor' | 'disabled';
+    anchored_head: string | null;
+    computed_head: string | null;
+    anchored_at: string | null;
+    detail: string;
+  } | null;
+  head_mismatch: boolean;
+  tampered_entries: number[];
+  tampered_details: EvidenceTamperDetail[];
+  broken_links: EvidenceBrokenLink[];
+  unsealed_entries: string[];
+  tampered_chain: boolean;
+  replay_count: number;
+  total_entries: number;
 }
 
 export interface AuditEvent {
@@ -370,11 +487,50 @@ export type DeploymentStatus = Deployment['status'];
 
 // ── Fetch Wrappers ──────────────────────────────────────────────────
 
+/**
+ * COS-064: auth-aware seam. Backend resolves recipient_id from the bearer
+ * token (`user_id:roles` dev format). V1 contract = fixed 'operator' —
+ * must match AlertHUD SSE recipient and notification fixtures.
+ * Future RBAC: replace the dev default with a real session token;
+ * localStorage override stays for browser tests.
+ */
+export function getCosmoAuthToken(): string {
+  let override: string | null = null;
+  try {
+    override = globalThis.localStorage?.getItem('cosmo_auth_token') ?? null;
+  } catch { /* no localStorage (tests) */ }
+  return override || 'operator:admin';
+}
+
+/**
+ * COS-098: домен-контекст для domain-scoped REST (X-Cosmo-Domain).
+ * system admin: заголовок = context switch (выбор домена в readiness-виде);
+ * не-админ: сервер резолвит домен по identity, заголовок игнорирует —
+ * обе роли безопасны (domain_guard.resolve_caller_domain).
+ */
+let cosmoDomainHeader: string | null = null;
+export function setCosmoDomain(domainId: string | null): void {
+  cosmoDomainHeader = domainId;
+  try {
+    if (domainId) globalThis.localStorage?.setItem('cosmo_domain', domainId);
+    else globalThis.localStorage?.removeItem('cosmo_domain');
+  } catch { /* no localStorage (tests) */ }
+}
+try {
+  cosmoDomainHeader = globalThis.localStorage?.getItem('cosmo_domain') ?? null;
+} catch { /* no localStorage (tests) */ }
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (init?.headers) {
     const extra = init.headers as Record<string, string>;
     Object.assign(headers, extra);
+  }
+  if (!headers.Authorization) {
+    headers.Authorization = `Bearer ${getCosmoAuthToken()}`;
+  }
+  if (!headers['X-Cosmo-Domain'] && cosmoDomainHeader) {
+    headers['X-Cosmo-Domain'] = cosmoDomainHeader;
   }
   const res = await fetch(url, { ...init, headers });
   if (!res.ok) {
@@ -405,6 +561,10 @@ export const api = {
   createApp: (data: Partial<Application> & { repo_binding: RepositoryBinding }) =>
     apiFetch<Application>('/api/v1/apps', { method: 'POST', body: JSON.stringify(data) }),
   deleteApp: (id: string) => apiFetch<void>(`/api/v1/apps/${id}`, { method: 'DELETE' }),
+
+  // COS-096: live forge surface (ПУ видит коммиты)
+  getAppForgeLastPush: (appId: string) =>
+    apiFetch<ForgeLastPush>(`/api/v1/apps/${encodeURIComponent(appId)}/forge/last-push`),
 
   // Groups
   getGroups: (projectId?: string) =>
@@ -461,14 +621,23 @@ export const api = {
   updateGate: (id: string, data: { type?: 'automatic' | 'manual'; position?: number; policy?: GatePolicy }) =>
     apiFetch<Gate>(`/api/v1/gates/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
-  // Releases
-  getReleases: (projectId?: string) =>
-    apiFetch<Release[]>(`/api/v1/releases${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''}`),
+  // Releases (COS-098: контракт сверён с api/routes/releases.py)
+  getReleases: (statusFilter?: string) =>
+    apiFetch<Release[]>(`/api/v1/releases${statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : ''}`),
   getRelease: (id: string) => apiFetch<Release>(`/api/v1/releases/${id}`),
-  createRelease: (data: Partial<Release>) =>
+  createRelease: (data: CreateReleaseRequest) =>
     apiFetch<Release>('/api/v1/releases', { method: 'POST', body: JSON.stringify(data) }),
-  transferRelease: (id: string, data: { to_zone: ReleaseZone; operator: string; signature: string }) =>
+  transferRelease: (id: string, data: TransferReleaseRequest) =>
     apiFetch<Release>(`/api/v1/releases/${id}/transfer`, { method: 'POST', body: JSON.stringify(data) }),
+
+  // COS-098: domains (для выборки домена в readiness-поверхности и SSE-стрима)
+  getDomains: () => apiFetch<CosmoDomain[]>('/api/v1/domains'),
+
+  // COS-098: evidence chain + gate decision trail
+  getEvidenceChain: (runId: string) =>
+    apiFetch<EvidenceChainResult>(`/api/v1/runs/${encodeURIComponent(runId)}/evidence`),
+  getRunTrail: (runId: string) =>
+    apiFetch<GateDecisionRecord[]>(`/api/v1/gates/trail/runs/${encodeURIComponent(runId)}`),
 
   // Repos & Web IDE files
   getRepoTree: (repo: string) =>
@@ -619,6 +788,39 @@ export const api = {
   // ── POST-FLASH-001: Public Library ──────────────────────────────────
   createPublicLibrary: (data: PublicLibraryRequest) =>
     apiFetch<Application>('/api/v1/libraries', { method: 'POST', body: JSON.stringify(data) }),
+
+  // ── COS-061: Durable Notification Inbox ──────────────────────────
+  getInbox: (unreadOnly = false, limit = 100): Promise<InboxNotification[]> => {
+    const q = new URLSearchParams({ unread_only: String(unreadOnly), limit: String(limit) });
+    return apiFetch<InboxNotification[]>(`/api/v1/notifications/inbox?${q}`).then((rows) =>
+      // Backend InboxItem contract: event_type + is_read → frontend shape
+      (rows || []).map((r) => ({
+        ...r,
+        notification_type: (r as unknown as { event_type?: string }).event_type ?? (r as unknown as InboxNotification).notification_type ?? '',
+        read: (r as unknown as { is_read?: boolean }).is_read ?? (r as unknown as InboxNotification).read ?? false,
+      })),
+    );
+  },
+  getUnreadCount: () => apiFetch<UnreadCount>('/api/v1/notifications/inbox/unread-count'),
+  markNotificationRead: (notificationId: string) =>
+    apiFetch<ReadResult>(`/api/v1/notifications/inbox/${encodeURIComponent(notificationId)}/read`, { method: 'POST' }),
+  markAllNotificationsRead: () =>
+    apiFetch<ReadResult>('/api/v1/notifications/inbox/read-all', { method: 'POST' }),
+
+  // ── COS-075: SSE stream ticket (auth without bearer-in-URL) ──────────
+  // EventSource не умеет custom headers — стрим открывается по short-TTL
+  // ticket, привязанному к principal (bearer уходит только в этот POST).
+  getSseTicket: () =>
+    apiFetch<SseTicket>('/api/v1/notifications/sse-ticket', { method: 'POST' }),
+
+  // ── COS-079: DLQ (dead letter queue) — operator surface ──────────────
+  getDlq: (limit = 100): Promise<DlqItem[]> =>
+    apiFetch<DlqItem[]>(`/api/v1/notifications/dlq?limit=${limit}`),
+  replayDlq: (notificationId: string): Promise<DlqReplayResult> =>
+    apiFetch<DlqReplayResult>(
+      `/api/v1/notifications/dlq/${encodeURIComponent(notificationId)}/replay`,
+      { method: 'POST' },
+    ),
 };
 
 // ── POST-FLASH-001: Type definitions ──────────────────────────────────
@@ -682,4 +884,65 @@ export interface PublicLibraryRequest {
   description?: string;
   team?: ComposeTeamMember[];
   visibility: 'internal' | 'public';
+}
+
+// ── COS-061: Durable Notification Inbox ──────────────────────────────
+
+export type NotificationSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type NotificationChannel = 'in_app' | 'email';
+export type NotificationState = 'created' | 'pending' | 'sending' | 'sent' | 'delivered' | 'retryable_failure' | 'failed';
+
+export interface InboxNotification {
+  id: string;
+  event_id: string;
+  notification_type: string;
+  severity: NotificationSeverity;
+  title: string;
+  message: string;
+  channel: NotificationChannel;
+  state: NotificationState;
+  read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface UnreadCount {
+  unread: number;
+}
+
+export interface ReadResult {
+  ok: boolean;
+  marked: number;
+}
+
+// COS-075: short-TTL ticket для SSE-стрима уведомлений
+export interface SseTicket {
+  ticket: string;
+  recipient_id: string;
+  expires_in: number;
+}
+
+// ── COS-079: DLQ (dead letter queue) — operator surface ──────────────
+
+export interface DlqItem {
+  id: string;
+  event_id: string;
+  event_type: string;
+  severity: NotificationSeverity;
+  title: string;
+  recipient_id: string;
+  channel: string;
+  state: NotificationState;
+  attempts: number;
+  max_attempts: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface DlqReplayResult {
+  id: string;
+  state: NotificationState;
+  attempts: number;
+  last_error: string | null;
 }

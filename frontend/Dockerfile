@@ -4,7 +4,10 @@
 # Build:
 #   docker build -f Dockerfile -t cosmo-frontend:local .
 # Serve:
-#   nginx on :80 → compose maps :5173 → Caddy reverse-proxies
+#   nginx on :80 → compose maps :5174. Same-origin edge (COS-094):
+#   SPA + /api + /live /ready /health + SSE passthrough (no buffering).
+#   Canonical external edge — Caddy :8180; this nginx is the SPA's own
+#   front door for direct access (React fetches relative /api/v1/...).
 
 # ── Stage 1: Vite build ────────────────────────────────────────────
 FROM node:22-alpine AS build

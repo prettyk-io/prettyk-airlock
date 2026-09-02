@@ -13,7 +13,7 @@
  *   applications       — Applications (legacy)
  *   pipelines / runs / gates / releases / builds / deployments
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Box, AppBar, Toolbar, Typography, IconButton, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
   Divider, Chip, Tooltip, Button,
@@ -21,7 +21,7 @@ import {
 import {
   Dashboard, Apps, AccountTree, PlayArrow, Gavel,
   DarkMode, LightMode, Notifications, Person, RocketLaunch, Search,
-  Build, CloudUpload, Folder, Settings,
+  Build, CloudUpload, Folder, Settings, Checklist,
 } from '@mui/icons-material';
 import { useCosmoTheme } from '../theme';
 import { usePreference } from '../shared/usePreference';
@@ -35,6 +35,7 @@ import { FlatAppsRegistry } from './views/FlatAppsRegistry';
 import { ReleaseTypeBuilder } from './views/ReleaseTypeBuilder';
 import { BatchConstructor } from './views/BatchConstructor';
 import { ProjectReleaseDashboard } from './views/ProjectReleaseDashboard';
+import { ReleaseReadiness } from './views/ReleaseReadiness';
 import { ProjectCreateWizard } from './views/ProjectCreateWizard';
 import { CreateStandaloneApp } from './views/CreateStandaloneApp';
 import { CreateLibrary } from './views/CreateLibrary';
@@ -49,6 +50,7 @@ import { GatePolicyBuilder } from './views/GatePolicyBuilder';
 import { BuildsRegistry } from './views/BuildsRegistry';
 import { DeploymentsRegistry } from './views/DeploymentsRegistry';
 import { AlertHUD } from './views/AlertHUD';
+import { NotificationOps } from './views/NotificationOps';
 
 import { Breadcrumbs } from '../shared/Breadcrumbs';
 import { GlobalSearch } from '../shared/GlobalSearch';
@@ -72,16 +74,37 @@ const NAV_ITEMS = [
   { id: 'runs',               label: 'Прогоны',       icon: <PlayArrow /> },
   { id: 'gates',              label: 'Гейты',         icon: <Gavel /> },
   { id: 'releases',           label: 'Релизы',        icon: <RocketLaunch /> },
+  { id: 'release-readiness',  label: 'Readiness',     icon: <Checklist /> },
+  { id: 'notification-ops',   label: 'Уведомления',   icon: <Notifications /> },
 ] as const;
 
 const DRAWER_WIDTH = 240;
 
 export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlStationProps) {
   const { mode, toggleMode } = useCosmoTheme();
-  const [nav, setNav] = usePreference('nav');
+  const [nav, setNavRaw] = usePreference('nav');
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectId, setProjectId] = useState<string>('');
+
+  // COS-084: deep-link ?view= должен выигрывать у hydrate usePreference('nav').
+  // Hydration делает setValue(prefs.nav) ПОСЛЕ монтирования и перебивал deep-link
+  // сохранённой preference (гонка, найдена e2e COS-079). Sticky-ref: deep-link
+  // применяется на маунте и повторно после каждого hydrate-override, пока
+  // пользователь явно не снавигировался (обёртка ниже снимает ref).
+  const pendingDeepLinkRef = useRef<string | null>(view ?? null);
+  const setNav = useCallback(
+    (targetView: string) => {
+      pendingDeepLinkRef.current = null;
+      setNavRaw(targetView);
+    },
+    [setNavRaw],
+  );
+  useEffect(() => {
+    if (pendingDeepLinkRef.current && nav !== pendingDeepLinkRef.current) {
+      setNavRaw(pendingDeepLinkRef.current);
+    }
+  }, [nav]);
 
   // COS-099: Global keyboard navigation
   useHotkeys(
@@ -89,9 +112,6 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
     () => {},
     () => { setSearchOpen(false); setHelpOpen(false); }
   );
-
-  // COS-024
-  useEffect(() => { if (view) setNav(view); }, [view]);
 
   // COS-057: ⌘K
   useEffect(() => {
@@ -165,6 +185,10 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
         return <GatePolicyBuilder />;
       case 'releases':
         return <Releases onNavigateToIDE={openInIDE} />;
+      case 'release-readiness':
+        return <ReleaseReadiness />;
+      case 'notification-ops':
+        return <NotificationOps />;
       default:
         return <ProjectsOverview onNavigate={handleNavigate} />;
     }
@@ -186,7 +210,7 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
         <List sx={{ p: 1 }}>
           {NAV_ITEMS.map((item) => (
             <ListItemButton key={item.id} selected={nav === item.id} onClick={() => setNav(item.id)}
-              sx={{ borderRadius: 2, mb: 0.5 }}>
+              data-testid={`nav-${item.id}`} sx={{ borderRadius: 2, mb: 0.5 }}>
               <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
               <ListItemText primary={item.label} />
             </ListItemButton>

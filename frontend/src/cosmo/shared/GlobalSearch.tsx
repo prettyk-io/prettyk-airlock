@@ -122,8 +122,8 @@ export function GlobalSearch({ open, onClose, onSelectResult }: GlobalSearchProp
     releases.forEach((rel) => {
       list.push({
         id: `rel-${rel.id}`,
-        title: rel.name,
-        subtitle: `Версия: ${rel.version} · Зона: ${rel.zone}`,
+        title: rel.id,
+        subtitle: `Версия: ${rel.version || '—'} · Зона: ${rel.current_zone.toUpperCase()}`,
         category: 'releases',
         viewId: 'releases',
         params: { release_id: rel.id },

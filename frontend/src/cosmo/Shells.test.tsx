@@ -16,6 +16,27 @@ vi.mock('@xterm/xterm', () => ({
 beforeEach(() => {
   // Очищаем URL перед каждым тестом
   window.history.replaceState(null, '', '/');
+
+  // COS-061: Mock notification API + EventSource for AlertHUD
+  vi.stubGlobal('EventSource', class MockEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    addEventListener(_type: string, _fn: (e: unknown) => void) {}
+    close() {}
+  });
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+    if (url.includes('/api/v1/notifications/inbox')) {
+      if (url.includes('unread-count')) {
+        return Promise.resolve(new Response(JSON.stringify({ unread: 0 }), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
+    // COS-075: SSE ticket endpoint (AlertHUD connect flow)
+    if (url.includes('/api/v1/notifications/sse-ticket')) {
+      return Promise.resolve(new Response(JSON.stringify({ ticket: 'test-ticket', recipient_id: 'operator', expires_in: 60 }), { status: 200 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+  }));
 });
 
 describe('COS-020/021/023: Shells render', () => {
