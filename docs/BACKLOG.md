@@ -1219,7 +1219,7 @@ are accepted; UI is the next product surface.
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-099** | Boss | 12-16h | P2 | COS-053 + COS-096 | Автоматическая генерация и включение SBOM (SPDX/CycloneDX via syft) и vulnerability report (grype) в TransferPlan/PackageBuilder с SHA-256 digest pinning |
+| **COS-099** | Apex | 12-16h | P2 | COS-053 + COS-096 | Автоматическая генерация и включение SBOM (SPDX/CycloneDX via syft) и vulnerability report (grype) в TransferPlan/PackageBuilder с SHA-256 digest pinning |
 
 > **Scope:** (1) Расширение `PackageBuilder` и `DigitalReleaseEnvelope`: генерация
 > машиночитаемого SBOM (формат SPDX JSON / CycloneDX) из дерева репозитория и
@@ -1256,6 +1256,18 @@ are accepted; UI is the next product surface.
 > и редактирует файлы; vitest и tsc -b зелёные.
 >
 > **Out of scope:** xterm pty-сокет к живому контейнеру (следующий шаг), Git branch diff.
+
+## ⬜ READY — FINDINGS-TO-GATES BRIDGE & RUNTIME RECONCILIATION
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-101** | Apex | 12-16h | P1 | COS-097 | Мост Woodpecker Findings ↔ Quality Gates, SigV4 MinIO bucket provisioning, выравнивание OpenAPI контракт-теста |
+
+> **Scope:** (1) Мост Woodpecker Findings ↔ Quality Gates: парсинг отчётов/артефактов прогона (SARIF, JSON findings) из шагов Woodpecker в сущности `cosmo_findings`, привязка к `run_id` и `batch_id`; вычисление Gate Verdict (`PASS`/`WARN`/`FAIL`) на основе живых findings взамен статических заглушек; (2) фикс SigV4 MinIO auto-provisioning в `orchestrator/cosmo/api/startup.py` (`provision_minio_buckets` использует SigV4 stdlib-хелпер из `evidence_anchor.py` взамен Basic Auth, исключая 400 ошибки); (3) исправление `test_openapi_contract.py::test_no_raw_token_in_parameters`: легитимный учёт `session_token` cookie из `deps.py`, достижение 2499/2499 зелёных pytest.
+>
+> **Acceptance:** живой прогон Woodpecker генерирует findings, которые сохраняются в `cosmo_findings` и передаются в Gate-оценку; `startup.py` успешно создаёт/проверяет бакеты MinIO через SigV4; полный набор pytest 2499/2499 зелёный (0 failed).
+>
+> **Out of scope:** Web IDE (Flash в COS-100), live NVD vulnerability enrichment.
 
 ---
 

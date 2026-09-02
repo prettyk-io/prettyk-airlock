@@ -7,19 +7,20 @@
 > **Правило:** worker читает это ПЕРВЫМ действием после `pwd`.
 
 ## Последнее действие
-2026-09-03 | Cosmo | docs/MAP.md пересобран в Data-Flow канон: таблица Steel Thread (вход/файл/функция/БД/выход), 8 статусов Run State Machine с матрицей переходов, инженерный Mermaid с путями к файлам и DTO на стрелках.
+2026-09-03 | Cosmo | Коммит и пуш 14 партий P01-P14 (227 файлов, хэш 149427e -> origin/dev). Boss и Luna выведены на Хаб и Коробку. Активный пул Cosmo: Apex и Flash. Диспетч: Flash -> COS-100, Apex -> COS-101 + COS-099.
 
 ## Текущее состояние
-working. Baseline 2366 passed. Инженерная карта зафиксирована. Apex завершает COS-097 (Woodpecker), Luna на COS-093 (evidence sink), Boss на COS-099 (SBOM), Flash на COS-100 (Web IDE).
+Clean working tree (`origin/dev`). Baseline: 2498 passed / 8 skipped. Все предыдущие задачи (COS-093, COS-096, COS-097, COS-098) приняты и закоммичены. Активная волна: Flash взял COS-100 (Web IDE Surface B), Apex взял COS-101 (Findings-to-Gates Bridge + SigV4 fix) и далее COS-099 (SBOM PackageBuilder).
 
 ## Следующее действие
-Приёмка COS-097 (Apex) и запуск коммит-раунда COS-095.
+1. Flash исполняет COS-100 (Web IDE Surface B: Monaco Editor + Workspace tree в .cosmo-ide-root).
+2. Apex исполняет COS-101 (мост Findings ↔ Gates, SigV4 MinIO auto-provisioning, OpenAPI test fix) и переходит к COS-099 (SBOM).
 
 ---
 
 ## История (последние 5)
+- 2026-09-03 | Cosmo | Коммит и пуш 14 партий P01-P14 (149427e), ростер пула: Apex + Flash | git log
+- 2026-09-03 | Apex | COS-097: Woodpecker Live Run Cycle (5 багов устранено, 2498 passed, P13) | docs/research/2026-09-02-cos-097-woodpecker-live-cycle.md
+- 2026-09-03 | Luna | COS-093: S3/MinIO SigV4 sink для evidence anchor (27 unit + 5 e2e) | docs/research/2026-09-02-cos-093-evidence-anchor-s3-sink.md
 - 2026-09-03 | Cosmo | docs/MAP.md: Data-Flow таблица Steel Thread + Run State Machine + code-level Mermaid | docs/MAP.md
-- 2026-09-03 | Cosmo | Исполнен PK-DIR-007 (AGENTS.md <100 строк, docs/MAP.md, docs/INDEX.md, opencode.json references) | ANNOUNCEMENTS.md
 - 2026-09-03 | Flash | COS-098: Release readiness surface (vitest 66/66, e2e 2/2, live SSE + deep-links) | docs/BACKLOG.md
-- 2026-09-03 | Boss | COS-096: Live Gitea forge cycle (offline 26/26, live opt-in 6/6 x 2) | docs/research/2026-09-03-cos-096-live-gitea-forge-cycle.md
-- 2026-09-03 | Cosmo | PK-C-003 применён (6 анти-паттернов инкумбента в BACKLOG.md, MASTER.md синхронизирован) | docs/BACKLOG.md
