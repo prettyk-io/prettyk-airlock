@@ -43,6 +43,8 @@ def upgrade() -> None:
         comment='КИТС — бизнес-домены и команды разработки',
     )
     op.create_index('ix_domains_rbac_config', 'domains', ['rbac_config'], unique=False, postgresql_using='gin')
+    op.create_index('ix_domains_created_at', 'domains', ['created_at'], unique=False)
+    op.create_index('ix_domains_label', 'domains', ['label'], unique=False)
 
     # ── Stage 2: groups (FK → domains) ──
     op.create_table(
@@ -58,6 +60,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='Группы приложений с иерархией parent/child',
     )
+    op.create_index('ix_groups_domain_id', 'groups', ['domain_id'], unique=False)
+    op.create_index('ix_groups_parent_group_id', 'groups', ['parent_group_id'], unique=False)
 
     # ── Stage 3: pipeline_bricks (no FK deps) ──
     op.create_table(
@@ -90,6 +94,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='Приложения — Level 0 (библиотеки), Level 1 (сервисы), Level 2 (группы)',
     )
+    op.create_index('ix_apps_domain_id', 'apps', ['domain_id'], unique=False)
+    op.create_index('ix_apps_group_id', 'apps', ['group_id'], unique=False)
+    op.create_index('ix_apps_level', 'apps', ['level'], unique=False)
 
     # ── Stage 5: pipeline_plans (FK → apps) ──
     op.create_table(
@@ -104,6 +111,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='Скомпилированные планы пайплайнов',
     )
+    op.create_index('ix_pipeline_plans_app_id', 'pipeline_plans', ['app_id'], unique=False)
+    op.create_index('ix_pipeline_plans_compiled_at', 'pipeline_plans', ['compiled_at'], unique=False)
 
     # ── Stage 5b: resolve circular FK — apps.pipeline_plan_id → pipeline_plans.id ──
     op.create_foreign_key(
@@ -123,6 +132,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='M:N связь кирпичей с планами (сортировка)',
     )
+    op.create_index('ix_plan_bricks_plan_id', 'plan_bricks', ['plan_id'], unique=False)
+    op.create_index('ix_plan_bricks_brick_id', 'plan_bricks', ['brick_id'], unique=False)
 
     # ── Stage 7: repo_bindings (FK → apps) ──
     op.create_table(
@@ -137,6 +148,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='Привязки приложений к Git-репозиториям (Gitea/GitLab)',
     )
+    op.create_index('ix_repo_bindings_app_id', 'repo_bindings', ['app_id'], unique=False)
 
     # ── Stage 8: batches (FK → pipeline_plans) ──
     op.create_table(
@@ -155,6 +167,7 @@ def upgrade() -> None:
         comment='Пачки шагов: Build, Static Scan, Deploy, Dynamic Test',
     )
     op.create_index('ix_batch_plan_id', 'batches', ['plan_id'], unique=False)
+    op.create_index('ix_batches_status', 'batches', ['status'], unique=False)
     op.create_index('ix_batches_artifacts', 'batches', ['artifacts'], unique=False, postgresql_using='gin')
     op.create_index('ix_batches_bricks_refs', 'batches', ['bricks_refs'], unique=False, postgresql_using='gin')
     op.create_index('ix_batches_evidence_refs', 'batches', ['evidence_refs'], unique=False, postgresql_using='gin')
@@ -175,6 +188,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='Security Gates с политиками и решениями',
     )
+    op.create_index('ix_gates_plan_id', 'gates', ['plan_id'], unique=False)
+    op.create_index('ix_gates_position', 'gates', ['position'], unique=False)
     op.create_index('ix_gates_policy_json', 'gates', ['policy_json'], unique=False, postgresql_using='gin')
 
     # ── Stage 10: runs (FK → pipeline_plans, domains, batches) ──
@@ -198,6 +213,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='Прогоны — экземпляры выполнения пайплайнов',
     )
+    op.create_index('ix_runs_status', 'runs', ['status'], unique=False)
+    op.create_index('ix_runs_domain_id', 'runs', ['domain_id'], unique=False)
+    op.create_index('ix_runs_created_at', 'runs', ['created_at'], unique=False)
     op.create_index('ix_runs_findings_refs', 'runs', ['findings_refs'], unique=False, postgresql_using='gin')
 
     # ── Stage 11: evidence_ledger (FK → runs, batches) ──
@@ -216,35 +234,54 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
         comment='Неизменяемый журнал доказательств SHA-256',
     )
-    op.create_index('ix_evidence_ledger_provenance_json', 'evidence_ledger', ['provenance_json'], unique=False, postgresql_using='gin')
+    op.create_index('ix_evidence_provenance_json', 'evidence_ledger', ['provenance_json'], unique=False, postgresql_using='gin')
     op.create_index('ix_evidence_run_id', 'evidence_ledger', ['run_id'], unique=False)
+    op.create_index('ix_evidence_batch_id', 'evidence_ledger', ['batch_id'], unique=False)
+    op.create_index('ix_evidence_created_at', 'evidence_ledger', ['created_at'], unique=False)
 
 
 def downgrade() -> None:
     # Drop indexes + tables in reverse dependency order
+    op.drop_index('ix_evidence_created_at', table_name='evidence_ledger')
+    op.drop_index('ix_evidence_batch_id', table_name='evidence_ledger')
     op.drop_index('ix_evidence_run_id', table_name='evidence_ledger')
-    op.drop_index('ix_evidence_ledger_provenance_json', table_name='evidence_ledger', postgresql_using='gin')
+    op.drop_index('ix_evidence_provenance_json', table_name='evidence_ledger', postgresql_using='gin')
     op.drop_table('evidence_ledger')
 
     op.drop_index('ix_runs_findings_refs', table_name='runs', postgresql_using='gin')
+    op.drop_index('ix_runs_created_at', table_name='runs')
+    op.drop_index('ix_runs_domain_id', table_name='runs')
+    op.drop_index('ix_runs_status', table_name='runs')
     op.drop_table('runs')
 
     op.drop_index('ix_gates_policy_json', table_name='gates', postgresql_using='gin')
+    op.drop_index('ix_gates_position', table_name='gates')
+    op.drop_index('ix_gates_plan_id', table_name='gates')
     op.drop_table('gates')
 
     op.drop_index('ix_batches_evidence_refs', table_name='batches', postgresql_using='gin')
     op.drop_index('ix_batches_bricks_refs', table_name='batches', postgresql_using='gin')
     op.drop_index('ix_batches_artifacts', table_name='batches', postgresql_using='gin')
+    op.drop_index('ix_batches_status', table_name='batches')
     op.drop_index('ix_batch_plan_id', table_name='batches')
     op.drop_table('batches')
 
+    op.drop_index('ix_repo_bindings_app_id', table_name='repo_bindings')
     op.drop_table('repo_bindings')
+
+    op.drop_index('ix_plan_bricks_brick_id', table_name='plan_bricks')
+    op.drop_index('ix_plan_bricks_plan_id', table_name='plan_bricks')
     op.drop_table('plan_bricks')
 
     # Drop the circular FK BEFORE dropping pipeline_plans
     op.drop_constraint('fk_apps_pipeline_plan_id', 'apps', type_='foreignkey')
+    op.drop_index('ix_pipeline_plans_compiled_at', table_name='pipeline_plans')
+    op.drop_index('ix_pipeline_plans_app_id', table_name='pipeline_plans')
     op.drop_table('pipeline_plans')
 
+    op.drop_index('ix_apps_level', table_name='apps')
+    op.drop_index('ix_apps_group_id', table_name='apps')
+    op.drop_index('ix_apps_domain_id', table_name='apps')
     op.drop_table('apps')
 
     op.drop_index('ix_pipeline_bricks_gates', table_name='pipeline_bricks', postgresql_using='gin')
@@ -252,7 +289,11 @@ def downgrade() -> None:
     op.drop_index('ix_pipeline_bricks_definition_json', table_name='pipeline_bricks', postgresql_using='gin')
     op.drop_table('pipeline_bricks')
 
+    op.drop_index('ix_groups_parent_group_id', table_name='groups')
+    op.drop_index('ix_groups_domain_id', table_name='groups')
     op.drop_table('groups')
+    op.drop_index('ix_domains_label', table_name='domains')
+    op.drop_index('ix_domains_created_at', table_name='domains')
     op.drop_index('ix_domains_rbac_config', table_name='domains', postgresql_using='gin')
     op.drop_table('domains')
 

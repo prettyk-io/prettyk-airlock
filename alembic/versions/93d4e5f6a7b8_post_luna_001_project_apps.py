@@ -41,18 +41,20 @@ def upgrade() -> None:
     op.create_index('ix_project_apps_app', 'project_applications', ['app_id'], unique=False)
 
     # ── Backfill existing projects.application_ids into project_applications ──
+    # COS-062: projects.application_ids is a generic JSON column per ORM
+    # (models_lr.py uses sa.JSON), so jsonb_* functions need an explicit cast.
     op.execute("""
         INSERT INTO project_applications (id, project_id, app_id, role, backfill_source, created_at)
         SELECT
             gen_random_uuid()::text AS id,
             p.id AS project_id,
-            jsonb_array_elements_text(p.application_ids) AS app_id,
+            jsonb_array_elements_text(p.application_ids::jsonb) AS app_id,
             'owner' AS role,
             'projects_json' AS backfill_source,
             p.created_at
         FROM projects p
         WHERE p.application_ids IS NOT NULL
-          AND jsonb_array_length(p.application_ids) > 0
+          AND jsonb_array_length(p.application_ids::jsonb) > 0
         ON CONFLICT (project_id, app_id) DO NOTHING;
     """)
 
