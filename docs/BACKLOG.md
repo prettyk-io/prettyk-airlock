@@ -1242,20 +1242,22 @@ are accepted; UI is the next product surface.
 |---|---|---:|---|---|---|
 | **COS-100** | Flash | 14-18h | P2 | COS-020 + COS-098 | Web IDE (Surface B) ядро: Tailwind v4 + Radix + Monaco editor mount в изолированном `.cosmo-ide-root`, дерево файлов репозитория, переключение поверхностей |
 
-> **Scope:** (1) Изоляция стилей: проверка границы `.cosmo-ide-root` (Tailwind
-> Preflight строго внутри, MUI CssBaseline не протекает); (2) WebIDEShell:
-> дерево файлов (интеграция с `/api/v1/repos/tree` и `/api/v1/repos/file`);
-> (3) Monaco Editor: подсветка `.cosmo/pipeline.yaml` и DSL-скриптов, автосохранение
-> черновика в local/session, сохранение на бэкенд через PUT `/api/v1/repos/file`;
-> (4) переключение между Control Station (Surface A, Meta Light) и Web IDE
-> (Surface B, Dark default) по URL query param `?surface=ide` и переключателю в хедере;
-> (5) unit/vitest + component smoke тесты.
+> **Scope:** СТРОГО ПОРТ ИЗ КОРОБКИ (`D:\prettyk-secops`), писать с нуля ЗАПРЕЩЕНО.
+> Донорские файлы: `D:\prettyk-secops\frontend\src\workbench\EditorWorkbench.tsx`,
+> `workspaceStore.ts`, `frontend/src/monaco/setup.ts`, `editorOptions.ts`, `metaDarkTheme.ts`.
+> (1) Прямой перенос и адаптация 3-панельного шелла (Explorer, Monaco, Drawer, resize handles, store);
+> (2) Изоляция стилей: монтирование строго внутри контейнера `.cosmo-ide-root` (Tailwind
+> Preflight внутри, MUI CssBaseline не ломается);
+> (3) Подключение к API Cosmoport 2.0: файловое дерево через `/api/v1/repos/tree` и чтение/запись через `/api/v1/repos/file`;
+> (4) Monaco Editor: подсветка `.cosmo/pipeline.yaml` и скриптов, автосохранение черновика, сохранение на бэкенд;
+> (5) Переключение между Control Station (Surface A, Meta Light) и Web IDE (Surface B, Dark default) по query param `?surface=ide` и кнопке в хедере;
+> (6) Vitest + tsc -b чистые.
 >
-> **Acceptance:** переход в IDE открывает тёмную тему без поломки глобальных стилей MUI;
-> дерево файлов отображает реальную структуру репозитория через API; Monaco монтируется
-> и редактирует файлы; vitest и tsc -b зелёные.
+> **Acceptance:** Web IDE работает на базе проверенного кода Коробки (EditorWorkbench);
+> переход в IDE открывает тёмную тему без поломки глобальных стилей MUI; дерево файлов
+> отображает структуру через API; Monaco монтируется, подсвечивает синтаксис и сохраняет файлы; vitest и tsc -b зелёные.
 >
-> **Out of scope:** xterm pty-сокет к живому контейнеру (следующий шаг), Git branch diff.
+> **Out of scope:** писать что-либо с нуля (брать из Коробки), xterm pty-сокет к контейнеру (следующий шаг).
 
 ## ⬜ READY — FINDINGS-TO-GATES BRIDGE & RUNTIME RECONCILIATION
 
