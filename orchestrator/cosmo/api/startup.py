@@ -12,11 +12,17 @@
   PK_MINIO_URL        — http://minio:9000 (или http://cosmo-minio:9000 в compose)
   PK_MINIO_ACCESS_KEY — access key (default: cosmo)
   PK_MINIO_SECRET_KEY — secret key (default: cosmo-minio-dev)
+
+COS-101: запросы к S3 API подписываются SigV4 (s3_sigv4_headers, канон
+COS-093) — MinIO отклоняет HTTP Basic auth ("Please use AWS4-HMAC-SHA256").
+Раньше клиент создавался с auth=(access_key, secret_key) — каждый запрос
+авто-provisioning'а падал с 400 на живом MinIO.
 """
 from __future__ import annotations
 
 import logging
 import os
+import urllib.parse
 from contextlib import asynccontextmanager
 
 import httpx
@@ -30,39 +36,53 @@ _REQUIRED_BUCKETS = [
 ]
 
 
-async def _minio_client() -> httpx.AsyncClient | None:
-    """Создать HTTP-клиент для MinIO S3 API.
-
-    Возвращает None если переменные не заданы.
-    """
+def _minio_conf() -> tuple[str, str, str] | None:
+    """(endpoint, access_key, secret_key) или None, если URL не задан."""
     endpoint = os.getenv("PK_MINIO_URL", "").strip().rstrip("/")
-    access_key = os.getenv("PK_MINIO_ACCESS_KEY", "cosmo")
-    secret_key = os.getenv("PK_MINIO_SECRET_KEY", "cosmo-minio-dev")
-
     if not endpoint:
         logger.warning("PK_MINIO_URL not set — skipping MinIO bucket provisioning")
         return None
-
-    return httpx.AsyncClient(
-        base_url=endpoint,
-        auth=(access_key, secret_key),
-        timeout=httpx.Timeout(10.0),
-    )
+    access_key = os.getenv("PK_MINIO_ACCESS_KEY", "cosmo")
+    secret_key = os.getenv("PK_MINIO_SECRET_KEY", "cosmo-minio-dev")
+    return endpoint, access_key, secret_key
 
 
-async def _bucket_exists(client: httpx.AsyncClient, bucket: str) -> bool:
-    """Проверить существует ли бакет."""
+def _sig_headers(
+    endpoint: str, method: str, path: str,
+    access_key: str, secret_key: str, content: bytes | None = None,
+) -> dict[str, str]:
+    """SigV4-заголовки для S3-запроса (канон COS-093, переиспользование)."""
+    from orchestrator.cosmo.ledger.evidence_anchor import s3_sigv4_headers
+    host = urllib.parse.urlsplit(endpoint).netloc
+    return s3_sigv4_headers(
+        method, host, path, None, access_key, secret_key, content=content)
+
+
+async def _bucket_exists(
+    client: httpx.AsyncClient, endpoint: str,
+    access_key: str, secret_key: str, bucket: str,
+) -> bool:
+    """Проверить существует ли бакет (HEAD, SigV4)."""
+    path = f"/{bucket}"
     try:
-        r = await client.head(f"/{bucket}")
+        r = await client.head(
+            path, headers=_sig_headers(endpoint, "HEAD", path,
+                                       access_key, secret_key))
         return r.status_code in (200, 403)  # 403 = exists but no list permission (ok for our use)
     except httpx.HTTPError:
         return False
 
 
-async def _create_bucket(client: httpx.AsyncClient, bucket: str) -> bool:
-    """Создать бакет. True если создан или уже существует."""
+async def _create_bucket(
+    client: httpx.AsyncClient, endpoint: str,
+    access_key: str, secret_key: str, bucket: str,
+) -> bool:
+    """Создать бакет (PUT, SigV4). True если создан или уже существует."""
+    path = f"/{bucket}"
     try:
-        r = await client.put(f"/{bucket}")
+        r = await client.put(
+            path, headers=_sig_headers(endpoint, "PUT", path,
+                                       access_key, secret_key))
         if r.status_code in (200, 201, 409):
             logger.info("MinIO bucket '%s' ready", bucket)
             return True
@@ -73,21 +93,29 @@ async def _create_bucket(client: httpx.AsyncClient, bucket: str) -> bool:
         return False
 
 
-async def provision_minio_buckets() -> None:
+async def provision_minio_buckets(transport: httpx.AsyncBaseTransport | None = None) -> None:
     """Проверить и создать все обязательные бакеты.
 
     Вызывается при старте API. Не роняет приложение при ошибке.
+    transport — точка внедрения MockTransport в тестах.
     """
-    client = await _minio_client()
-    if client is None:
+    conf = _minio_conf()
+    if conf is None:
         return
+    endpoint, access_key, secret_key = conf
+
+    client = httpx.AsyncClient(
+        base_url=endpoint,
+        timeout=httpx.Timeout(10.0),
+        transport=transport,
+    )
 
     try:
         for bucket in _REQUIRED_BUCKETS:
-            if await _bucket_exists(client, bucket):
+            if await _bucket_exists(client, endpoint, access_key, secret_key, bucket):
                 logger.debug("MinIO bucket '%s' already exists", bucket)
                 continue
-            await _create_bucket(client, bucket)
+            await _create_bucket(client, endpoint, access_key, secret_key, bucket)
     finally:
         await client.aclose()
 

@@ -207,6 +207,20 @@ async def test_user_cannot_commit_and_run(pg_client: AsyncClient):
     assert res.status_code == 403
 
 
+async def test_user_cannot_ingest_findings(pg_client: AsyncClient):
+    """COS-101: POST /runs/{id}/findings — SCAN_START отсутствует у USER →
+    guard 403 до handler'а (запись в findings_refs — write-поверхность)."""
+    await pg_client.post("/api/v1/domains", json={
+        "id": "dom-user", "label": "User Domain",
+        "forge_binding": {"forge_type": "gitea", "url": "http://gitea", "token_ref": "vault:u"},
+    })
+    _set_principal([Role.USER], domain_id="dom-user")
+    res = await pg_client.post("/api/v1/runs/run-ghost/findings", json={
+        "findings": [{"severity": "high", "title": "x"}],
+    })
+    assert res.status_code == 403
+
+
 # ── 4. USER → 200 на auth-only reads ─────────────────────────────────
 
 USER_200_GETS = [

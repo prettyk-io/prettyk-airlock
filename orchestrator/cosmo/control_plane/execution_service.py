@@ -22,9 +22,15 @@
 Woodpecker не должны менять поведение). Woodpecker v3.5: PK_WOODPECKER_URL
 (или COSMO_WOODPECKER_URL) + COSMO_WOODPECKER_TOKEN.
 
-Out of scope (COS-097): gates на живых findings (мост), UI логов, RCP
-dispatch/leases (executor потребляет статусы в PG SoT; полная RCP-wiring —
-отдельная поверхность COS-003).
+COS-101: мост Findings ↔ Quality Gates. При all_passed перед succeeded
+плановые gates оцениваются против РЕАЛЬНЫХ findings прогона
+(runs.findings_refs через PgFindingsProvider). Gate block → run blocked
+(parity RCP COS-055); ошибка моста — fail-open. Отключение:
+COSMO_GATE_BRIDGE_ENABLED=0 (или gate_bridge=False в конструкторе).
+
+Out of scope (COS-097): gates на живых findings (мост — закрыт в COS-101),
+UI логов, RCP dispatch/leases (executor потребляет статусы в PG SoT;
+полная RCP-wiring — отдельная поверхность COS-003).
 """
 from __future__ import annotations
 
@@ -232,6 +238,7 @@ class ExecutionService:
         repo_owner: str | None = None,
         repo_name: str | None = None,
         sync_session_factory: Any = None,
+        gate_bridge: bool | None = None,
     ) -> None:
         self._sf = session_factory
         self._sync_db = sync_session_factory or self._default_sync_session
@@ -239,6 +246,17 @@ class ExecutionService:
             poll_interval or os.getenv("COSMO_EXECUTOR_POLL_INTERVAL", "") or DEFAULT_POLL_INTERVAL)
         owner = repo_owner if repo_owner is not None else _env_repo_default()[0]
         name = repo_name if repo_name is not None else _env_repo_default()[1]
+
+        # COS-101: мост findings→gates. Default on при живом executor;
+        # отключается явно (env или конструктор) — unit-сеты с кастомными
+        # финализациями не должны получать сюрпризных gate-блокировок.
+        if gate_bridge is None:
+            gate_bridge = os.getenv(
+                "COSMO_GATE_BRIDGE_ENABLED", "1").strip().lower() not in (
+                "0", "false", "no")
+        self._gate_bridge_enabled = bool(gate_bridge)
+        self._gate_engine: Any = None
+        self._findings_provider: Any = None
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._stopping = threading.Event()
@@ -285,6 +303,21 @@ class ExecutionService:
         self._executor._store = self._store
         # COS-097: terminal всех batch'ей → finalize (честный run-статус).
         self._executor._on_all_terminal = self._on_all_terminal_sync
+
+        # COS-101: мост findings→gates (stateless engine, state в PG).
+        if self._gate_bridge_enabled and self._gate_engine is None:
+            try:
+                from orchestrator.cosmo.control_plane.findings_bridge import (
+                    PgFindingsProvider,
+                )
+                from orchestrator.cosmo.control_plane.gate_engine import (
+                    GatePolicyEngine,
+                )
+                self._gate_engine = GatePolicyEngine(self._sync_db)
+                self._findings_provider = PgFindingsProvider(self._sf)
+                logger.info("COS-101 findings→gates bridge attached")
+            except Exception as exc:  # noqa: BLE001 — wiring не роняет старт
+                logger.warning("COS-101 gate bridge wiring failed: %s", exc)
 
         await self._ensure_tables()
         recovered = await asyncio.to_thread(self._executor.recover)
@@ -488,6 +521,40 @@ class ExecutionService:
             entry_hash = await commit_evidence_entry(s, entry)
         return entry_hash
 
+    # ── COS-101: мост Findings ↔ Quality Gates ──
+
+    def set_gate_bridge(self, engine: Any, provider: Any) -> None:
+        """Подключить gate engine + findings provider явно (для тестов/кастомной wiring)."""
+        self._gate_engine = engine
+        self._findings_provider = provider
+
+    async def _gate_blocked(self, run_id: str, plan_id: str) -> bool:
+        """Оценить плановые gates против реальных findings прогона.
+
+        Fail-open: ошибка bridge не блокирует прогон (parity COS-055 —
+        ошибка gate engine в RCP не блокирует run). Только явный
+        policy-вердикт "block" блокирует.
+        """
+        engine = self._gate_engine
+        provider = self._findings_provider
+        if engine is None or provider is None:
+            return False
+        try:
+            findings = provider(run_id)
+            if asyncio.iscoroutine(findings):
+                findings = await findings
+            decisions = engine.evaluate_plan_gates(
+                plan_id, findings or [], run_id=run_id)
+            blocked = any(d == "block" for d in decisions.values())
+            if blocked:
+                logger.warning("COS-101: gate block for run %s: %s",
+                               run_id, decisions)
+            return blocked
+        except Exception as exc:  # noqa: BLE001 — fail-open по контракту
+            logger.warning("COS-101 gate bridge failed for run %s: %s",
+                           run_id, exc)
+            return False
+
     # ── finalize: честный run-статус из живых статусов ──
 
     async def finalize_run(self, run_id: str, all_passed: bool) -> None:
@@ -504,16 +571,32 @@ class ExecutionService:
                             run_id, run.status)
                 return
 
+            # Нужны после close (expire_on_commit=False) и для gate hook:
+            run_domain_id = run.domain_id
+            run_plan_id = run.plan_id
+
             # Колонки TIMESTAMP WITHOUT TIME ZONE — naive UTC (конвенция
             # models.py); aware datetime asyncpg отвергает.
             now = datetime.utcnow()
             if run.started_at is None:
                 run.started_at = now
 
+            gate_blocked = False
+            if all_passed and not degraded_reason:
+                # COS-101: все batch'и прошли — security gates оцениваются
+                # против РЕАЛЬНЫХ findings прогона. Block → blocked
+                # (parity RCP COS-055: gate может заблокировать успешный
+                # прогон, напр. Critical finding).
+                gate_blocked = await self._gate_blocked(run_id, run_plan_id)
+
             if degraded_reason:
                 run.status = "failed"
                 final_status = "failed"
                 notify_status = "failed"
+            elif gate_blocked:
+                run.status = "blocked"
+                final_status = "blocked"
+                notify_status = "blocked"
             elif all_passed:
                 run.status = "succeeded"
                 final_status = "succeeded"

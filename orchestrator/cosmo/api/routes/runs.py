@@ -484,3 +484,67 @@ async def update_batch_status(
         pass
 
     return _to_batch_schema(b)
+
+
+# ── COS-101: Мост Findings ↔ Quality Gates (scan-сторона) ─────────────
+
+class FindingsIngestRequest(BaseModel):
+    """Пакет findings от сканера/хаба к прогону (runs.findings_refs)."""
+    findings: list[dict] = Field(..., min_length=1,
+                                 description="Находки со severity critical|high|medium|low|info")
+
+
+class FindingsIngestResponse(BaseModel):
+    run_id: str
+    attached: int
+    total: int
+
+
+@router.post("/api/v1/runs/{run_id}/findings",
+             response_model=FindingsIngestResponse, status_code=status.HTTP_201_CREATED)
+async def attach_run_findings(
+    run_id: str,
+    body: FindingsIngestRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    # scan:start — та же capability, что и другие исполнительные
+    # scan-поверхности (COS-091 guard pass); валидация severity — в мосте.
+    principal: PrincipalContext = Depends(require_capability(Action.SCAN_START, domain_binding="identity")),
+) -> FindingsIngestResponse:
+    """Прикрепить findings сканера к прогону (COS-101).
+
+    Scan-сторона моста Findings ↔ Quality Gates: находки попадают в
+    канонический носитель runs.findings_refs (читают FindingSearchEngine,
+    runs API и gate-bridge при финализации прогона).
+    """
+    from orchestrator.cosmo.control_plane.findings_bridge import attach_findings
+
+    run = await db.get(RunModel, run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{run_id}' not found",
+        )
+    # ghost-404 для не-админа: run имеет собственный domain_id
+    if not principal.is_system_admin:
+        verify_ownership(
+            run.domain_id or "",
+            resolve_caller_domain(principal, caller_domain),
+            f"Run '{run_id}'",
+        )
+
+    # attach_findings открывает собственную сессию: атомарный append в
+    # runs.findings_refs относительно других апдейтов runs.
+    from orchestrator.cosmo.db.session import get_sessionmaker
+    try:
+        total = await attach_findings(
+            get_sessionmaker(), run_id, body.findings)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    return FindingsIngestResponse(run_id=run_id, attached=len(body.findings),
+                                  total=total)

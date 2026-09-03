@@ -76,12 +76,51 @@ class TestOpenAPINoLeaks:
                     assert False, f"RAW TOKEN in {schema_name}.{prop_name}: {desc}"
 
     def test_no_raw_token_in_parameters(self, spec):
-        """Параметры запросов не содержат token/password."""
+        """Query-параметры не содержат token/password/secret.
+
+        COS-101: cookie/header — легитимный транспорт auth-канона
+        (session_token cookie — canon COS-066/067/068, Authorization
+        header — стандарт). Утечка — только query: URL попадает в
+        access-логи, историю браузера и referrer. OpenAPI default
+        расположения параметра — query, поэтому отсутствие "in" тоже
+        трактуем строго.
+        """
+        forbidden = ("token", "password", "secret")
         for path, methods in spec["paths"].items():
             for method, details in methods.items():
+                if not isinstance(details, dict):
+                    continue
                 for param in details.get("parameters", []):
-                    name = param.get("name", "")
-                    assert "token" not in name.lower(), f"Token param in {method} {path}: {name}"
+                    name = str(param.get("name", ""))
+                    location = param.get("in", "query")
+                    if location in ("cookie", "header"):
+                        continue
+                    leaked = [w for w in forbidden if w in name.lower()]
+                    assert not leaked, (
+                        f"Credential param '{name}' ({location}) in "
+                        f"{method} {path}: leaks {leaked} into URLs/logs"
+                    )
+
+    def test_session_token_is_cookie_only(self, spec):
+        """COS-101: session_token в спеке живёт только как cookie.
+
+        Лочит auth-транспорт канона COS-066/067/068: если кто-то
+        регенерирует спеку и session_token уедет в query — тест падает
+        до попадания утечки в продукты, логирующие URL.
+        """
+        seen = 0
+        for path, methods in spec["paths"].items():
+            for method, details in methods.items():
+                if not isinstance(details, dict):
+                    continue
+                for param in details.get("parameters", []):
+                    if param.get("name") == "session_token":
+                        seen += 1
+                        assert param.get("in") == "cookie", (
+                            f"session_token must be cookie, got "
+                            f"'{param.get('in')}' in {method} {path}"
+                        )
+        assert seen > 0, "auth canon lost: no session_token cookie params"
 
     def test_forge_binding_token_ref_is_vault(self, spec):
         """ForgeBinding.token_ref — это Vault-ссылка, с правильным описанием."""
