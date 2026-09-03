@@ -55,6 +55,8 @@ class PackageBuilder:
     """Собирает manifest + payload references для TransferItem.
 
     Вычисляет deterministic SHA-256 manifest checksum и создаёт PackageRevision.
+    COS-099: опциональная security-секция (pinned SBOM / vuln report digests) —
+    входит в canonical checksum, модификация пинов ловится контролем целостности.
     """
 
     @staticmethod
@@ -65,8 +67,13 @@ class PackageBuilder:
         package_mode: PackageMode,
         payload_refs: list[str],
         metadata: dict[str, Any] | None = None,
+        security: Any | None = None,
     ) -> dict[str, Any]:
-        """Собрать manifest для TransferItem."""
+        """Собрать manifest для TransferItem.
+
+        security: dict (или pydantic-модель с model_dump) — pinned digests
+        SBOM / vulnerability report (COS-099).
+        """
         manifest: dict[str, Any] = {
             "release_id": release_id,
             "revision": revision,
@@ -77,6 +84,10 @@ class PackageBuilder:
         }
         if metadata:
             manifest["metadata"] = metadata
+        if security is not None:
+            manifest["security"] = (
+                security if isinstance(security, dict) else security.model_dump()
+            )
         return manifest
 
     @staticmethod
@@ -92,6 +103,7 @@ class PackageBuilder:
         target_ref: str = "",
         metadata: dict[str, Any] | None = None,
         correlation_id: str = "",
+        security: Any | None = None,
     ) -> TransferItem:
         """Собрать готовый TransferItem с manifest + checksum + PackageRevision."""
         from orchestrator.cosmo.transfer.contract import TransportProfile
@@ -99,6 +111,7 @@ class PackageBuilder:
         refs = payload_refs or []
         manifest = PackageBuilder.build_manifest(
             release_id, 1, artifact_plane, package_mode, refs, metadata,
+            security=security,
         )
         checksum = PackageRevision.compute_manifest_sha256(manifest)
         revision = PackageRevision(
@@ -127,10 +140,13 @@ class PackageBuilder:
         """Создать следующую revision того же item (например после изменения payload).
 
         PackageRevision immutable: новая revision = новый checksum.
+        COS-099: security-секция (pinned digests) сохраняется — payload_refs
+        те же, значит SBOM/report валидны и для новой revision.
         """
         manifest = PackageBuilder.build_manifest(
             item.release_id, new_revision, item.artifact_plane,
             item.package_mode, item.payload_refs,
+            security=item.manifest.get("security"),
         )
         checksum = PackageRevision.compute_manifest_sha256(manifest)
         new_rev = PackageRevision(
@@ -231,6 +247,94 @@ class PreTransferValidator:
                 failure_class=TransferFailureClass.VALIDATION_FAILURE,
             ))
 
+        # 7. COS-099: security pins (SBOM / vuln report digests)
+        issues.extend(cls._validate_security_pins(item))
+
+        return ValidationResult(passed=len(issues) == 0, issues=issues)
+
+    @staticmethod
+    def _validate_security_pins(item: TransferItem) -> list[ValidationIssue]:
+        """Sanity security-секции манифеста (без payload-байтов)."""
+        security = item.manifest.get("security") if item.manifest else None
+        if not isinstance(security, dict):
+            return []
+        issues: list[ValidationIssue] = []
+        sbom = security.get("sbom")
+        if isinstance(sbom, dict):
+            digest = str(sbom.get("sha256", ""))
+            if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                issues.append(ValidationIssue(
+                    code="SECURITY_DIGEST_MALFORMED",
+                    message=f"pinned sbom sha256 malformed: '{digest[:16]}...'",
+                    failure_class=TransferFailureClass.VALIDATION_FAILURE,
+                ))
+            ref = str(sbom.get("ref", ""))
+            if (item.package_mode == PackageMode.FULL_PACKAGE
+                    and ref and ref not in item.payload_refs):
+                issues.append(ValidationIssue(
+                    code="SECURITY_REF_NOT_IN_PAYLOAD",
+                    message=f"pinned sbom ref '{ref}' not in payload_refs",
+                    failure_class=TransferFailureClass.VALIDATION_FAILURE,
+                ))
+        return issues
+
+    @classmethod
+    def validate_with_artifacts(
+        cls,
+        item: TransferItem,
+        payload_bytes: dict[str, bytes],
+        *,
+        envelope_artifacts: list[dict[str, Any]] | None = None,
+    ) -> ValidationResult:
+        """COS-099: проверка pinned digests против ФАКТИЧЕСКИХ байтов payload.
+
+        Отвергает пакет с модифицированным SBOM: sha256 предоставленных
+        байтов обязан совпасть с manifest.security pin. Опциональная сверка
+        с envelope artifacts (COS-126 bundle) — тройная tamper-evidence:
+        manifest checksum ↔ payload bytes ↔ envelope digest.
+
+        envelope_artifacts: [{name, artifact_type, sha256, size_bytes}] —
+        envelope.artifacts_digest в to_dict()-форме (без импорта ledger).
+        """
+        result = cls.validate(item)
+        issues = list(result.issues)
+        security = item.manifest.get("security") if item.manifest else None
+        if isinstance(security, dict):
+            pins: list[tuple[str, str, str]] = []  # (kind, ref, sha256)
+            sbom = security.get("sbom")
+            if isinstance(sbom, dict) and sbom.get("ref"):
+                pins.append(("sbom", str(sbom["ref"]), str(sbom.get("sha256", ""))))
+            vr = security.get("vulnerability_report")
+            if isinstance(vr, dict) and vr.get("ref") and vr.get("source") == "grype":
+                pins.append(("vulnerability_report", str(vr["ref"]),
+                             str(vr.get("sha256", ""))))
+            for kind, ref, pinned in pins:
+                data = payload_bytes.get(ref)
+                if data is None:
+                    issues.append(ValidationIssue(
+                        code="SECURITY_PAYLOAD_MISSING",
+                        message=f"pinned {kind} payload '{ref}' not provided",
+                        failure_class=TransferFailureClass.VALIDATION_FAILURE,
+                    ))
+                    continue
+                actual = hashlib.sha256(data).hexdigest()
+                if actual != pinned:
+                    issues.append(ValidationIssue(
+                        code="SECURITY_PAYLOAD_DIGEST_MISMATCH",
+                        message=(f"modified {kind} payload '{ref}': "
+                                 f"pinned {pinned[:12]}..., got {actual[:12]}..."),
+                        failure_class=TransferFailureClass.CHECKSUM_MISMATCH,
+                    ))
+                elif envelope_artifacts is not None:
+                    matching = [a for a in envelope_artifacts
+                                if a.get("sha256") == pinned]
+                    if not matching:
+                        issues.append(ValidationIssue(
+                            code="SECURITY_ENVELOPE_DIGEST_MISMATCH",
+                            message=(f"pinned {kind} digest {pinned[:12]}... "
+                                     "not present in envelope artifacts"),
+                            failure_class=TransferFailureClass.CHECKSUM_MISMATCH,
+                        ))
         return ValidationResult(passed=len(issues) == 0, issues=issues)
 
     @classmethod

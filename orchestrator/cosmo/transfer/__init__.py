@@ -29,6 +29,19 @@ from orchestrator.cosmo.transfer.landing import (
     LandingStateMachine,
     LandingTransition,
 )
+from orchestrator.cosmo.transfer.sbom import (
+    SecuritySection,
+    SBOMPin,
+    SBOMResult,
+    VulnReportPin,
+    VulnReportResult,
+    build_secured_package,
+    envelope_artifacts_from_security,
+    extract_security,
+    generate_sbom,
+    generate_vuln_report,
+    sha256_hex,
+)
 
 __all__ = [
     # Contract
@@ -53,4 +66,16 @@ __all__ = [
     "LandingStateError",
     "LandingStateMachine",
     "LandingTransition",
+    # SBOM (COS-099)
+    "SecuritySection",
+    "SBOMPin",
+    "SBOMResult",
+    "VulnReportPin",
+    "VulnReportResult",
+    "build_secured_package",
+    "envelope_artifacts_from_security",
+    "extract_security",
+    "generate_sbom",
+    "generate_vuln_report",
+    "sha256_hex",
 ]

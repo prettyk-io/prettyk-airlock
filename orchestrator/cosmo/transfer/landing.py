@@ -263,3 +263,94 @@ class LandingStateMachine:
                 LandingState.BOOTSTRAPPED, LandingState.RECONCILED,
             )
         )
+
+    # ── COS-099: receive + tamper-evidence для pinned security payloads ──
+
+    def receive_and_verify(self, payloads: dict[str, bytes]) -> LandingCheckReport:
+        """Получить пакет и проверить manifest checksum + pinned digests SBOM.
+
+        Отвергает пакет с модифицированным SBOM: sha256 фактических байтов
+        обязан совпасть с manifest.security pin (COS-099). Любое несовпадение
+        → CHECKSUM_MISMATCH (требуется новая revision). Успех → VERIFIED.
+
+        payloads: {ref: bytes} — фактические payload-байты по refs из манифеста.
+        """
+        if self._state is not LandingState.NOT_RECEIVED:
+            raise LandingStateError(
+                self._item.item_id, self._state, LandingState.RECEIVED)
+        self.transition(LandingState.RECEIVED, "payload received")
+
+        from orchestrator.cosmo.transfer.sbom import extract_security, sha256_hex
+
+        report = LandingCheckReport(
+            item_id=self._item.item_id,
+            release_id=self._item.release_id,
+            revision_key=self._revision_key,
+            state=LandingState.RECEIVED,
+        )
+        ok = True
+
+        # 1. Manifest checksum (existing invariant)
+        if self._item.package_revision and self._item.manifest:
+            computed = PackageRevision.compute_manifest_sha256(self._item.manifest)
+            expected = self._item.package_revision.manifest_sha256
+            if computed != expected:
+                ok = False
+                report.add_check(
+                    "manifest_checksum", False,
+                    f"expected {expected[:12]}..., got {computed[:12]}...")
+            else:
+                report.add_check("manifest_checksum", True)
+
+        # 2. Pinned security digests против фактических байтов
+        security = extract_security(self._item.manifest) if self._item.manifest else None
+        if security is not None:
+            data = payloads.get(security.sbom.ref)
+            if data is None:
+                ok = False
+                report.add_check(
+                    "sbom_payload_present", False,
+                    f"pinned sbom payload '{security.sbom.ref}' not provided")
+            else:
+                actual = sha256_hex(data)
+                if actual != security.sbom.sha256:
+                    ok = False
+                    report.add_check(
+                        "sbom_digest", False,
+                        f"modified SBOM '{security.sbom.ref}': pinned "
+                        f"{security.sbom.sha256[:12]}..., got {actual[:12]}...")
+                else:
+                    report.add_check("sbom_digest", True,
+                                     f"'{security.sbom.ref}' ({security.sbom.source})")
+            vr = security.vulnerability_report
+            if vr is not None and vr.ref and vr.source == "grype":
+                vdata = payloads.get(vr.ref)
+                if vdata is None:
+                    ok = False
+                    report.add_check(
+                        "vulnerability_report_payload_present", False,
+                        f"pinned report payload '{vr.ref}' not provided")
+                else:
+                    vactual = sha256_hex(vdata)
+                    if vactual != vr.sha256:
+                        ok = False
+                        report.add_check(
+                            "vulnerability_report_digest", False,
+                            f"modified report '{vr.ref}': pinned "
+                            f"{vr.sha256[:12]}..., got {vactual[:12]}...")
+                    else:
+                        report.add_check("vulnerability_report_digest", True,
+                                         f"'{vr.ref}'")
+
+        if not ok:
+            self.transition(LandingState.CHECKSUM_MISMATCH,
+                            "manifest/security digest mismatch")
+            report.state = LandingState.CHECKSUM_MISMATCH
+            report.failure_class = TransferFailureClass.CHECKSUM_MISMATCH
+            report.passed = False
+        else:
+            self.transition(LandingState.VERIFIED,
+                            "manifest checksum + pinned digests verified")
+            report.state = LandingState.VERIFIED
+            report.passed = True
+        return report
