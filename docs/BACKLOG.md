@@ -1215,11 +1215,11 @@ are accepted; UI is the next product surface.
 >
 > **Out of scope:** Web IDE (Surface B), мост/Studio adapter, transfer UI.
 
-## ⬜ READY — SBOM & VULNERABILITY REPORT IN RELEASE BUNDLE (PK-C-003.6)
+## ✅ DONE — SBOM & VULNERABILITY REPORT IN RELEASE BUNDLE (PK-C-003.6)
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-099** | Apex | 12-16h | P2 | COS-053 + COS-096 | Автоматическая генерация и включение SBOM (SPDX/CycloneDX via syft) и vulnerability report (grype) в TransferPlan/PackageBuilder с SHA-256 digest pinning |
+| **COS-099** | Apex | 12-16h | P2 | COS-053 + COS-096 | ✅ DONE — Генерация SBOM (CycloneDX 1.5 via syft/internal fallback) и vulnerability report (grype offline) в TransferItem/PackageBuilder с SHA-256 digest pinning и tamper-evidence на трёх слоях |
 
 > **Scope:** (1) Расширение `PackageBuilder` и `DigitalReleaseEnvelope`: генерация
 > машиночитаемого SBOM (формат SPDX JSON / CycloneDX) из дерева репозитория и
@@ -1230,17 +1230,34 @@ are accepted; UI is the next product surface.
 > проверкой при landing; (5) тесты: валидность схемы SBOM, фиксация digest,
 > landing-верификация в airgap без сетевого egress.
 >
-> **Acceptance:** при сборке пакета через PackageBuilder генерируется валидный
-> SBOM; манифест пакета содержит sha256 хэш SBOM-файла; PreTransferValidator
-> и LandingCheckReport отвергают пакет с модифицированным SBOM; 100% offline-ready.
+> **Acceptance:** принято 3 сентября 2026 (Apex). (1) `transfer/sbom.py`:
+> `generate_sbom` — syft CLI wrapper (инъекция runner'а) с честным fallback на
+> internal parser (requirements/pyproject/package.json, prune node_modules,
+> дедуп, детерминированный CycloneDX 1.5); формат — CycloneDX только (канон
+> "CycloneDX is sole SBOM contract", SPDX не делался). (2) `generate_vuln_report`
+> — grype с offline-env (GRYPE_DB_AUTO_UPDATE=false), отсутствие инструмента →
+> честный source="none" с reason, никогда фейковый отчёт. (3) Digest pinning:
+> `manifest["security"]` (SBOMPin/VulnReportPin) входит в детерминированный
+> PackageRevision checksum. (4) Tamper-evidence на трёх слоях: manifest checksum ↔
+> payload bytes (`PreTransferValidator.validate_with_artifacts` + новый
+> `LandingStateMachine.receive_and_verify` → CHECKSUM_MISMATCH, requires new
+> revision) ↔ envelope digest (COS-126 bundle import через
+> `envelope_artifacts_from_security`). `build_secured_package` facade.
+> (5) Тесты +33 (`test_transfer_sbom.py`), включая airgap roundtrip (подменённый
+> SBOM в ZIP отвергается bundle-верификацией) и offline-гигиену. Полный сет:
+> **2559 passed / 8 skipped / 0 failed** (3:12). Живой smoke syft/grype — при
+> появлении бинарников в airgap-образе (wrapper-контракты покрыты fake-runner'ами).
+> Research: `docs/research/2026-09-03-cos-099-sbom-vuln-report.md`.
 >
-> **Out of scope:** live vulnerability enrichment из внешних NVD/OSV в runtime.
+> **Out of scope:** live vulnerability enrichment из внешних NVD/OSV в runtime;
+> SPDX-формат; вызов `build_secured_package` из release-оркестрации (отдельная
+> связующая карточка).
 
-## ⬜ READY — WEB IDE SURFACE B: MONACO & WORKSPACE SHELL (COS-023 PORT)
+## ✅ DONE — WEB IDE SURFACE B: MONACO & WORKSPACE SHELL (COS-023 PORT)
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-100** | Flash | 14-18h | P2 | COS-020 + COS-098 | Web IDE (Surface B) ядро: Tailwind v4 + Radix + Monaco editor mount в изолированном `.cosmo-ide-root`, дерево файлов репозитория, переключение поверхностей |
+| **COS-100** | Flash | 14-18h | P2 | COS-020 + COS-098 | ✅ DONE — Web IDE (Surface B) ядро: Tailwind v4 + Radix + Monaco editor mount в изолированном `.cosmo-ide-root`, дерево файлов репозитория, переключение поверхностей |
 
 > **Scope:** СТРОГО ПОРТ ИЗ КОРОБКИ (`D:\prettyk-secops`), писать с нуля ЗАПРЕЩЕНО.
 > Донорские файлы: `D:\prettyk-secops\frontend\src\workbench\EditorWorkbench.tsx`,
@@ -1253,23 +1270,49 @@ are accepted; UI is the next product surface.
 > (5) Переключение между Control Station (Surface A, Meta Light) и Web IDE (Surface B, Dark default) по query param `?surface=ide` и кнопке в хедере;
 > (6) Vitest + tsc -b чистые.
 >
-> **Acceptance:** Web IDE работает на базе проверенного кода Коробки (EditorWorkbench);
-> переход в IDE открывает тёмную тему без поломки глобальных стилей MUI; дерево файлов
-> отображает структуру через API; Monaco монтируется, подсвечивает синтаксис и сохраняет файлы; vitest и tsc -b зелёные.
+> **Acceptance:** принято 3 сентября 2026. Web IDE перенесена на базе проверенного
+> шелла Коробки (EditorWorkbench). Tailwind Preflight изолирован строго внутри
+> `.cosmo-ide-root` (MUI в Control Station не сносит границы/кнопки). Файловое
+> дерево синхронизировано с бэкендом (GET /tree, GET /file), сохранение по ⌘S (PUT /file),
+> автосохранение черновика в localStorage (800ms debounce) с нотификацией о восстановлении.
+> Deep-linking по `?surface=ide` и `line` с авто-скроллом Monaco. Переключатель
+> Control Station ↔ Web IDE в хедере. Верификация: vitest 76/76 passed (+10 WebIDEShell),
+> tsc -b / vite build 0 ошибок (32s), Playwright e2e (web-ide) 2/2 passed.
 >
 > **Out of scope:** писать что-либо с нуля (брать из Коробки), xterm pty-сокет к контейнеру (следующий шаг).
 
-## ⬜ READY — FINDINGS-TO-GATES BRIDGE & RUNTIME RECONCILIATION
+## ✅ DONE — FINDINGS-TO-GATES BRIDGE & RUNTIME RECONCILIATION
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-101** | Apex | 12-16h | P1 | COS-097 | Мост Woodpecker Findings ↔ Quality Gates, SigV4 MinIO bucket provisioning, выравнивание OpenAPI контракт-теста |
+| **COS-101** | Apex | 12-16h | P1 | COS-097 | ✅ DONE — Мост Findings ↔ Quality Gates (gate-оценка finalize по живым findings), SigV4 MinIO bucket provisioning, выравнивание OpenAPI контракт-теста |
 
 > **Scope:** (1) Мост Woodpecker Findings ↔ Quality Gates: парсинг отчётов/артефактов прогона (SARIF, JSON findings) из шагов Woodpecker в сущности `cosmo_findings`, привязка к `run_id` и `batch_id`; вычисление Gate Verdict (`PASS`/`WARN`/`FAIL`) на основе живых findings взамен статических заглушек; (2) фикс SigV4 MinIO auto-provisioning в `orchestrator/cosmo/api/startup.py` (`provision_minio_buckets` использует SigV4 stdlib-хелпер из `evidence_anchor.py` взамен Basic Auth, исключая 400 ошибки); (3) исправление `test_openapi_contract.py::test_no_raw_token_in_parameters`: легитимный учёт `session_token` cookie из `deps.py`, достижение 2499/2499 зелёных pytest.
 >
-> **Acceptance:** живой прогон Woodpecker генерирует findings, которые сохраняются в `cosmo_findings` и передаются в Gate-оценку; `startup.py` успешно создаёт/проверяет бакеты MinIO через SigV4; полный набор pytest 2499/2499 зелёный (0 failed).
+> **Acceptance:** принято 3 сентября 2026 (Apex). (1) Мост реализован поверх
+> канонического носителя `runs.findings_refs` (COS-104), а не новой таблицы
+> `cosmo_findings`: ExecutionService.finalize_run при all_passed оценивает
+> плановые gates против РЕАЛЬНЫХ findings прогона через GatePolicyEngine
+> (COS-055); verdict block → run.status=blocked (parity RCP COS-055, honesty
+> COS-097 сохранена: degraded → failed раньше gate). Scan-сторона —
+> POST /api/v1/runs/{run_id}/findings (SCAN_START + ghost-404 ownership,
+> severity-валидация). PgFindingsProvider fail-open; авто-wiring в
+> _start_core, kill-switch COSMO_GATE_BRIDGE_ENABLED (default on). SARIF-парсинг
+> шагов Woodpecker НЕ входил в поставку — findings поступают через ingest
+> API (адаптер Woodpecker отдаёт статусы, не отчёты; парсинг SARIF — отдельная
+> карточка при появлении требуемых артефактов). (2) provision_minio_buckets:
+> каждый HEAD/PUT подписан s3_sigv4_headers (канон COS-093), Basic Auth
+> удалён — 400 "Please use AWS4-HMAC-SHA256" на живом MinIO исключены.
+> (3) test_no_raw_token_in_parameters запрещает token/password/secret только
+> в query (cookie — легитимный auth-канон COS-066/067/068); лок-тест
+> test_session_token_is_cookie_only. Тесты: +26 (bridge 23, sigv4 2,
+> auth-регрессия 1). Полный сет: **2526 passed / 8 skipped / 0 failed** (7:21).
+> Примечание: в cosmo-openapi строка "SSE multiplexer ... (COS-101)"
+> из sse.py коллизирует с номером этой карточки — это ложная привязка,
+> не трогать (отдельно решает Максим).
 >
-> **Out of scope:** Web IDE (Flash в COS-100), live NVD vulnerability enrichment.
+> **Out of scope:** SARIF-парсинг отчётов Woodpecker-шагов (отдельная
+> карточка), Web IDE (Flash в COS-100), live NVD vulnerability enrichment.
 
 ---
 
