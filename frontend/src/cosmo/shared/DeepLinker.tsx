@@ -103,7 +103,7 @@ export function useDeepLink(): {
 
   const setIDEContext = useCallback((ctx: Partial<IDEContext>) => {
     setState((prev) => {
-      const next = { ...prev, ide: { ...prev.ide, ...ctx } };
+      const next: DeepLinkState = { ...prev, surface: 'ide', ide: { ...prev.ide, ...ctx } };
       pushUrl(next);
       return next;
     });
@@ -111,7 +111,7 @@ export function useDeepLink(): {
 
   const setStationContext = useCallback((ctx: Partial<StationContext>) => {
     setState((prev) => {
-      const next = { ...prev, station: { ...prev.station, ...ctx } };
+      const next: DeepLinkState = { ...prev, surface: 'station', station: { ...prev.station, ...ctx } };
       pushUrl(next);
       return next;
     });

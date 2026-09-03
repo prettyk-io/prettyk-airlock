@@ -1,7 +1,8 @@
-/* ── COS-020: Web IDE — Scoped Tailwind Preflight ──
+/* ── COS-020 / COS-100: Web IDE — Scoped Tailwind Preflight ──
  *
- * Tailwind Preflight изолирован внутри .cosmo-ide-root.
- * MUI НЕ протекает в Web IDE — стили заперты внутри этого scope.
+ * Tailwind Preflight изолирован строго внутри .cosmo-ide-root.
+ * Глобальный preflight НЕ импортируется (импортируются только theme.css и utilities.css),
+ * чтобы не ломать глобальные стили MUI в Control Station.
  * Обе поверхности читают --cosmo-* переменные из :root.
  *
  * Инварианты:
@@ -9,6 +10,9 @@
  *   2. MUI НЕ протекает в Web IDE
  *   3. IDE-специфичные цвета — только через --ide-* переменные
  */
+
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
 
 .cosmo-ide-root {
   /* ── Tailwind Preflight (scoped) ── */

@@ -21,7 +21,7 @@ import {
 import {
   Dashboard, Apps, AccountTree, PlayArrow, Gavel,
   DarkMode, LightMode, Notifications, Person, RocketLaunch, Search,
-  Build, CloudUpload, Folder, Settings, Checklist,
+  Build, CloudUpload, Folder, Settings, Checklist, Code,
 } from '@mui/icons-material';
 import { useCosmoTheme } from '../theme';
 import { usePreference } from '../shared/usePreference';
@@ -235,6 +235,29 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
 
             <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, background: 'rgba(14,165,233,0.1)', color: '#0EA5E9', border: '1px solid rgba(14,165,233,0.2)', fontWeight: 600 }}>Active Control Plane</span>
             {deepLinkChip}
+
+            {onNavigateToIDE && (
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<Code sx={{ fontSize: 15 }} />}
+                data-testid="header-open-ide"
+                onClick={() => onNavigateToIDE({ repo: 'payments/api', file: '.cosmo/pipeline.yaml' })}
+                sx={{
+                  textTransform: 'none',
+                  fontSize: 12,
+                  color: 'text.secondary',
+                  borderColor: 'divider',
+                  bgcolor: 'action.hover',
+                  borderRadius: 2,
+                  px: 1.5,
+                  py: 0.5,
+                  display: { xs: 'none', md: 'inline-flex' },
+                }}
+              >
+                IDE
+              </Button>
+            )}
 
             <AlertHUD onNavigateToView={(targetView, params) => {
               setNav(targetView);

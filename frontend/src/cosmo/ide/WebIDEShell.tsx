@@ -31,7 +31,13 @@ export interface IDEFileNode {
   children?: IDEFileNode[];
 }
 
+const DEFAULT_REPO = 'payments/api';
 const DEFAULT_FILE = 'README.md';
+const DRAFT_PREFIX = 'cosmo_ide_draft:';
+
+function getDraftKey(repo: string, file: string): string {
+  return `${DRAFT_PREFIX}${repo}:${file}`;
+}
 
 function detectLanguage(filePath: string): string {
   if (filePath.endsWith('.yaml') || filePath.endsWith('.yml')) return 'yaml';
@@ -51,9 +57,9 @@ const WIRE_STEP_KEYWORDS = ['navigate', 'fill', 'click', 'assert_url', 'assert_s
 
 function isWireStepLine(line: string): boolean {
   const trimmed = line.trim();
-  if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('#')) return false;
+  if (trimmed.startsWith('//') || trimmed.startsWith('#')) return false;
   const keyword = trimmed.split(/\s+/)[0].toLowerCase();
-  return WIRE_STEP_KEYWORDS.includes(keyword) || keyword === '//' ? false : trimmed.startsWith('navigate') || trimmed.startsWith('fill') ||
+  return WIRE_STEP_KEYWORDS.includes(keyword) || trimmed.startsWith('navigate') || trimmed.startsWith('fill') ||
     trimmed.startsWith('click') || trimmed.startsWith('assert_') || trimmed.startsWith('wait') || trimmed.startsWith('type') || trimmed.startsWith('select') || trimmed.startsWith('hover') || trimmed.startsWith('scroll') || trimmed.startsWith('double_click') || trimmed.startsWith('drag_and_drop');
 }
 
@@ -71,7 +77,7 @@ function FileTreeNodeItem({ node, activePath, depth = 0, onSelectFile }: TreeIte
 
   if (node.kind === 'dir') {
     return (
-      <div>
+      <div data-testid={`dir-node-${node.path}`}>
         <div
           className="flex items-center gap-1 px-2 py-1 cursor-pointer hover:bg-white/5 rounded text-[11px] select-none text-slate-300 font-medium"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
@@ -98,6 +104,7 @@ function FileTreeNodeItem({ node, activePath, depth = 0, onSelectFile }: TreeIte
   const isSelected = activePath === node.path;
   return (
     <div
+      data-testid={`file-node-${node.path}`}
       className={`flex items-center gap-1 px-2 py-1 cursor-pointer rounded text-[11px] select-none transition-colors ${
         isSelected ? 'bg-cyan-500/15 text-cyan-300 font-semibold' : 'hover:bg-white/5 text-slate-400'
       }`}
@@ -113,8 +120,8 @@ function FileTreeNodeItem({ node, activePath, depth = 0, onSelectFile }: TreeIte
 // ── Main Component ─────────────────────────────────────────────────────
 
 export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEProps) {
-  const [currentRepo, setCurrentRepo] = useState(repo || '');
-  const [currentFile, setCurrentFile] = useState(file || 'README.md');
+  const [currentRepo, setCurrentRepo] = useState(repo || DEFAULT_REPO);
+  const [currentFile, setCurrentFile] = useState(file || DEFAULT_FILE);
   const [fileTree, setFileTree] = useState<IDEFileNode[]>([]);
   const [code, setCode] = useState('');
   const [originalCode, setOriginalCode] = useState('');
@@ -141,13 +148,6 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
   ]);
 
   const isDirty = useMemo(() => code !== originalCode, [code, originalCode]);
-
-  // ── COS-086: Editor Mount ───────────────────────────────────────────
-
-  const handleEditorMount: OnMount = useCallback((editorInstance) => {
-    editorRef.current = editorInstance;
-    applyGutterDecorations(editorInstance, code, originalCode, currentFile, runningStep);
-  }, [code, originalCode, currentFile, runningStep]);
 
   // ── COS-086: Apply Gutter Run + Diff decorations ────────────────────
 
@@ -201,6 +201,19 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
     },
     []
   );
+
+  // ── COS-086 / COS-100: Editor Mount ──────────────────────────────────
+
+  const handleEditorMount: OnMount = useCallback((editorInstance) => {
+    editorRef.current = editorInstance;
+    applyGutterDecorations(editorInstance, code, originalCode, currentFile, runningStep);
+
+    // COS-100: Deep-link line jump
+    if (line && line > 0) {
+      editorInstance.revealLineInCenter(line);
+      editorInstance.setPosition({ lineNumber: line, column: 1 });
+    }
+  }, [code, originalCode, currentFile, runningStep, line, applyGutterDecorations]);
 
   // Reapply decorations when code/state changes
   useEffect(() => {
@@ -263,19 +276,54 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
     setLoading(true);
     try {
       const res = await api.getRepoFile(currentRepo, filePath);
-      setCode(res.content);
       setOriginalCode(res.content);
       setCurrentFile(filePath);
+
+      // COS-100: Auto-restore local draft if one exists
+      let initialContent = res.content;
+      try {
+        const savedDraft = globalThis.localStorage?.getItem(getDraftKey(currentRepo, filePath));
+        if (savedDraft !== null && savedDraft !== res.content) {
+          initialContent = savedDraft;
+          setStatusMessage('Восстановлен локальный черновик');
+          setTimeout(() => setStatusMessage(null), 3000);
+        }
+      } catch { /* no localStorage */ }
+
+      setCode(initialContent);
       setTermLogs((prev) => [...prev, `[INFO] Loaded file: ${filePath} (${res.content.length} bytes)`]);
     } catch {
       const fallback = `// ${filePath} in ${currentRepo}\n// Cosmoport Pipeline & Wire Scenario\n`;
-      setCode(fallback);
       setOriginalCode(fallback);
       setCurrentFile(filePath);
+
+      let initialContent = fallback;
+      try {
+        const savedDraft = globalThis.localStorage?.getItem(getDraftKey(currentRepo, filePath));
+        if (savedDraft !== null) {
+          initialContent = savedDraft;
+        }
+      } catch { /* no localStorage */ }
+      setCode(initialContent);
     } finally {
       setLoading(false);
     }
   }, [currentRepo]);
+
+  // COS-100: Auto-save draft to localStorage (session persistence)
+  useEffect(() => {
+    if (!currentRepo || !currentFile || loading) return;
+    const timer = setTimeout(() => {
+      try {
+        if (code !== originalCode) {
+          globalThis.localStorage?.setItem(getDraftKey(currentRepo, currentFile), code);
+        } else {
+          globalThis.localStorage?.removeItem(getDraftKey(currentRepo, currentFile));
+        }
+      } catch { /* no localStorage */ }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [code, originalCode, currentRepo, currentFile, loading]);
 
   useEffect(() => {
     if (repo && repo !== currentRepo) setCurrentRepo(repo);
@@ -293,16 +341,42 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
     loadFileContent(currentFile);
   }, [currentFile, loadFileContent]);
 
-  const handleSaveFile = async () => {
+  const handleSaveFile = useCallback(async () => {
     try {
       await api.saveRepoFile({ repo: currentRepo, path: currentFile, content: code });
       setOriginalCode(code);
+      try {
+        globalThis.localStorage?.removeItem(getDraftKey(currentRepo, currentFile));
+      } catch { /* no localStorage */ }
       setStatusMessage('Файл успешно сохранён');
       setTimeout(() => setStatusMessage(null), 3000);
       setTermLogs((prev) => [...prev, `[SUCCESS] Saved ${currentFile}`]);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : 'Ошибка сохранения');
     }
+  }, [currentRepo, currentFile, code]);
+
+  // COS-100: ⌘S keyboard shortcut for save
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        if (isDirty && !loading) {
+          void handleSaveFile();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isDirty, loading, handleSaveFile]);
+
+  const handleDiscardDraft = () => {
+    setCode(originalCode);
+    try {
+      globalThis.localStorage?.removeItem(getDraftKey(currentRepo, currentFile));
+    } catch { /* no localStorage */ }
+    setStatusMessage('Черновик сброшен к оригиналу');
+    setTimeout(() => setStatusMessage(null), 3000);
   };
 
   const handleCommitAndPush = async () => {
@@ -316,6 +390,9 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
         files: [{ path: currentFile, content: code }],
       });
       setOriginalCode(code);
+      try {
+        globalThis.localStorage?.removeItem(getDraftKey(currentRepo, currentFile));
+      } catch { /* no localStorage */ }
       setCommitModalOpen(false);
       setCommitMessage('');
       setTermLogs((prev) => [...prev, `[GIT] Committed & Pushed to ${res.branch}: ${res.commit_hash} ("${res.message}")`]);
@@ -340,6 +417,9 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
         files: [{ path: currentFile, content: code }],
       });
       setOriginalCode(code);
+      try {
+        globalThis.localStorage?.removeItem(getDraftKey(currentRepo, currentFile));
+      } catch { /* no localStorage */ }
       setTermLogs((prev) => [...prev, `[PIPELINE] Commit ${res.commit_hash} -> Triggered Run #${res.run_id}`]);
       if (onNavigateToStation) {
         onNavigateToStation({ view: 'runs', run_id: res.run_id });
@@ -354,34 +434,50 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
   const currentLanguage = detectLanguage(currentFile);
 
   return (
-    <div className="cosmo-ide-root flex flex-col h-screen text-slate-200" style={{ background: '#0A0E1A' }}>
+    <div className="cosmo-ide-root flex flex-col h-screen text-slate-200" style={{ background: '#0A0E1A' }} data-testid="web-ide-shell">
       {/* Top Application Bar */}
       <div className="flex items-center gap-2 px-3 h-10 shrink-0 border-b border-slate-800" style={{ background: '#0D121F' }}>
-        <div className="flex items-center gap-1 font-mono">
+        <div className="flex items-center gap-1.5 font-mono">
           <span className="text-[11px] font-semibold text-cyan-400 font-mono">IDE</span>
           <span className="text-[12px] font-bold text-slate-200">Cosmoport</span>
           <span className="text-slate-600">/</span>
-          <span className="text-[11px] text-cyan-300 font-semibold">{currentRepo}</span>
+          <select
+            data-testid="repo-select"
+            value={currentRepo}
+            onChange={(e) => {
+              const r = e.target.value;
+              setCurrentRepo(r);
+              setCurrentFile(DEFAULT_FILE);
+            }}
+            className="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-cyan-300 font-mono font-semibold outline-none hover:border-cyan-500 cursor-pointer"
+          >
+            <option value="payments/api">payments/api</option>
+            <option value="cbr/wallet-api">cbr/wallet-api</option>
+            {!['payments/api', 'cbr/wallet-api'].includes(currentRepo) && (
+              <option value={currentRepo}>{currentRepo}</option>
+            )}
+          </select>
         </div>
 
         <div className="h-4 w-px bg-slate-800 mx-1" />
 
-        <span className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
+        <span className="text-[11px] text-slate-400 font-mono flex items-center gap-1" data-testid="current-file-badge">
           <span>{currentFile}</span>
-          {isDirty && <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" title="Несохранённые изменения" />}
+          {isDirty && <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" title="Несохранённые изменения (черновик)" />}
           {line && <span className="text-slate-500">:{line}</span>}
         </span>
 
         <div className="flex-1" />
 
         {statusMessage && (
-          <span className="text-[11px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+          <span data-testid="status-message" className="text-[11px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
             {statusMessage}
           </span>
         )}
 
         {/* COS-086: Diff Mode Toggle with ⌘D hint */}
         <button
+          data-testid="diff-btn"
           onClick={() => setIsDiffMode((v) => !v)}
           className={`px-2.5 py-1 text-[10px] rounded font-semibold transition-colors border ${
             isDiffMode
@@ -394,6 +490,7 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
         </button>
 
         <button
+          data-testid="save-btn"
           onClick={handleSaveFile}
           disabled={!isDirty || loading}
           className="px-2.5 py-1 text-[10px] rounded font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -401,7 +498,19 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
           Сохранить (⌘S)
         </button>
 
+        {isDirty && (
+          <button
+            data-testid="discard-draft-btn"
+            onClick={handleDiscardDraft}
+            className="px-2 py-1 text-[10px] rounded font-semibold bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 transition-colors"
+            title="Сбросить изменения к версии с сервера"
+          >
+            Сбросить
+          </button>
+        )}
+
         <button
+          data-testid="commit-btn"
           onClick={() => setCommitModalOpen(true)}
           className="px-2.5 py-1 text-[10px] rounded font-semibold bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 transition-colors"
         >
@@ -409,6 +518,7 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
         </button>
 
         <button
+          data-testid="commit-run-btn"
           onClick={handleCommitAndRun}
           disabled={committing}
           className="px-3 py-1 text-[10px] rounded font-bold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5 transition-colors shadow-sm"
@@ -421,6 +531,7 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
 
         {onNavigateToStation && (
           <button
+            data-testid="back-station-btn"
             onClick={() => onNavigateToStation({ view: 'domains' })}
             className="px-2 py-1 text-[10px] text-slate-400 hover:text-slate-200 hover:bg-white/5 rounded"
             title="Вернуться в Control Station"
@@ -440,10 +551,10 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
       {/* Main Workspace (Sidebar + Editor + Terminal) */}
       <div className="flex-1 flex min-h-0">
         {/* File Explorer Sidebar */}
-        <div className="w-56 shrink-0 border-r border-slate-800/80 flex flex-col" style={{ background: '#0D121F' }}>
+        <div className="w-56 shrink-0 border-r border-slate-800/80 flex flex-col" style={{ background: '#0D121F' }} data-testid="file-tree">
           <div className="px-3 py-2 border-b border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
             <span>Файлы проекта</span>
-            <button onClick={fetchTree} title="Обновить дерево" className="hover:text-white">↻</button>
+            <button data-testid="refresh-tree-btn" onClick={fetchTree} title="Обновить дерево" className="hover:text-white">↻</button>
           </div>
           <div className="flex-1 overflow-y-auto py-1.5">
             {fileTree.map((node, idx) => (
@@ -460,7 +571,7 @@ export function WebIDEShell({ repo, file, line, onNavigateToStation }: WebIDEPro
         {/* Central Editor / Diff Area */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Active File Tab Bar */}
-          <div className="flex items-center h-7 px-3 bg-slate-900 border-b border-slate-800 text-[11px] font-mono gap-2">
+          <div className="flex items-center h-7 px-3 bg-slate-900 border-b border-slate-800 text-[11px] font-mono gap-2" data-testid="active-file-tab">
             <span className="text-cyan-400 font-semibold">{currentFile.split('/').pop()}</span>
             <span className="text-slate-600 text-[10px]">({currentLanguage})</span>
             {isDirty && <span className="text-amber-400 text-[9px] font-sans">● Не сохранено</span>}

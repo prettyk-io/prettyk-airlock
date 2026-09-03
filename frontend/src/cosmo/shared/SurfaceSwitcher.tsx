@@ -10,11 +10,19 @@ type CosmoSurface = 'station' | 'ide';
 
 export function SurfaceSwitcher({ surface, onChange }: { surface: CosmoSurface; onChange: (s: CosmoSurface) => void }) {
   return (
-    <div className="cosmo-surface-switcher">
-      <button className={surface === 'station' ? 'active' : ''} onClick={() => onChange('station')}>
+    <div className="cosmo-surface-switcher" data-testid="surface-switcher">
+      <button
+        data-testid="switch-to-station"
+        className={surface === 'station' ? 'active' : ''}
+        onClick={() => onChange('station')}
+      >
         Control Station
       </button>
-      <button className={surface === 'ide' ? 'active' : ''} onClick={() => onChange('ide')}>
+      <button
+        data-testid="switch-to-ide"
+        className={surface === 'ide' ? 'active' : ''}
+        onClick={() => onChange('ide')}
+      >
         Web IDE
       </button>
     </div>
