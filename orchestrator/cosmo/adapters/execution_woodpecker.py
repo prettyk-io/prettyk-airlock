@@ -291,6 +291,20 @@ class WoodpeckerAdapter(ExecutionAdapter):
             out[str(step["name"])] = self._fetch_step_logs(handle, step)
         return out
 
+    def get_step_logs_by_id(self, handle: dict, step_id: int) -> list[str]:
+        """COS-112: логи шага по Woodpecker step ID (не индексу).
+
+        В отличие от get_logs(handle, step=0), который ищет по порядковому
+        индексу в уплощённом списке, этот метод находит шаг по его DB id
+        из pipeline-дерева. Используется REST-эндпоинтом для постраничного
+        чтения логов завершённых шагов.
+        """
+        detail = self.get_pipeline(handle)
+        for step in self._flatten_steps(detail):
+            if step.get("id") == step_id:
+                return self._fetch_step_logs(handle, step)
+        return []
+
     def cancel_run(self, handle: dict) -> bool:
         """POST /api/repos/{repo_id}/pipelines/{number}/cancel (v3.5).
 

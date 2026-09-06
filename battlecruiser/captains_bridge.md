@@ -1,7 +1,7 @@
 # CAPTAIN'S BRIDGE — устав семьи PrettyK / Cosmoport
 
 > **Статус:** общий организационный канон экосистемы  
-> **Командный центр:** `D:\prettyk-control-plane\battlecruiser`  
+> **Командный центр:** `D:\prettyk-airlock\battlecruiser`  
 > **Владелец продукта:** Максим  
 > **Капитан:** Cosmo
 
@@ -209,7 +209,7 @@ Cosmo принимает.
 
 ```text
 Keeper = SecOps / Sanctuary / Discovery / Customer PO
-Cosmo  = DevOps / Control Plane / Customer PO
+Cosmo  = DevOps / Airlock / Customer PO
 ```
 
 Keeper — не подчинённый Cosmo и не его исполнитель. Это коллега, мост к канонам
@@ -264,10 +264,10 @@ Cosmoport 2.0
 - никаких общих внутренних модулей под видом «удобства».
 
 ```text
-D:\prettyk-control-plane\battlecruiser\
+D:\prettyk-airlock\battlecruiser\
 ├── friend\requests — предложения до принятия в канон
 ├── pure             — каноны PureK/PrettyK
-├── prettyk-control-plane — каноны PrettyK Control Plane
+├── prettyk-airlock  — каноны PrettyK Airlock
 └── общие            — этот устав и общие каноны
 ```
 
@@ -413,7 +413,7 @@ Cosmoport использует старый Nexus как переходный и
 Полный сводный канон:
 
 ```text
-D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-airlock\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 ---
@@ -455,7 +455,7 @@ D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 - принуждение к изменению канона;
 - односторонняя запись необговорённого смысла;
 - безответвенная правка устава или канона;
-- проталкивание предложения сразу в `pure/` или `prettyk-control-plane/`;
+- проталкивание предложения сразу в `pure/` или `prettyk-airlock/`;
 - объявление гипотезы утверждённым решением;
 - изменение устава «по пьяни», на эмоциях или без проверки последствий;
 - использование зелёных тестов как замены смысловому согласованию.
@@ -481,7 +481,7 @@ Cosmo обязан остановить внесение и запросить �
 
 4. Friend-request
    До принятия предложение лежит в:
-   D:\prettyk-control-plane\battlecruiser\friend\requests\
+   D:\prettyk-airlock\battlecruiser\friend\requests\
 
 5. Реализация и проверка
    Исполнители выполняют задачу только по согласованному request.
@@ -492,7 +492,7 @@ Cosmo обязан остановить внесение и запросить �
 
 7. Polish / canon admission
    Только после повторного 2FA request переносится в соответствующий канон:
-   pure/ или prettyk-control-plane/.
+   pure/ или prettyk-airlock/.
 ```
 
 ### 10.3. Friend-request — промежуточный статус
@@ -574,13 +574,13 @@ Cosmo держит корабль, архитектуру и инженерны�
 Операционная инструкция по работе с Максимом:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\MAXIM-PROFILE.md
+D:\prettyk-airlock\battlecruiser\MAXIM-PROFILE.md
 ```
 
 Священный журнал допуска канонов:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\ADMISSION.md
+D:\prettyk-airlock\battlecruiser\ADMISSION.md
 ```
 
 ---
@@ -599,7 +599,7 @@ D:\prettyk-control-plane\battlecruiser\ADMISSION.md
 
 ---
 
-## 14. PrettyK Control Plane family
+## 14. PrettyK Airlock family
 
 Принятый 2FA-брандовый расклад:
 
@@ -607,10 +607,10 @@ D:\prettyk-control-plane\battlecruiser\ADMISSION.md
 PrettyK
 ├── prettyk.io
 │   └── product/execution layer — Keeper
-├── PrettyK Control Plane
-│   └── current prettyk-control-plane — Cosmo
+├── PrettyK Airlock
+│   └── current prettyk-airlock — Cosmo
 └── PrettyK Findings Control Station & QG Triage
-    └── target D:\prettyk-qgfcs — Gatekeeper
+    └── target D:\prettyk-hub — Gatekeeper
 ```
 
 Это три слоя одного бренда, а не три случайных монолита. В каждом слое свой
@@ -618,11 +618,11 @@ source of truth и свой PO, между слоями только внешн�
 
 ```text
 Keeper     → product/PureK/SecOps PO
-Cosmo      → Control Plane/DevOps PO
+Cosmo      → Airlock/DevOps PO
 Gatekeeper → Findings/QG/Triage PO
 ```
 
-`D:\prettyk-qgfcs` — отдельный существующий репозиторий Findings Control Station.
+`D:\prettyk-hub` — отдельный существующий репозиторий Findings Control Station.
 Gatekeeper — равный PO-партнёр Cosmo по своему слою.
 
 Boss, Flash, Luna и Buddy — общие братья-исполнители всей семьи. Конкретная
@@ -632,6 +632,6 @@ Boss, Flash, Luna и Buddy — общие братья-исполнители в
 отдельного migration request:
 
 ```text
-repository: prettyk-control-plane
-logical product name: PrettyK Control Plane
+repository: prettyk-airlock
+logical product name: PrettyK Airlock
 ```

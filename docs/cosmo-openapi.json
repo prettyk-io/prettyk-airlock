@@ -7995,7 +7995,7 @@
           "runs"
         ],
         "summary": "Update Run Status",
-        "description": "Update status of a run.\n\nCOS-091: был write только с principal (гибрид) — добавлен capability\nscan:start (исполнительный план: кто запускает прогоны, тот и ведёт\nстатусы). Ghost-404 сохранён.",
+        "description": "Update status of a run.\n\nCOS-091: был write только с principal (гибрид) — добавлен capability\nscan:start (исполнительный план: кто запускает прогоны, тот и ведёт\nстатусы). Ghost-404 сохранён.\n\nCOS-097: run → running при включённом ExecutionService триггерит\nsubmit plan-batch'ей как Woodpecker pipelines (живой цикл из ПУ).",
         "operationId": "update_run_status_api_v1_runs__run_id__status_patch",
         "parameters": [
           {
@@ -9286,6 +9286,235 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Batch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/findings": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Attach Run Findings",
+        "description": "Прикрепить findings сканера к прогону (COS-101).\n\nScan-сторона моста Findings ↔ Quality Gates: находки попадают в\nканонический носитель runs.findings_refs (читают FindingSearchEngine,\nruns API и gate-bridge при финализации прогона).",
+        "operationId": "attach_run_findings_api_v1_runs__run_id__findings_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "domain_id_query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain Id Query"
+            }
+          },
+          {
+            "name": "X-Cosmo-Domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Domain"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Cosmo-Zone",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Zone"
+            }
+          },
+          {
+            "name": "X-Cosmo-Principal",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Principal"
+            }
+          },
+          {
+            "name": "X-Cosmo-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Roles"
+            }
+          },
+          {
+            "name": "X-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "name": "X-User-Email",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Email"
+            }
+          },
+          {
+            "name": "X-User-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Roles"
+            }
+          },
+          {
+            "name": "X-Cosmo-Scopes",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Scopes"
+            }
+          },
+          {
+            "name": "session_token",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FindingsIngestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingsIngestResponse"
                 }
               }
             }
@@ -17551,633 +17780,6 @@
         }
       }
     },
-    "/api/v1/repos/tree": {
-      "get": {
-        "tags": [
-          "repos"
-        ],
-        "summary": "Get Repo Tree",
-        "description": "Get recursive file tree for a repository.\n\nCOS-068: authentication required (было — анонимный доступ).",
-        "operationId": "get_repo_tree_api_v1_repos_tree_get",
-        "parameters": [
-          {
-            "name": "repo",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "Repository full name, e.g. payments/api",
-              "title": "Repo"
-            },
-            "description": "Repository full name, e.g. payments/api"
-          },
-          {
-            "name": "Authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "name": "X-Cosmo-Zone",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Zone"
-            }
-          },
-          {
-            "name": "X-Cosmo-Domain",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Domain"
-            }
-          },
-          {
-            "name": "X-Cosmo-Principal",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Principal"
-            }
-          },
-          {
-            "name": "X-Cosmo-Roles",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Roles"
-            }
-          },
-          {
-            "name": "X-User-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Id"
-            }
-          },
-          {
-            "name": "X-User-Email",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Email"
-            }
-          },
-          {
-            "name": "X-User-Roles",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Roles"
-            }
-          },
-          {
-            "name": "X-Cosmo-Scopes",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Scopes"
-            }
-          },
-          {
-            "name": "session_token",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Session Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/FileTreeNode"
-                  },
-                  "title": "Response Get Repo Tree Api V1 Repos Tree Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/repos/file": {
-      "get": {
-        "tags": [
-          "repos"
-        ],
-        "summary": "Get Repo File",
-        "description": "Get text content of a file.\n\nCOS-068: authentication required.",
-        "operationId": "get_repo_file_api_v1_repos_file_get",
-        "parameters": [
-          {
-            "name": "repo",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "Repository identifier",
-              "title": "Repo"
-            },
-            "description": "Repository identifier"
-          },
-          {
-            "name": "path",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "Relative file path",
-              "title": "Path"
-            },
-            "description": "Relative file path"
-          },
-          {
-            "name": "Authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "name": "X-Cosmo-Zone",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Zone"
-            }
-          },
-          {
-            "name": "X-Cosmo-Domain",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Domain"
-            }
-          },
-          {
-            "name": "X-Cosmo-Principal",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Principal"
-            }
-          },
-          {
-            "name": "X-Cosmo-Roles",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Roles"
-            }
-          },
-          {
-            "name": "X-User-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Id"
-            }
-          },
-          {
-            "name": "X-User-Email",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Email"
-            }
-          },
-          {
-            "name": "X-User-Roles",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Roles"
-            }
-          },
-          {
-            "name": "X-Cosmo-Scopes",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Scopes"
-            }
-          },
-          {
-            "name": "session_token",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Session Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FileContentResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "repos"
-        ],
-        "summary": "Save Repo File",
-        "description": "Save content of a file.\n\nCOS-068: authentication required. TODO(COS-0xx): при переходе с\nin-memory VFS на реальные forge-репозитории добавить ownership-чек\nrepo → app → domain (сейчас ресурс виртуальный, владельца нет).",
-        "operationId": "save_repo_file_api_v1_repos_file_put",
-        "parameters": [
-          {
-            "name": "Authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "name": "X-Cosmo-Zone",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Zone"
-            }
-          },
-          {
-            "name": "X-Cosmo-Domain",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Domain"
-            }
-          },
-          {
-            "name": "X-Cosmo-Principal",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Principal"
-            }
-          },
-          {
-            "name": "X-Cosmo-Roles",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Roles"
-            }
-          },
-          {
-            "name": "X-User-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Id"
-            }
-          },
-          {
-            "name": "X-User-Email",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Email"
-            }
-          },
-          {
-            "name": "X-User-Roles",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-User-Roles"
-            }
-          },
-          {
-            "name": "X-Cosmo-Scopes",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Cosmo-Scopes"
-            }
-          },
-          {
-            "name": "session_token",
-            "in": "cookie",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Session Token"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SaveFileRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FileContentResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/repos/commit": {
       "post": {
         "tags": [
@@ -18585,6 +18187,892 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CommitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/repos/workspace/bootstrap": {
+      "get": {
+        "tags": [
+          "workspace"
+        ],
+        "summary": "Workspace Bootstrap",
+        "description": "Открыть workspace: capabilities + authorization + head_sha.\n\ncapabilities — read|draft|commit|run при ownership, read-only при\nадминском cross-domain чтении (честно: видим, но не пишем в чужой).\nbranch пуст → default branch из forge (get_repo_info).",
+        "operationId": "workspace_bootstrap_api_v1_repos_workspace_bootstrap_get",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Repository full name 'owner/repo'",
+              "title": "Repo"
+            },
+            "description": "Repository full name 'owner/repo'"
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Branch; empty → default",
+              "default": "",
+              "title": "Branch"
+            },
+            "description": "Branch; empty → default"
+          },
+          {
+            "name": "X-Cosmo-Domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Domain"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Cosmo-Zone",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Zone"
+            }
+          },
+          {
+            "name": "X-Cosmo-Principal",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Principal"
+            }
+          },
+          {
+            "name": "X-Cosmo-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Roles"
+            }
+          },
+          {
+            "name": "X-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "name": "X-User-Email",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Email"
+            }
+          },
+          {
+            "name": "X-User-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Roles"
+            }
+          },
+          {
+            "name": "X-Cosmo-Scopes",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Scopes"
+            }
+          },
+          {
+            "name": "session_token",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceBootstrapResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/repos/tree": {
+      "get": {
+        "tags": [
+          "workspace"
+        ],
+        "summary": "Workspace Tree",
+        "description": "Плоское рекурсивное дерево на head_sha (CAS-ready).\n\nhead_sha обязателен и сверяется с веткой: не совпадает → 409\n(ветка уехала — re-bootstrap). Пустое дерево честно пусто.",
+        "operationId": "workspace_tree_api_v1_repos_tree_get",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Repository full name 'owner/repo'",
+              "title": "Repo"
+            },
+            "description": "Repository full name 'owner/repo'"
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Branch name",
+              "title": "Branch"
+            },
+            "description": "Branch name"
+          },
+          {
+            "name": "head_sha",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "CAS head sha",
+              "title": "Head Sha"
+            },
+            "description": "CAS head sha"
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Cosmo-Zone",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Zone"
+            }
+          },
+          {
+            "name": "X-Cosmo-Domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Domain"
+            }
+          },
+          {
+            "name": "X-Cosmo-Principal",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Principal"
+            }
+          },
+          {
+            "name": "X-Cosmo-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Roles"
+            }
+          },
+          {
+            "name": "X-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "name": "X-User-Email",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Email"
+            }
+          },
+          {
+            "name": "X-User-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Roles"
+            }
+          },
+          {
+            "name": "X-Cosmo-Scopes",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Scopes"
+            }
+          },
+          {
+            "name": "session_token",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceTreeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/repos/file": {
+      "get": {
+        "tags": [
+          "workspace"
+        ],
+        "summary": "Workspace File",
+        "description": "Blob файла на head_sha + base_blob_sha (база CAS-записи, 3-way).",
+        "operationId": "workspace_file_api_v1_repos_file_get",
+        "parameters": [
+          {
+            "name": "repo",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Repository full name 'owner/repo'",
+              "title": "Repo"
+            },
+            "description": "Repository full name 'owner/repo'"
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Branch name",
+              "title": "Branch"
+            },
+            "description": "Branch name"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "File path",
+              "title": "Path"
+            },
+            "description": "File path"
+          },
+          {
+            "name": "head_sha",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "CAS head sha",
+              "title": "Head Sha"
+            },
+            "description": "CAS head sha"
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Cosmo-Zone",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Zone"
+            }
+          },
+          {
+            "name": "X-Cosmo-Domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Domain"
+            }
+          },
+          {
+            "name": "X-Cosmo-Principal",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Principal"
+            }
+          },
+          {
+            "name": "X-Cosmo-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Roles"
+            }
+          },
+          {
+            "name": "X-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "name": "X-User-Email",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Email"
+            }
+          },
+          {
+            "name": "X-User-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Roles"
+            }
+          },
+          {
+            "name": "X-Cosmo-Scopes",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Scopes"
+            }
+          },
+          {
+            "name": "session_token",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceBlobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/repos/workspace/commit": {
+      "post": {
+        "tags": [
+          "workspace"
+        ],
+        "summary": "Workspace Commit",
+        "description": "CAS-коммит в живой Gitea через git tree API.\n\nchanges — список {path, content, base_blob_sha?, action: 'upsert'|'delete'}.\nbase_blob_sha не совпадает с текущим blob → 409 (CAS conflict — файл\nизменился после последнего чтения в IDE). expected_head_sha не\nсовпадает с HEAD ветки → 409 (ветка уехала — re-bootstrap).\nАвтор коммита — principal.user_id + forge-учётка адаптера.",
+        "operationId": "workspace_commit_api_v1_repos_workspace_commit_post",
+        "parameters": [
+          {
+            "name": "X-Cosmo-Domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Domain"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Cosmo-Zone",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Zone"
+            }
+          },
+          {
+            "name": "X-Cosmo-Principal",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Principal"
+            }
+          },
+          {
+            "name": "X-Cosmo-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Roles"
+            }
+          },
+          {
+            "name": "X-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Id"
+            }
+          },
+          {
+            "name": "X-User-Email",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Email"
+            }
+          },
+          {
+            "name": "X-User-Roles",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-User-Roles"
+            }
+          },
+          {
+            "name": "X-Cosmo-Scopes",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Scopes"
+            }
+          },
+          {
+            "name": "session_token",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCommitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCommitResponse"
                 }
               }
             }
@@ -30531,82 +31019,88 @@
         "title": "DomainQuota",
         "description": "Квоты домена: лимиты на ресурсы."
       },
-      "FileContentResponse": {
+      "FileChange": {
         "properties": {
-          "repo": {
-            "type": "string",
-            "title": "Repo"
-          },
           "path": {
             "type": "string",
             "title": "Path"
           },
           "content": {
             "type": "string",
-            "title": "Content"
+            "title": "Content",
+            "default": ""
           },
-          "sha": {
+          "baseBlobSha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseblobsha"
+          },
+          "action": {
             "type": "string",
-            "title": "Sha"
+            "enum": [
+              "upsert",
+              "delete"
+            ],
+            "title": "Action",
+            "default": "upsert"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
-          "repo",
-          "path",
-          "content",
-          "sha"
+          "path"
         ],
-        "title": "FileContentResponse"
+        "title": "FileChange",
+        "description": "Одно изменение в коммите: upsert (создать/обновить) или delete."
       },
-      "FileTreeNode": {
+      "FindingsIngestRequest": {
         "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "kind": {
-            "type": "string",
-            "title": "Kind",
-            "description": "'file' | 'dir'"
-          },
-          "size": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Size"
-          },
-          "children": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/FileTreeNode"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Children"
+          "findings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Findings",
+            "description": "Находки со severity critical|high|medium|low|info"
           }
         },
         "type": "object",
         "required": [
-          "name",
-          "path",
-          "kind"
+          "findings"
         ],
-        "title": "FileTreeNode"
+        "title": "FindingsIngestRequest",
+        "description": "Пакет findings от сканера/хаба к прогону (runs.findings_refs)."
+      },
+      "FindingsIngestResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "attached": {
+            "type": "integer",
+            "title": "Attached"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "attached",
+          "total"
+        ],
+        "title": "FindingsIngestResponse"
       },
       "FlakyGateItem": {
         "properties": {
@@ -32734,43 +33228,6 @@
         "title": "Run",
         "description": "Один запуск пайплайна."
       },
-      "SaveFileRequest": {
-        "properties": {
-          "repo": {
-            "type": "string",
-            "minLength": 1,
-            "title": "Repo"
-          },
-          "path": {
-            "type": "string",
-            "minLength": 1,
-            "title": "Path"
-          },
-          "content": {
-            "type": "string",
-            "title": "Content"
-          },
-          "message": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Message",
-            "default": "Update file content"
-          }
-        },
-        "type": "object",
-        "required": [
-          "repo",
-          "path",
-          "content"
-        ],
-        "title": "SaveFileRequest"
-      },
       "StatusAlert": {
         "properties": {
           "name": {
@@ -33506,6 +33963,46 @@
         ],
         "title": "TransportProfile",
         "description": "Способ пересечения границы. Меняет канал, не меняет contract."
+      },
+      "TreeEntry": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "directory"
+            ],
+            "title": "Kind"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "M",
+                  "U",
+                  "D"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "kind"
+        ],
+        "title": "TreeEntry",
+        "description": "Элемент дерева; status — рабочая дельта против head_sha (CAS)."
       },
       "TrendDataPoint": {
         "properties": {
@@ -34298,6 +34795,175 @@
           "url"
         ],
         "title": "WebhookConfig"
+      },
+      "WorkspaceBlobResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "sha": {
+            "type": "string",
+            "title": "Sha"
+          },
+          "encoding": {
+            "type": "string",
+            "const": "utf-8",
+            "title": "Encoding",
+            "default": "utf-8"
+          },
+          "baseBlobSha": {
+            "type": "string",
+            "title": "Baseblobsha"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "content",
+          "sha",
+          "baseBlobSha"
+        ],
+        "title": "WorkspaceBlobResponse",
+        "description": "Файл + sha + база для CAS-записи (base_blob_sha)."
+      },
+      "WorkspaceBootstrapResponse": {
+        "properties": {
+          "repo": {
+            "type": "string",
+            "title": "Repo"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "headSha": {
+            "type": "string",
+            "title": "Headsha"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "draft",
+                "commit",
+                "run"
+              ]
+            },
+            "type": "array",
+            "title": "Capabilities"
+          },
+          "authorization": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ],
+            "title": "Authorization"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repo",
+          "branch",
+          "headSha",
+          "authorization"
+        ],
+        "title": "WorkspaceBootstrapResponse",
+        "description": "Capability context воркспейса: что IDE можно делать с репо."
+      },
+      "WorkspaceCommitRequest": {
+        "properties": {
+          "repo": {
+            "type": "string",
+            "title": "Repo"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Message",
+            "default": "workspace commit"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/FileChange"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Changes"
+          },
+          "expectedHeadSha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedheadsha"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repo",
+          "branch",
+          "changes"
+        ],
+        "title": "WorkspaceCommitRequest",
+        "description": "CAS-коммит: набор изменений от base_blob_sha к новому дереву REPLACE."
+      },
+      "WorkspaceCommitResponse": {
+        "properties": {
+          "commitSha": {
+            "type": "string",
+            "title": "Commitsha"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "treeSha": {
+            "type": "string",
+            "title": "Treesha"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "commitSha",
+          "branch",
+          "treeSha"
+        ],
+        "title": "WorkspaceCommitResponse",
+        "description": "Результат коммита: новый commit_sha + tree_sha."
+      },
+      "WorkspaceTreeResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/TreeEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "WorkspaceTreeResponse",
+        "description": "Плоское дерево (рекурсивно) на head_sha."
       }
     }
   }

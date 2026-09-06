@@ -1,4 +1,4 @@
-# ADMISSION — бортовой журнал Battlecruiser
+﻿# ADMISSION — бортовой журнал Battlecruiser
 
 > **Статус:** священный журнал допуска архитектурных и продуктовых канонов  
 > **Судно:** Battlecruiser  
@@ -123,7 +123,7 @@ Cosmo обязан прямо обозначить инженерный риск
 До финального допуска предложение хранится в:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\friend\requests\
+D:\prettyk-airlock\battlecruiser\friend\requests\
 ```
 
 ---
@@ -1084,14 +1084,14 @@ success
 ## 18. Связанные документы
 
 ```text
-D:\prettyk-control-plane\battlecruiser\captains_bridge.md
-D:\prettyk-control-plane\battlecruiser\README.md
-D:\prettyk-control-plane\battlecruiser\friend\requests\
-D:\prettyk-control-plane\battlecruiser\pure\ARTIFACT-REGISTRY-CANON.md
-D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\ARTIFACT-REGISTRY-CANON.md
-D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\CANON-INDEX.md
-D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\NEXT-RAILS-BACKLOG.md
-D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-airlock\battlecruiser\captains_bridge.md
+D:\prettyk-airlock\battlecruiser\README.md
+D:\prettyk-airlock\battlecruiser\friend\requests\
+D:\prettyk-airlock\battlecruiser\pure\ARTIFACT-REGISTRY-CANON.md
+D:\prettyk-airlock\battlecruiser\prettyk-airlock\ARTIFACT-REGISTRY-CANON.md
+D:\prettyk-airlock\battlecruiser\prettyk-airlock\CANON-INDEX.md
+D:\prettyk-airlock\battlecruiser\prettyk-airlock\NEXT-RAILS-BACKLOG.md
+D:\prettyk-airlock\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 ---
@@ -1122,7 +1122,7 @@ PrettyK становится единым существующим брендо�
 PrettyK
 ├── prettyk.io
 │   └── product / execution layer
-├── PrettyK Control Plane
+├── PrettyK Airlock
 │   └── operator/release/control layer
 └── PrettyK Findings Control Station & QG Triage
     └── findings/triage/policy layer
@@ -1139,12 +1139,12 @@ PO: Keeper
 Это существующий продуктовый и production-facing контур PrettyK. Он выполняет
 свои специализированные операции и отдаёт результаты через внешние контракты.
 
-### 20.2. Слой 2 — PrettyK Control Plane
+### 20.2. Слой 2 — PrettyK Airlock
 
 ```text
-Логическое имя: PrettyK Control Plane
-Текущее repository: prettyk-control-plane
-Целевое repository name: prettyk-control-plane
+Логическое имя: PrettyK Airlock
+Текущее repository: prettyk-airlock
+Целевое repository name: prettyk-airlock
 PO: Cosmo
 ```
 
@@ -1169,8 +1169,8 @@ PO: Cosmo
 сценария. Продуктовый бренд и repository name уже приняты как:
 
 ```text
-PrettyK Control Plane
-prettyk-control-plane
+PrettyK Airlock
+prettyk-airlock
 ```
 
 Внутренние Python package names, API prefixes, Docker image names и database
@@ -1180,7 +1180,7 @@ names меняются только отдельными migration decisions.
 
 ```text
 Логическое имя: PrettyK Findings Control Station & QG Triage
-Целевое repository/path: D:\prettyk-qgfcs
+Целевое repository/path: D:\prettyk-hub
 PO: Gatekeeper
 ```
 
@@ -1200,17 +1200,17 @@ PO: Gatekeeper
 Он получает результаты от PrettyK и других approved scanner adapters, но не
 заменяет execution layer.
 
-Cosmoport/PrettyK Control Plane потребляет готовый QG verdict, а не пересчитывает
+Cosmoport/PrettyK Airlock потребляет готовый QG verdict, а не пересчитывает
 findings самостоятельно.
 
-`D:\prettyk-qgfcs` — отдельный существующий репозиторий Findings Control Station.
+`D:\prettyk-hub` — отдельный существующий репозиторий Findings Control Station.
 Плотная реализация этого слоя ведётся отдельным рабочим циклом.
 
 ### 20.4. Три PO-агента
 
 ```text
 Keeper     → PrettyK product/execution/SecOps
-Cosmo      → PrettyK Control Plane/DevOps/release control
+Cosmo      → PrettyK Airlock/DevOps/release control
 Gatekeeper → Findings Control Station/QG/triage
 ```
 
@@ -1226,7 +1226,7 @@ Luna
 Buddy
 ```
 
-Они общие для всей семьи PrettyK, Control Plane и Findings Station:
+Они общие для всей семьи PrettyK, Airlock и Findings Station:
 
 - Boss — core/orchestration/state machine;
 - Flash — API/UI/Control Station/Web IDE;
@@ -1242,10 +1242,10 @@ Buddy
 prettyk.io / PureK
   ↔ REST / webhook / SSE
 
-prettyk-control-plane
+prettyk-airlock
   ↔ REST / webhook / SSE
 
-prettyk-qgfcs
+prettyk-hub
   ↔ REST / webhook / SSE
 ```
 
@@ -1297,8 +1297,8 @@ Cosmoport alias / prettyk-control-plane
 > **Статус:** ADMITTED by 2FA  
 > **Дата:** 31 августа 2026  
 > **PO:** Gatekeeper  
-> **Repository:** `D:\prettyk-qgfcs`  
-> **Remote:** `https://github.com/prettyk-io/prettyk-qgfcs.git`
+> **Repository:** `D:\prettyk-hub` (ранее prettyk-qgfcs; переименован по PK-DIR-008 §1, 2026-09-04)  
+> **Remote:** `https://github.com/prettyk-io/prettyk-hub.git`
 
 ### 21.1. Роль Gatekeeper
 
@@ -1439,13 +1439,13 @@ Gatekeeper при запуске:
 Полный copy-paste onboarding-pack для Keeper:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\gatekeeper\KEEPER-BRIEFING-GATEKEEPER.md
+D:\prettyk-airlock\battlecruiser\gatekeeper\KEEPER-BRIEFING-GATEKEEPER.md
 ```
 
 Собственный канон Gatekeeper:
 
 ```text
-D:\prettyk-qgfcs\chambers\CONSTITUTION.md
+D:\prettyk-hub\docs\  (канон Gatekeeper; ранее D:\prettyk-qgfcs\chambers\CONSTITUTION.md)
 ```
 
 `chambers/CONSTITUTION.md` заменяет прежний локальный `chambers/ADMISSION.md`
@@ -1507,7 +1507,7 @@ React Flow не является основной поверхностью ра�
 
 ### 21.8. Стек (ADMITTED by 2FA)
 
-Стек PrettyK Findings Control Station & QG Triage (prettyk-qgfcs) утверждён:
+Стек PrettyK Findings Control Station & QG Triage (prettyk-hub, ранее prettyk-qgfcs) утверждён:
 
 ```text
 Frontend:
@@ -1519,7 +1519,7 @@ Frontend:
 
 Backend:
   Python 3.13 + FastAPI + Pydantic v2
-  PostgreSQL 16 (отдельная изолированная база qgfcs)
+  PostgreSQL 16 (отдельная изолированная база; тех-имя БД qgfcs сохранено до отдельной migration plan, §20.8)
   SQLAlchemy 2 (Async) + Alembic
 
 Storage & Queue (Dedicated from Day 1):
@@ -1530,7 +1530,7 @@ Storage & Queue (Dedicated from Day 1):
 
 ---
 
-## 22. PrettyK Control Plane rebrand
+## 22. PrettyK Airlock rebrand
 
 > **Статус:** ADMITTED by 2FA  
 > **Дата:** 31 августа 2026
@@ -1538,14 +1538,14 @@ Storage & Queue (Dedicated from Day 1):
 ### Принятое продуктовое имя
 
 ```text
-PrettyK Control Plane
+PrettyK Airlock
 ```
 
 ### Принятый репозиторий
 
 ```text
-Local:  D:\prettyk-control-plane
-Remote: https://github.com/prettyk-io/prettyk-control-plane.git
+Local:  D:\prettyk-airlock
+Remote: https://github.com/prettyk-io/prettyk-airlock.git
 ```
 
 ### Роль Cosmoport
@@ -1560,7 +1560,7 @@ Cosmoport = первый integration alias/profile
 ### Универсальное ядро
 
 ```text
-PrettyK Control Plane
+PrettyK Airlock
 ├── Cosmoport profile — первый integration alias
 └── PureK profile/fork — при созревании универсального ядра
 ```
@@ -1574,10 +1574,10 @@ PrettyK Control Plane
 PrettyK
 ├── prettyk.io
 │   └── Product / Execution layer — Keeper
-├── PrettyK Control Plane
-│   └── prettyk-control-plane — Cosmo
+├── PrettyK Airlock
+│   └── prettyk-airlock — Cosmo
 └── PrettyK Findings Control Station & QG Triage
-    └── D:\prettyk-qgfcs — Gatekeeper
+    └── D:\prettyk-hub — Gatekeeper
 ```
 
 ---
@@ -1712,7 +1712,7 @@ cosign  → possible image-signature value for future GAP supply chain
 
 ---
 
-## 24. SecOps Studio, Gatekeeper and Control Plane authority boundary
+## 24. SecOps Studio, Gatekeeper and Airlock authority boundary
 
 > **Статус:** PROVISIONAL — product essence agreed; exact contract requires joint 2FA with Gatekeeper  
 > **Связанный request:** `friend/requests/2026-08-31-secops-studio-gatekeeper-control-plane-flow.md`
@@ -1720,14 +1720,14 @@ cosign  → possible image-signature value for future GAP supply chain
 ### Продуктовый поток
 
 ```text
-PrettyK Control Plane
+PrettyK Airlock
 → Release/Build/artifact/required-step context
 → Gatekeeper QG Center processing
 → qualifying deployment
 → PrettyK SecOps Studio post-deployment DAST/AppSec
 → final Studio PASS/FAIL + Act + Evidence
 → Gatekeeper triage/policy/clearance
-→ Control Plane OK_TO_TRANSFER
+→ Airlock OK_TO_TRANSFER
 ```
 
 ### Authority
@@ -1742,12 +1742,12 @@ Gatekeeper QG Center
   → findings, triage, baseline, approvals, policy explanation
   → PASS_GRANTED only after Studio PASS + Act + applicable policy
 
-PrettyK Control Plane
+PrettyK Airlock
   → Release/Package orchestration
   → consumes clearance; does not recompute DAST QG
 ```
 
-Studio FAIL cannot be silently overridden by Gatekeeper or Control Plane.
+Studio FAIL cannot be silently overridden by Gatekeeper or Airlock.
 
 ### Required step failure
 
@@ -1782,7 +1782,7 @@ findings
 → new Studio DAST + Act
 → repeat until current PASS
 → Gatekeeper clearance
-→ Control Plane transfer permission
+→ Airlock transfer permission
 ```
 
 Every iteration is preserved as a new ScanRun/FindingOccurrence/Evidence record.

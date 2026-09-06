@@ -1,4 +1,4 @@
-# MAXIM PROFILE — рабочая инструкция для Captain и экипажа
+﻿# MAXIM PROFILE — рабочая инструкция для Captain и экипажа
 
 > **Назначение:** как работать с Максимом, владельцем продукта и QA экосистемы.  
 > **Статус:** operational profile / interaction canon  
@@ -247,7 +247,7 @@ smoke только при доступном endpoint.
 Путь friend-request:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\friend\requests\
+D:\prettyk-airlock\battlecruiser\friend\requests\
 ```
 
 ### При ошибке агента

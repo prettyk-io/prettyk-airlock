@@ -1,4 +1,4 @@
-# OpenCode compaction follow-up — 2026-09-01
+﻿# OpenCode compaction follow-up — 2026-09-01
 
 ## Status
 
@@ -103,8 +103,8 @@ reasoning effort is a contributing factor rather than the root lifecycle bug.
 
 ## References
 
-- `D:\prettyk-control-plane\opencode.json`
-- `D:\prettyk-control-plane\.opencode\agent\battlecruiser.md`
+- `D:\prettyk-airlock\opencode.json`
+- `D:\prettyk-airlock\.opencode\agent\battlecruiser.md`
 - `D:\Infra\OpenCode\config\opencode\supermemory.jsonc`
 - `D:\Infra\OpenCode\cache\opencode\packages\opencode-supermemory@latest\node_modules\opencode-supermemory\dist\index.js`
 - `D:\Infra\OpenCode\share\opencode-home\node_modules\@opencode-ai\sdk\dist\v2\gen\types.gen.d.ts`

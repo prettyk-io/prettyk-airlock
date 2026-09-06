@@ -1,11 +1,11 @@
-# Что передаём из Pure Box в Cosmoport 2.0
+﻿# Что передаём из Pure Box в Cosmoport 2.0
 
 > **Для:** Cosmo · **Принцип:** Cosmo НЕ импортирует Pure Box. Только REST/Webhook/SSE.  
 > Ниже — что копируем как исходники, что подключаем как сервисы, что Buddy должен собрать с нуля.
 
 ---
 
-## 1. Копируем как ИСХОДНИКИ (портировать в `D:\prettyk-control-plane`)
+## 1. Копируем как ИСХОДНИКИ (портировать в `D:\prettyk-airlock`)
 
 ### Backend (`orchestrator/cosmo/`)
 
@@ -75,7 +75,7 @@ Cosmo ← SSE ← Pure Box (live telemetry)
 
 ---
 
-## 3. Инфраструктура — Buddy собирает с нуля в prettyk-control-plane
+## 3. Инфраструктура — Buddy собирает с нуля в prettyk-airlock
 
 | Что | Кто | Что делать |
 |---|---|---|
@@ -118,10 +118,10 @@ Cosmo ← SSE ← Pure Box (live telemetry)
 
 ---
 
-## 5. Итого: что уже лежит в D:\prettyk-control-plane
+## 5. Итого: что уже лежит в D:\prettyk-airlock
 
 ```text
-D:\prettyk-control-plane\
+D:\prettyk-airlock\
 ├── AGENTS.md                    ← ✅ готово
 ├── .opencode\agent\             ← ✅ готово (cosmo/dev/plan)
 ├── docs\                        ← ✅ готово (CONCEPT, BACKLOG, DISCOVERY, INVENTORY, STACK, PERSISTENCE)

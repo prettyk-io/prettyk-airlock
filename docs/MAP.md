@@ -145,7 +145,33 @@ flowchart TD
 
 ---
 
-## 4. Контрольные точки стенда и порты
+## 4. Внешние продуктовые контуры (PK-DIR-008 §1 naming)
+
+Платформа PrettyK — три отдельных продукта; границы только по wire-контрактам
+(REST / Webhook / SSE), cross-repo imports запрещены. Направление
+security-qualification flow (канон: `docs/RELEASE-QUALIFICATION-FLOW-DRAFT.md` §1):
+
+```text
+Cosmoport (ПУ, эта репа)
+  → Build / required checks / qualifying deployment
+  → Коробка (PrettyK SecOps, D:\prettyk-secops): DAST + Evidence + execution verdict + Act
+  → Hub (PrettyK Hub, D:\prettyk-hub; ранее QGFCS): intake findings, triage, baseline, QG assessment
+  → Hub публикует candidate status: waiting | blocked | unlocked
+  → ПУ монитори́т статус и выполняет transfer только при unlocked
+```
+
+- **Коробка** — execution-слой: raw results, Evidence, Act (первичные отчёты).
+- **Hub (PrettyK Hub, ранее QGFCS)** — source of truth Findings/triage/baseline,
+  вычисляет и публикует QG status `waiting|blocked|unlocked`; ПУ статус
+  потребляет, не пересчитывает.
+- **Cosmoport** — единственный оркестратор сборки, пакета, transfer и deployment.
+
+Реализация моста в этом репозитории пока отсутствует (external bridge не
+создан — только wire-контракты в drafts).
+
+---
+
+## 5. Контрольные точки стенда и порты
 
 | Сервис | Порт | Протокол | Точка входа в коде | Назначение в Data-Flow |
 |---|---|---|---|---|

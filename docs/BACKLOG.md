@@ -1314,6 +1314,373 @@ are accepted; UI is the next product surface.
 > **Out of scope:** SARIF-парсинг отчётов Woodpecker-шагов (отдельная
 > карточка), Web IDE (Flash в COS-100), live NVD vulnerability enrichment.
 
+## ✅ DONE — WORKSPACE API: PYDANTIC CONTRACTS & DOMAIN DTO (PK-C-006.1)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-102** | Boss | 8-12h | P1 | COS-100 | ✅ DONE — Pydantic DTO в `orchestrator/cosmo/domain/workspace.py`: WorkspaceBootstrapRequest/Response, WorkspaceTreeRequest/Response, WorkspaceBlobRequest/Response, CAS base_blob_sha |
+
+> **Scope:** (1) Реализация строгих Pydantic v2 DTO для Web IDE (`prettyk-ide`, :5176)
+> по канону `D:\prettyk-ide\src\workspace\types.ts`;
+> (2) `WorkspaceBootstrapRequest` (repo, branch?) → `WorkspaceBootstrapResponse` (repo, branch, head_sha, capabilities[], authorization);
+> (3) `WorkspaceTreeRequest` (repo, branch, head_sha) → `WorkspaceTreeResponse` (entries[{path, kind, status?}]);
+> (4) `WorkspaceBlobRequest` (repo, branch, path, head_sha) → `WorkspaceBlobResponse` (path, content, sha, encoding, base_blob_sha);
+> (5) Валидация путей (directory traversal guard), head_sha обязателен для CAS-ready операций;
+> (6) Unit-тесты DTO валидации и сериализации.
+>
+> **Acceptance:** принято 4 сентября 2026 (Boss).
+> `orchestrator/cosmo/domain/workspace.py`: 6 DTO + TreeEntry, extra="forbid",
+> camelCase через алиасы (`headSha`, `baseBlobSha`), жесткая валидация путей (отсекаются ..,
+> abs-пути, backslash, drive letters, NUL, whitespace), CAS base_blob_sha обязателен.
+> Тесты: 75/75 passed (`test_workspace_dto.py`). Mirror-тест с `prettyk-ide` types.ts — OK.
+> Отчёт: `docs/research/2026-09-03-cos-102-workspace-dto.md`.
+
+## ✅ DONE — WORKSPACE API: ROUTES & REPOS REFACTOR (PK-C-006.2 + PK-C-006.3)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-103** | Luna | 10-14h | P1 | COS-102 | ✅ DONE — Routes в `orchestrator/cosmo/api/routes/workspace.py`: GET /workspace/bootstrap, CAS-ready /tree и /file, вычистка mock/wire substrate из repos.py |
+
+> **Scope:** (1) Новый роутер `orchestrator/cosmo/api/routes/workspace.py` (или расширение `repos.py` с изоляцией):
+> `GET /api/v1/repos/workspace/bootstrap` — capability context, head_sha, authorization check через канонический DTO `WorkspaceBootstrapResponse`;
+> (2) Доработка `GET /api/v1/repos/tree` — head_sha обязателен, возврат `WorkspaceTreeResponse`;
+> (3) Доработка `GET /api/v1/repos/file` — возврат `WorkspaceBlobResponse` с обязательным `base_blob_sha` для CAS;
+> (4) Очистка mock/wire substrate из `repos.py` (удаление in-memory FS fallback и захардкоженных `.wire` примеров);
+> (5) Подключение к реальному `GiteaForgeAdapter` для чтения дерева коммита и блобов; маппинг `WorkspaceContractError` в HTTP 400.
+>
+> **Acceptance:** роуты возвращают строго типизированные Pydantic ответы; при несовпадении head_sha — честный 409/400;
+> вызовы читают данные из ForgeAdapter; старый mock-код удалён без регрессий.
+>
+> **Принято 4 сентября 2026 (Luna):** три CAS-ready read-роута поверх
+> реального `GiteaForgeAdapter` (+`get_commit`/`get_tree` с честным
+> truncated/empty-repo). Ресурс = binding приложения: ghost-404 через
+> канонический `verify_ownership`/`resolve_caller_domain` (чужой домен
+> → 404 anti-enumeration, заголовок не расширяет доступ). Честный CAS:
+> head_sha сверяется с головой ветки, расхождение → 409. Traversal →
+> 400 (guard-функции DTO), forge not configured → 503, unreachable →
+> 502, missing → 404, пустое репо → честно пусто. Из repos.py удалён
+> `_MOCK_REPO_FILES` со всеми `.wire`-сценариями (кликер-мусор,
+> инвариант AGENTS), in-memory VFS и PUT /file; commit/commit-and-run
+> (реальный PG) сохранены. capabilities честные (свой домен — полный
+> набор, админский cross-domain — read-only).
+> Тесты: `test_workspace_routes.py` 21 новый + линии DTO/surface/
+> transfer/forge 195 passed; **полный сет 2555 passed / 12 skipped /
+> 0 failed**. Отчёт: `docs/research/2026-09-04-cos-103-workspace-routes.md`.
+>
+> **Out of scope:** contract-тесты и OpenAPI (Flash в COS-104), OpenBao (Boss в COS-105).
+
+## ✅ DONE — WEB IDE CLIENT TYPES & WORKSPACE CONTRACT SYNC (PK-DIR-008 §2)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-104** | Flash | 8-12h | P1 | COS-102 | ✅ DONE — Синхронизация client types в `prettyk-ide`, test_workspace_contract.py (15/15 passed), OpenAPI обновлён (108 paths) |
+
+> **Scope:** (1) В `D:\prettyk-ide\src\workspace\types.ts`: актуализировать интерфейсы под DTO COS-102:
+> добавить `baseBlobSha: string` в `WorkspaceBlobResponse`, зафиксировать Request типы (`WorkspaceBootstrapRequest`, `WorkspaceTreeRequest`, `WorkspaceBlobRequest`);
+> (2) Обновить MSW handlers / моки в `prettyk-ide` для возврата `baseBlobSha` и поддержки CAS-проверок;
+> (3) Contract-тесты в Cosmo: `orchestrator/tests/cosmo/test_workspace_contract.py` — проверка совместимости сериализации FastAPI с ожидаемым форматом клиента;
+> (4) Обновление схемы OpenAPI (`docs/cosmo-openapi.json`, `docs/cosmo-openapi.yaml`) с новыми моделями.
+>
+> **Acceptance:** принято 5 сентября 2026 (Flash).
+> Контракт-тесты: `test_workspace_contract.py` — 15/15 passed.
+> OpenAPI JSON/YAML обновлены: 108 путей, схемы `WorkspaceBootstrapResponse`, `WorkspaceTreeResponse`,
+> `WorkspaceBlobResponse`, `WorkspaceCommitRequest`, `WorkspaceCommitResponse`.
+> В `forge_gitea.py` согласованы структуры `GiteaTreeEntry`, `get_commit`, `get_tree`.
+>
+> **Out of scope:** реализация бекенд-роутов (Luna в COS-103), OpenBao (Boss в COS-105).
+
+## ✅ DONE — PLATFORM OPENBAO MIGRATION & ADAPTER CLEANUP (PK-DIR-008 §1 / PK-C-005)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-105** | Boss | 8-12h | P1 | COS-102 | ✅ DONE — OpenBao AppRole Vault-адаптер (`infra/vault.py`), env-канон, graceful startup, 20 тестов (16 passed / 4 live skipped) |
+
+> **Scope:** (1) `docker-compose.yml`: приведение `cosmo-openbao` к платформенным env (`OPENBAO_DEV_*` / `VAULT_DEV_*`);
+> (2) `orchestrator/cosmo/infra/vault.py`: `VaultClient` с AppRole-аутентификацией (`role_id` + `secret_id`), получение scoped token `secret/cosmo/*`, retry на 5xx, re-auth при token expiry, kv-v2 secret I/O;
+> (3) Поддержка env-переменных: `VAULT_ADDR` (default `http://localhost:8200`), `VAULT_APPROLE_ROLE_ID`, `VAULT_APPROLE_SECRET_ID`; dev fallback при `COSMO_ENV=test`;
+> (4) Интеграция в рантайм: `orchestrator/cosmo/api/deps.py` (`get_vault()`, `init_vault()`), `startup.py` (Vault health check + warning при недоступности, без падения рантайма);
+> (5) Unit и интеграционные тесты AppRole-аутентификации и чтения/записи секретов в `tests/cosmo/test_vault.py`.
+>
+> **Acceptance:** принято 4 сентября 2026 (Boss).
+> `orchestrator/cosmo/infra/vault.py` реализован (чистый `requests`, retry, auto-reauth, kv-v2).
+> Startup-graceful интеграция проверена. Тесты: 16 passed, 4 live skipped (требуют поднятый сервис).
+> Отчёт: `docs/research/2026-09-03-cos-105-openbao-adapter.md`.
+>
+> **Out of scope:** настройка платформенного OpenBao на хосте (Buddy в PK-C-005).
+
+## ✅ DONE — PLATFORM RENAMING ALIGNMENT: QGFCS → HUB (PK-DIR-008 §1)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-106** | Luna | 4.5h | P2 | COS-103 | ✅ DONE — Сквозная вычистка упоминаний qgfcs -> hub по директиве PK-DIR-008 во всём активном коде и доках Cosmo |
+
+> **Story (done 2026-09-05):** Grep `qgfcs` по всему репозиторию → замена на `hub`/`prettyk-hub` в живых канонах и документах; исторические записи сохранили пометку «ранее qgfcs». 0 вхождений в активном коде (`orchestrator/` свободен).
+>
+> **Приёмка:**
+> - `orchestrator/` — grep `qgfcs` = 0
+> - Тесты workspace-линии: 96 passed (routes 21 + dto 75)
+> - Изменено 12 файлов в `docs/`, `battlecruiser/`, `AGENTS.md`
+>
+> **Конфликтующих изменений нет.**
+
+## ✅ DONE — WORKSPACE CAS COMMIT: ATOMIC WRITE & DRAFT PERSISTENCE (PK-DIR-008 §3 / PK-C-006.6)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-107** | Boss | 10-14h | P1 | COS-103 | ✅ DONE — POST /api/v1/repos/workspace/commit: create_commit в GiteaForgeAdapter, CAS base_blob_sha, 16 passed |
+
+> **Scope:** (1) DTO `WorkspaceCommitRequest` (repo, branch, message, changes: [{path, content, base_blob_sha, action: 'upsert'|'delete'}], expected_head_sha) и `WorkspaceCommitResponse` (commit_sha, branch, tree_sha);
+> (2) Реализация `POST /api/v1/repos/workspace/commit` в `orchestrator/cosmo/api/routes/workspace.py`;
+> (3) CAS-верификация: для каждого изменяемого файла проверяется соответствие текущего `blob_sha` в ветке переданному `base_blob_sha`; при конфликте — HTTP 409 Conflict с деталями расхождения;
+> (4) Создание коммита через `GiteaForgeAdapter` (Contents/Tree API);
+> (5) Запись события коммита в `cosmo_audit_events`.
+>
+> **Acceptance:** принято 5 сентября 2026 (Boss).
+> `create_commit` в `forge_gitea.py` реализован с Contents API (POST для новых, PUT с SHA для update, DELETE).
+> CAS-проверка на роуте через `expected_head_sha` + `base_blob_sha` возвращает 409 при дрифте.
+> Live smoke на Gitea: 201 + commitSha + treeSha.
+> Тесты: `test_workspace_commit.py` — 16 passed, 2 skipped. Suite gate: 2586 passed, 14 skipped, 0 failed.
+> Отчёт: `docs/research/2026-09-05-cos-107-workspace-commit.md`.
+
+## ✅ DONE — WORKSPACE RUN TRIGGER & PIPELINE COMPILATION (PK-DIR-008 §3 / PK-C-006.7)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-108** | Luna | 10-14h | P1 | COS-107 | ✅ DONE — POST /api/v1/repos/workspace/run: компиляция пайплайна, запуск Woodpecker, cosmo_workspace_runs |
+
+> **Scope & Story (done 2026-09-05):**
+> (1) DTO `WorkspaceRunRequest` (repo, branch, commit_sha, pipeline_name?) и `WorkspaceRunResponse` (run_id, pipeline_id, status, tracking_url) в `domain/workspace.py`;
+> (2) `WorkspaceRunRow` в `db/models_execution.py` (таблица `cosmo_workspace_runs` на `ExecutionBase`);
+> (3) Фабрика `build_woodpecker()` и нормализация ошибок в `api/woodpecker_client.py`;
+> (4) Маршрут `POST /api/v1/repos/workspace/run` в `api/routes/workspace.py` (resolve binding -> CAS head verification -> submit -> persist -> 201 Created);
+> (5) Регистрация метаданных в `api/startup.py` и `conftest.py`.
+>
+> **Acceptance:** принято 5 сентября 2026 (Luna).
+> 24 passed в `test_workspace_run.py` (13 route + 11 DTO).
+> Регресс: Workspace-линия 120 passed, полный suite 2621 passed / 15 skipped / 0 failed.
+>
+> **Приёмка:**
+> - `domain/workspace.py` — DTO `WorkspaceRunRequest`/`WorkspaceRunResponse` (Pydantic v2, `extra="forbid"`, camelCase-алиасы)
+> - `api/woodpecker_client.py` — фабрика `build_woodpecker()` + нормализация `woodpecker_http_error`
+> - `api/routes/workspace.py` — маршрут `POST /workspace/run` (resolve binding → CAS head verification → submit → persist `WorkspaceRunRow` → 201)
+> - `db/models_execution.py` — `WorkspaceRunRow` (таблица `cosmo_workspace_runs` на `ExecutionBase`)
+> - `api/startup.py` — `ExecutionBase.metadata.create_all` в lifespan
+> - `conftest.py` — `create_all` + wipe для execution-моделей
+> - Исправлен interference в `test_anonymous_401`: monkeypatch → прямое `dependency_overrides` + `pop`
+> - **Конфликтующих изменений нет.**
+
+## ✅ DONE — SSE RUN LOGS STREAMING BRIDGE (PK-DIR-008 §3 / PK-C-006.8)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-109** | Flash | 8-12h | P1 | COS-108 | ✅ DONE — GET /api/v1/runs/{run_id}/logs/stream: SSE мультиплексор живого лога шагов Woodpecker для Web IDE drawer |
+
+> **Acceptance (Flash, 5 сентября 2026):** 11 contract тестов зелёные (mock-based, без PG):
+> step_start/log_chunk/step_finish/run_finish schema, run not found, already finished,
+> no handle yet, step lifecycle, multi-batch, client disconnect. SSE endpoint
+> `GET /api/v1/runs/{run_id}/logs/stream` в `sse.py`, ticket-auth (COS-079 pattern),
+> polling-цикл 1s/15s keepalive, per-step cursor tracking, catch-up для поздно
+> подключившихся. Suite gate: **2613 passed** (+11), 0 моих failures.
+>
+> **Scope выполнен:** (1) Роут; (2) Polling Woodpecker API с tail через cursor offset;
+> (3) lines[] в JSON-payload, клиент joins с `\r\n`, ansi as-is; (4) asyncio.CancelledError
+> + adapter.close() в finally; (5) 11 mock contract тестов (эмуляция pipeline-переходов
+> и поступления логов).
+>
+> **Отчёт:** `docs/research/2026-09-05-cos-109-sse-logs-stream.md`.
+>
+> **Follow-up:** backlog/replay для log_chunk (COS-088), E2E smoke с COS-108 run+log циклом,
+> пагинация исторических логов (отдельный не-SSE эндпоинт).
+
+## ✅ DONE — WORKSPACE DRAFTS & 3-WAY MERGE DIFF ENGINE (PK-DIR-008 §3 / PK-C-006.9)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-110** | Boss | 10-14h | P1 | COS-107 | ✅ DONE — Хранилище черновиков в Valkey-only (TTL 7d), 3-way diff, PUT/GET/DELETE /workspace/draft, 23 passed |
+
+> **Scope & Story (done 2026-09-05):**
+> (1) Pydantic DTO `WorkspaceDraftUpsertRequest`, `WorkspaceDraftResponse`, `WorkspaceDiffResponse` в `domain/workspace.py` (camelCase, traversal guard, extra="forbid");
+> (2) Хранилище Valkey-only в `infra/valkey_drafts.py`: Lazy Valkey, TTL 7d, ключ `cosmo:draft:{domain}:{user_id}:{owner}:{repo}:{branch}:{path}` (0 новых таблиц в PG); при сбое Valkey — честный 503 Service Unavailable;
+> (3) Роуты в `orchestrator/cosmo/api/routes/workspace.py`:
+> `PUT /api/v1/repos/workspace/draft` — сохранение черновика (201 Created);
+> `GET /api/v1/repos/workspace/draft` — получение сохранённого черновика;
+> `DELETE /api/v1/repos/workspace/draft` — удаление черновика (204 No Content);
+> `GET /api/v1/repos/workspace/diff` — вычисление 3-way diff (base_blob_sha vs draft vs head в Gitea);
+> (4) Diff engine: вычисление `has_conflict`, `additions`, `deletions`;
+> (5) Smoke & tests: `cos110_smoke.py` (live PUT -> GET -> diff -> DELETE -> GET 404), `test_workspace_draft.py` (23 passed, 2 skipped), общий сьют 2644 passed / 0 failures.
+>
+> **Acceptance:** принято 5 сентября 2026 (Boss). Отчёт: `docs/research/2026-09-05-cos-110-workspace-drafts.md`.
+
+## ✅ DONE — WEB IDE TERMINAL DRAWER & LIVE LOGS VIEWER (PK-DIR-008 §3 / PK-C-006.10)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-111** | Flash | 8-12h | P1 | COS-109 | Bottom Drawer в Web IDE: подключение к SSE logs stream, per-step live autoscroll, ANSI colors, collapse/expand |
+
+> **Scope:** (1) React компонент `WebIDETerminalDrawer.tsx` в `D:\prettyk-ide\src\cosmo\ide\`;
+> (2) Кастомный хук `useRunLogsStream(runId)`: получение one-time SSE ticket, подключение к `GET /api/v1/runs/{runId}/logs/stream`, обработка `step_start`, `log_chunk`, `step_finish`, `run_finish`;
+> (3) Отрисовка шагов с бейджами статусов (`running` спиннер, `success` зелёная галочка, `failed` красный крест);
+> (4) Рендеринг ANSI-последовательностей и моноширинный вывод с автопрокруткой к последней строке активного шага через xterm.js + FitAddon;
+> (5) Кнопка свернуть/развернуть нижний Drawer в `App.tsx`, кнопка `▶ Run` в topbar, автооткрытие по `?run=` query param, очистка лога, кнопка перехода в RunControl станции;
+> (6) Чистый редюсер `reduceRunLogs` и 12 vitest тестов в `useRunLogsStream.test.tsx`, проверка типов `tsc -b` (14/14 passed в `prettyk-ide`).
+>
+> **Acceptance:** принято 6 сентября 2026 (Flash).
+> Тесты в `prettyk-ide`: 14 passed (vitest run), `tsc -b` green. Live SSE logs stream подключён к терминальному Drawer.
+
+## ✅ DONE — WORKSPACE RUN HISTORY & STEP LOGS REST API (PK-DIR-008 §3 / PK-C-006.11)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---|---:|---|---|
+| **COS-112** | Luna | 6-8h | P2 | COS-108 | GET /api/v1/workspace/runs & GET /api/v1/runs/{run_id}/steps/{step_id}/logs: исторический просмотр и пагинация |
+
+> **Story:** (1) DTO `WorkspaceRunSummary` + `WorkspaceRunListResponse` + `StepLogsResponse` в `domain/workspace.py`;
+> (2) Роут `GET /workspace/runs` на существующем router (пагинация limit/offset, фильтр status/branch, ownership-чек через `_binding_for_repo`);
+> (3) Роут `GET /runs/{run_id}/steps/{step_id}/logs` на новом `run_log_router` (prefix `/api/v1/runs`, регистрация перед `runs_router`);
+> (4) `WoodpeckerAdapter.get_step_logs_by_id()` — поиск шага по Woodpecker DB id;
+> (5) Тесты 29/29 в `test_workspace_run_history.py` (11 DTO + 10 runs list + 8 step logs);
+> (6) `run_log_router` зарегистрирован в `main.py` перед `runs_router` во избежание затенения `GET /api/v1/runs/{id}`.
+>
+> **Acceptance:** принято 5 сентября 2026 (Luna).
+> 29 passed в `test_workspace_run_history.py`. Suite gate: 2673 passed / 0 failed.
+> `GET /workspace/runs?repo=owner/name` — пагинация, total, фильтрация по status/branch, 404 ghost, 401 anonymous.
+> `GET /runs/{run_id}/steps/{step_id}/logs` — offset/limit, tail, 404 на чужой run, 502 на WP down, 401 anonymous.
+>
+> **Конфликтующих изменений нет.**
+
+## ✅ DONE — WORKSPACE BRANCHES & TAGS LIFECYCLE ENGINE (PK-DIR-008 §3 / PK-C-006.12)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-113** | Boss | 8-12h | P1 | COS-107 | GET/POST/DELETE /workspace/branches & GET /workspace/tags: управление ветками и тегами в Web IDE |
+
+> **Scope:** (1) DTO `WorkspaceBranchSummary`, `WorkspaceBranchListResponse`, `WorkspaceCreateBranchRequest`, `WorkspaceTagSummary`, `WorkspaceTagListResponse` в `domain/workspace.py` (camelCase, extra="forbid", branch name validation);
+> (2) Методы в `GiteaForgeAdapter` (`orchestrator/cosmo/adapters/forge_gitea.py`):
+> `list_branches(owner, repo)` — получение списка веток с HEAD commit sha, `is_default`, `is_protected`;
+> `create_branch(owner, repo, new_branch_name, old_branch_name)` — создание ветки от базы;
+> `delete_branch(owner, repo, branch_name)` — удаление feature-ветки;
+> `list_tags(owner, repo)` — список тегов с commit sha;
+> (3) Роуты в `orchestrator/cosmo/api/routes/workspace.py`:
+> `GET /api/v1/repos/workspace/branches?repo=...` — список веток с флагами default/protected;
+> `POST /api/v1/repos/workspace/branches` — создание новой ветки (409 при коллизии имени);
+> `DELETE /api/v1/repos/workspace/branches?repo=...&branch=...` — удаление ветки (400 при попытке удалить default_branch);
+> `GET /api/v1/repos/workspace/tags?repo=...` — список тегов;
+> (4) Безопасность: anti-enumeration 404 для не привязанных к домену репозиториев, Bearer token auth;
+> (5) Unit + route тесты в `test_workspace_branches.py` (20/20 passed, suite gate 2693/0).
+>
+> **Acceptance:** принято 6 сентября 2026 (Boss).
+> 20 passed в `test_workspace_branches.py`. Suite gate: 2693 passed / 0 failed.
+> Отчёт: `docs/research/2026-09-06-cos-113-workspace-branches-tags.md`.
+
+## ✅ DONE — WORKSPACE SEARCH & CODE GREP ENGINE (PK-DIR-008 §3 / PK-C-006.13)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---|---:|---|---|
+| **COS-114** | Luna | 6-8h | P2 | COS-103 | GET /api/v1/repos/workspace/search: полнотекстовый поиск и grep по кодовой базе репозитория |
+
+> **Story (done 2026-09-05):** (1) DTO `WorkspaceSearchMatch` (path, lineNumber, lineContent, matchStart, matchEnd) и `WorkspaceSearchResponse` (query, matches, totalMatches, scannedFiles, hasMore) в `domain/workspace.py` — camelCase, extra="forbid";
+> (2) Маршрут `GET /api/v1/repos/workspace/search` (repo, q min 2 chars, branch, path_prefix, caseSensitive, isRegex, limit 1-100) в `routes/workspace.py`;
+> (3) Механизм: get_tree (рекурсивный) → фильтр бинарных расширений (_BINARY_EXTENSIONS, 30+ типов) → read_file → regex/match (finditer построчный, сбор до limit);
+> (4) ReDoS-защита: cap длины паттерна 1000 символов + re.error catch для невалидного regex;
+> (5) Безопасность: _binding_for_repo ownership check, ghost 404, traversal guard.
+>
+> **Acceptance:** принято 5 сентября 2026 (Luna).
+> 20 passed в `test_workspace_search.py` (7 DTO + 13 route). Suite gate: 2713 passed / 0 failed.
+> Бинарные файлы (.png, .zip, .exe, ...) молча пропускаются; regex search работает; path_prefix фильтрует; limit обрезает с флагом hasMore; инвалидный regex → 400; аноним → 401; ghost repo → 404.
+>
+> **Конфликтующих изменений нет.**
+
+## ✅ DONE — WEB IDE RUN TRIGGER CLIENT & EXECUTION FLOW (PK-DIR-008 §3 / PK-C-006.14)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-115** | Flash | 6-8h | P1 | COS-111, COS-108 | Web IDE: вызов POST /api/v1/repos/workspace/run по клику ▶ Run, состояние запуска и связка с Terminal Drawer |
+
+> **Scope:** (1) Метод `client.runWorkspace(repo, branch, headSha, pipelineName?)` в `D:\prettyk-ide\src\workspace\client.ts` с DTO `WorkspaceRunResponse` (run_id, pipeline_number, pipeline_id, status, tracking_url);
+> (2) Обработчик кнопки `▶ Run` в `App.tsx`:
+> - состояние `triggering` (спиннер/disabled на кнопке во время HTTP POST);
+> - получение `run_id` из ответа `POST /api/v1/repos/workspace/run`;
+> - автоматическое открытие `WebIDETerminalDrawer`, установка `runId`, очистка предыдущих логов;
+> - сохранение `?run=<run_id>` в URL query params через `window.history.replaceState` для шаринга/релоада;
+> - обработка ошибок запуска (409 CAS out-of-date, 404 no pipeline, 502/503 forge/woodpecker down) с баннером ошибки `.run-error-banner`;
+> (3) Юнит-тесты клиента `client.test.ts` (8 passed) и `useRunLogsStream.test.tsx` (12 passed), всего 20/20 passed, `tsc -b` green.
+>
+> **Acceptance:** принято 6 сентября 2026 (Flash).
+> Клик ▶ Run отправляет POST `/api/v1/repos/workspace/run`, получает run_id, открывает Terminal Drawer и начинает живой стриминг шагов через SSE. URL синхронизируется через `replaceState`.
+
+## ✅ DONE (2026-09-06 Boss) — WORKSPACE COMMITS HISTORY & TIMELINE API (PK-DIR-008 §3 / PK-C-006.15)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-116** | Boss | 6-8h | P2 | COS-113 | GET /api/v1/repos/workspace/commits: история коммитов ветки и таймлайн конкретного файла |
+
+> **Scope:** (1) DTO `WorkspaceCommitSummary` (sha, short_sha, message, author_name, author_email, committed_at, parent_shas) и `WorkspaceCommitListResponse` (commits: list[WorkspaceCommitSummary], total, has_more) в `domain/workspace.py` (camelCase, extra="forbid");
+> (2) Метод в `GiteaForgeAdapter` (`orchestrator/cosmo/adapters/forge_gitea.py`):
+> `list_commits(owner, repo, branch?, path?, limit?, page?)` — запрос к Gitea API `/repos/{owner}/{repo}/commits` с маппингом полей автора, хэшей и сообщений;
+> (3) Эндпоинт `GET /api/v1/repos/workspace/commits` в `orchestrator/cosmo/api/routes/workspace.py`:
+> Параметры: `repo` (обязателен), `branch` (опционален, default HEAD), `path` (опционален для фильтра истории одного файла), `limit` (default 30, max 100), `offset` (default 0);
+> (4) Безопасность: Bearer auth, domain ownership check через `_binding_for_repo`, 404 ghost-изоляция чужих репозиториев;
+> (5) Unit + route тесты в `test_workspace_commits.py`.
+>
+> **Acceptance:** Web IDE может отображать список последних коммитов по ветке и историю изменений конкретного файла; пагинация и фильтр пути работают корректно; тесты проверяют DTO, адаптер, роут и ghost-изоляцию (404).
+
+## ⬜ READY — WORKSPACE FILE BLAME & ANNOTATION ENGINE (PK-DIR-008 §3 / PK-C-006.16)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-117** | Boss | 6-8h | P2 | COS-116 | GET /api/v1/repos/workspace/blame: построчная аннотация файла (git blame) для Web IDE |
+
+> **Scope:** (1) DTO `WorkspaceBlamePart` (commitSha: str, commitShortSha: str, authorName: str, authorEmail: str, committedAt: datetime, lines: list[str]) и `WorkspaceBlameResponse` (path: str, branch: str, parts: list[WorkspaceBlamePart]) в `domain/workspace.py` (camelCase, extra="forbid");
+> (2) Метод в `GiteaForgeAdapter` (`orchestrator/cosmo/adapters/forge_gitea.py`):
+> `get_file_blame(owner, repo, filepath, ref)` — запрос к Gitea API `/repos/{owner}/{repo}/blame/{filepath}?ref={ref}` с разбором структуры блоков коммитов и строк;
+> (3) Эндпоинт `GET /api/v1/repos/workspace/blame` в `orchestrator/cosmo/api/routes/workspace.py`:
+> Параметры: `repo` (обязателен), `path` (обязателен), `branch` (опционален, default HEAD);
+> Обработка краевых случаев: бинарный файл → 400 Bad Request, файл не найден → 404 Not Found;
+> (4) Безопасность: Bearer auth, domain ownership check через `_binding_for_repo`, path traversal guard, 404 ghost-изоляция;
+> (5) Unit + route тесты в `test_workspace_blame.py`.
+>
+> **Acceptance:** Web IDE при просмотре файла может получить построчную аннотацию коммитов (автор, хэш, дата, строки); тесты покрывают DTO, адаптер (включая мок Gitea blame API), роут, бинарные/отсутствующие файлы и ghost-изоляцию.
+
+## ⬜ READY — WORKSPACE PIPELINE DISCOVERY & METADATA ENGINE (PK-DIR-008 §3 / PK-C-006.17)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-118** | Luna | 6-8h | P2 | COS-108 | GET /api/v1/repos/workspace/pipelines: обнаружение и валидация пайплайнов репозитория |
+
+> **Scope:** (1) DTO `WorkspacePipelineSummary` (name: str, path: str, format: str, isDefault: bool, stepNames: list[str]) и `WorkspacePipelineListResponse` (pipelines: list[WorkspacePipelineSummary], defaultPipeline: str | None) в `domain/workspace.py` (camelCase, extra="forbid");
+> (2) Маршрут `GET /api/v1/repos/workspace/pipelines` в `orchestrator/cosmo/api/routes/workspace.py`:
+> Параметры: `repo` (обязателен), `branch` (опционален, default HEAD);
+> (3) Механизм обнаружения:
+> - чтение дерева репозитория через `ForgeAdapter.get_tree`;
+> - сканирование корня на `.woodpecker.yaml` / `.woodpecker.yml` / `.pipeline.yaml`;
+> - сканирование папки `.woodpecker/*.yaml` и `.woodpecker/*.yml`;
+> - чтение файлов через `ForgeAdapter.read_file`, безопасный парсинг `yaml.safe_load`, извлечение списка шагов (pipeline/steps);
+> - толерантность к битым/невалидным YAML-файлам (не падать 500, возвращать `format: "invalid"`, `stepNames: []` или пропускать с логированием);
+> (4) Безопасность: Bearer auth, domain ownership check, traversal guard, ghost 404;
+> (5) Unit + route тесты в `test_workspace_pipelines.py`.
+>
+> **Acceptance:** Web IDE получает список всех доступных пайплайнов репозитория со списком шагов для выбора в UI перед запуском; тесты проверяют single-file конфигурации, multi-file `.woodpecker/`, битый YAML и ghost-изоляцию.
+
+## ⬜ READY — WEB IDE BRANCH SWITCHER & CREATION FLOW (PK-DIR-008 §3 / PK-C-006.18)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-119** | Flash | 6-8h | P1 | COS-113, COS-115 | Web IDE: переключение веток, создание feature-ветки и удаление через Workspace API |
+
+> **Scope:** (1) TypeScript типы в `D:\prettyk-ide\src\workspace\types.ts`: `WorkspaceBranchSummary` (name, commitSha, isDefault, isProtected), `WorkspaceBranchListResponse` (branches, defaultBranch);
+> (2) Методы клиента в `D:\prettyk-ide\src\workspace\client.ts`:
+> - `listBranches(repo: string): Promise<WorkspaceBranchListResponse>` (GET `/api/v1/repos/workspace/branches`);
+> - `createBranch(repo: string, branch: string, baseBranch: string): Promise<WorkspaceBranchSummary>` (POST `/api/v1/repos/workspace/branches`);
+> - `deleteBranch(repo: string, branch: string): Promise<void>` (DELETE `/api/v1/repos/workspace/branches`);
+> (3) UI компонент `BranchSelector` в topbar (`D:\prettyk-ide\src\app\App.tsx`):
+> - отображение текущей ветки в topbar с кликабельным дропдауном;
+> - список веток с поиском/фильтрацией и бейджами `default` / `protected`;
+> - переключение ветки с обновлением URL query param `?branch=...` и перезагрузкой дерева файлов;
+> - диалог «Create branch» (ввод имени новой ветки, валидация, создание от текущей ветки и автоматический переход);
+> - обработка 409 коллизий и 400 защиты default-ветки с выводом понятного сообщения в UI;
+> (4) Vitest тесты: клиентские тесты в `client.test.ts` (покрытие GET, POST, DELETE, ошибки 409/400) + компонентные тесты селектора.
+>
+> **Acceptance:** пользователь в Web IDE видит текущую ветку, может кликнуть на неё, выбрать другую ветку (дерево мгновенно обновляется) или создать новую feature-ветку от текущей без перезагрузки всей страницы.
+
 ---
 
 # PK-C-003 — ЧЕКЛИСТ-ТРЕБОВАНИЯ 2.0 ИЗ АНТИ-ПАТТЕРНОВ ИНКУМБЕНТА

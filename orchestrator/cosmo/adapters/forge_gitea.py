@@ -61,6 +61,15 @@ class GiteaCommit:
 
 
 @dataclass
+class GiteaTreeEntry:
+    """Element git-dereva (COS-103 workspace API)."""
+    path: str
+    type: str  # "blob" | "tree" | "commit" | "submodule"
+    sha: str
+    size: int | None = None
+
+
+@dataclass
 class ForgeDomain:
     """Зарегистрированный домен в forge."""
     domain_id: str
@@ -84,6 +93,8 @@ class GiteaForgeAdapter:
     ):
         self._base = base_url.rstrip("/")
         self._token = token
+        self._username = username
+        self._password = password
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
         if token:
@@ -133,6 +144,9 @@ class GiteaForgeAdapter:
 
     def _patch(self, path: str, **kwargs: Any) -> requests.Response:
         return self._request("PATCH", path, **kwargs)
+
+    def _put(self, path: str, **kwargs: Any) -> requests.Response:
+        return self._request("PUT", path, **kwargs)
 
     def _delete(self, path: str, **kwargs: Any) -> requests.Response:
         return self._request("DELETE", path, **kwargs)
@@ -325,6 +339,40 @@ class GiteaForgeAdapter:
             ))
         return commits
 
+    # --- COS-103: workspace API (get_commit, get_tree) ---
+
+    def get_commit(self, owner: str, repo: str, ref: str = "") -> GiteaCommit:
+        commits = self.list_commits(owner, repo, ref=ref, limit=1)
+        if not commits:
+            raise LookupError(f"No commits in {owner}/{repo}")
+        return commits[0]
+
+    def get_tree(
+        self, owner: str, repo: str, ref: str = "", recursive: bool = True,
+    ) -> list[GiteaTreeEntry]:
+        if ref:
+            commit = self.get_commit(owner, repo, ref)
+            tree_sha = commit.sha
+        else:
+            info = self.get_repo_info(owner, repo)
+            commit = self.get_commit(owner, repo, info.default_branch)
+            tree_sha = commit.sha
+        params = {"recursive": "1"} if recursive else {}
+        r = self._get(f"/api/v1/repos/{owner}/{repo}/git/trees/{tree_sha}", params=params)
+        if r.status_code == 404:
+            raise LookupError(f"Tree not found in {owner}/{repo}")
+        r.raise_for_status()
+        data = r.json()
+        entries = []
+        for item in data.get("tree", []):
+            entries.append(GiteaTreeEntry(
+                path=item.get("path", ""),
+                type=item.get("type", "blob"),
+                sha=item.get("sha", ""),
+                size=item.get("size"),
+            ))
+        return entries
+
     def ensure_webhook(self, owner: str, repo: str, webhook_url: str, secret: str) -> tuple[int, bool]:
         """Идемпотентный setup webhook: reuse по URL, иначе create.
 
@@ -425,6 +473,193 @@ class GiteaForgeAdapter:
             "commit_count": len(commits),
             "pusher": payload.get("pusher", {}).get("login", "unknown"),
         }
+
+    # ── COS-107: Workspace commit через Contents API ────────────────────
+
+    def create_commit(
+        self, owner: str, repo: str, branch: str, message: str,
+        changes: list[dict], parent_sha: str,
+    ) -> GiteaCommit:
+        """Создаёт коммит(ы) через Contents API (POST/PUT/DELETE на файл).
+
+        Gitea 1.22.6: POST git/trees = 404. Contents API:
+          - POST /contents/{path} — новый файл (без sha)
+          - PUT  /contents/{path} — update (sha: file blob sha)
+          - DELETE /contents/{path} — delete (sha: file blob sha)
+
+        Множественные файлы = отдельные коммиты; возвращается SHA последнего
+        (HEAD ветки после всех операций).
+
+        Args:
+            changes: [{path, action: 'upsert'|'delete',
+                       content: base64 (для upsert), sha?: file blob sha}, ...]
+        """
+        for i, ch in enumerate(changes):
+            p = ch["path"]
+            content = ch.get("content", "")
+            sha = ch.get("sha")
+            if ch.get("action") == "delete":
+                r = self._delete(
+                    f"/api/v1/repos/{owner}/{repo}/contents/{requests.utils.quote(p, safe='')}",
+                    json={
+                        "message": message if i == 0 else f"{message} (delete {p})",
+                        "branch": branch,
+                        "sha": sha,
+                    },
+                )
+                r.raise_for_status()
+            elif sha:
+                r = self._put(
+                    f"/api/v1/repos/{owner}/{repo}/contents/{requests.utils.quote(p, safe='')}",
+                    json={
+                        "message": message if i == 0 else f"{message} (upsert {p})",
+                        "branch": branch,
+                        "content": content,
+                        "sha": sha,
+                    },
+                )
+                r.raise_for_status()
+            else:
+                r = self._post(
+                    f"/api/v1/repos/{owner}/{repo}/contents/{requests.utils.quote(p, safe='')}",
+                    json={
+                        "message": message if i == 0 else f"{message} (upsert {p})",
+                        "branch": branch,
+                        "content": content,
+                    },
+                )
+                r.raise_for_status()
+
+        final = self.get_commit(owner, repo, branch)
+        result = GiteaCommit(
+            sha=final.sha,
+            message=message.split("\n", 1)[0],
+            author=final.author,
+            timestamp=final.timestamp,
+        )
+        result.tree_sha = final.sha
+        logger.info(
+            "Committed on %s/%s branch=%s (%d file(s), sha=%s)",
+            owner, repo, branch, len(changes), final.sha[:8],
+        )
+        return result
+
+    # ── COS-113: Branch & Tag management ─────────────────────────────────
+
+    def list_branches(self, owner: str, repo: str) -> list[dict]:
+        """Возвращает список веток с SHA головы и флагами.
+
+        Gitea API: GET /api/v1/repos/{owner}/{repo}/branches
+        Ответ: [{name, commit: {id, ...}, protected}]
+        """
+        r = self._get(f"/api/v1/repos/{owner}/{repo}/branches")
+        r.raise_for_status()
+        branches = r.json()
+        # Определяем default branch через repo info
+        try:
+            info_r = self._get(f"/api/v1/repos/{owner}/{repo}")
+            info_r.raise_for_status()
+            info = info_r.json()
+            default_branch = info.get("default_branch", "")
+        except Exception:  # noqa: BLE001
+            default_branch = branches[0]["name"] if branches else "main"
+
+        return [
+            {
+                "name": b["name"],
+                "sha": b["commit"]["id"],
+                "is_default": b["name"] == default_branch,
+                "is_protected": b.get("protected", False),
+            }
+            for b in branches
+        ]
+
+    def create_branch(
+        self, owner: str, repo: str, new_branch: str, base_branch: str,
+    ) -> dict:
+        """Создаёт ветку от base_branch.
+
+        Gitea API: POST /api/v1/repos/{owner}/{repo}/branches
+        Body: {new_branch_name, old_branch_name}
+        Ответ: {name, commit: {id}, ...}
+        """
+        r = self._post(
+            f"/api/v1/repos/{owner}/{repo}/branches",
+            json={"new_branch_name": new_branch, "old_branch_name": base_branch},
+        )
+        r.raise_for_status()
+        data = r.json()
+        return {
+            "name": data["name"],
+            "sha": data["commit"]["id"],
+            "is_default": False,  # новая ветка — не default
+            "is_protected": data.get("protected", False),
+        }
+
+    def delete_branch(self, owner: str, repo: str, branch_name: str) -> bool:
+        """Удаляет ветку. Возвращает True если ветка существовала.
+
+        Gitea API: DELETE /api/v1/repos/{owner}/{repo}/branches/{branch}
+        """
+        import requests as _requests
+        r = self._delete(
+            f"/api/v1/repos/{owner}/{repo}/branches/{_requests.utils.quote(branch_name, safe='')}"
+        )
+        if r.status_code == 404:
+            return False
+        r.raise_for_status()
+        return True
+
+    def list_tags(self, owner: str, repo: str) -> list[dict]:
+        """Возвращает список тегов с SHA коммита.
+
+        Gitea API: GET /api/v1/repos/{owner}/{repo}/tags
+        Ответ: [{name, commit: {sha}, ...}]
+        """
+        r = self._get(f"/api/v1/repos/{owner}/{repo}/tags")
+        r.raise_for_status()
+        return [
+            {"name": t["name"], "sha": t["commit"]["sha"]}
+            for t in r.json()
+        ]
+
+    # ── COS-116: Commit history ────────────────────────────────────────
+
+    def list_commits(
+        self,
+        owner: str,
+        repo: str,
+        branch: str | None = None,
+        path: str | None = None,
+        limit: int = 30,
+        page: int = 1,
+    ) -> list[dict]:
+        """Возвращает историю коммитов ветки (и опционально одного файла).
+
+        Gitea API: GET /api/v1/repos/{owner}/{repo}/commits?sha=...&path=...&limit=...&page=...
+        Ответ: [{sha, commit: {author, message, ...}, parents: [{sha}]}]
+        """
+        params: dict[str, str | int] = {"limit": min(limit, 100)}
+        if page > 1:
+            params["page"] = page
+        if branch:
+            params["sha"] = branch
+        if path:
+            params["path"] = path
+        r = self._get(f"/api/v1/repos/{owner}/{repo}/commits", params=params)
+        r.raise_for_status()
+        return [
+            {
+                "sha": c["sha"],
+                "short_sha": c["sha"][:8],
+                "message": c["commit"]["message"],
+                "author_name": c["commit"]["author"]["name"],
+                "author_email": c["commit"]["author"]["email"],
+                "committed_at": c["commit"]["author"]["date"],
+                "parent_shas": [p["sha"] for p in c.get("parents", [])],
+            }
+            for c in r.json()
+        ]
 
     def close(self) -> None:
         """Закрывает HTTP-сессию."""

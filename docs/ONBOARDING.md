@@ -1,4 +1,4 @@
-# Onboarding — Cosmoport 2.0 / Operator Control Plane
+﻿# Onboarding — Cosmoport 2.0 / Operator Control Plane
 
 > Вопрос документа: **Как новому агенту или инженеру войти в контекст платформы Cosmoport 2.0 без распыления внимания?**
 
@@ -34,13 +34,13 @@
 ### Шаг 4: Текущий бэклог и приёмка (10 мин)
 Прочитай [`docs/BACKLOG.md`](BACKLOG.md) и [`PROGRESS.md`](../PROGRESS.md):
 - Рабочие карточки имеют статус `⬜ READY`, `🔄 IN PROGRESS`, `✅ DONE`.
-- Формат диспетча строго одна строка: `Worker, COS-XXX, D:\prettyk-control-plane\docs\BACKLOG.md`.
+- Формат диспетча строго одна строка: `Worker, COS-XXX, D:\prettyk-airlock\docs\BACKLOG.md`.
 - Каждый воркер начинает сессию с чтения `PROGRESS.md` и `git log --oneline -10`.
 
-### Шаг 5: Связь с Коробкой (SecOps) и Хабом (QGFCS)
+### Шаг 5: Связь с Коробкой (SecOps) и Хабом (PrettyK Hub)
 - **Коробка (`D:\prettyk-secops`):** DAST-сканирование, фаззер, браузерный рантайм Playwright, формирование первичных отчётов/актов.
-- **Хаб (`D:\prettyk-qgfcs`):** Intake уязвимостей, триаж, вердикты Quality Gate.
-- **Космопорт (`D:\prettyk-control-plane`):** Управление пайплайнами, запуск сборок/прогонов, оркестрация релизов и межзонный трансфер.
+- **Хаб (`D:\prettyk-hub`):** Intake уязвимостей, триаж, вердикты Quality Gate. (ранее — QGFCS, переименован по PK-DIR-008 §1)
+- **Космопорт (`D:\prettyk-airlock`):** Управление пайплайнами, запуск сборок/прогонов, оркестрация релизов и межзонный трансфер.
 - Взаимодействие — **только по REST / Webhook / SSE**. Внутренние импорты запрещены.
 
 ### Шаг 6: Первоисточники Discovery (опционально)

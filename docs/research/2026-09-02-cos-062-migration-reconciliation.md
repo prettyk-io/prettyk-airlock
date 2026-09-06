@@ -1,7 +1,7 @@
-# COS-062 — Database Migration Reconciliation: acceptance evidence
+﻿# COS-062 — Database Migration Reconciliation: acceptance evidence
 
 Worker: Luna · Date: 2026-09-02 · Status: DELIVERED (awaiting Максим's acceptance)
-Scope: `D:\prettyk-control-plane` (SERIAL после принятого COS-060)
+Scope: `D:\prettyk-airlock` (SERIAL после принятого COS-060)
 
 ## Проблема (из COS-059 acceptance, PARTIAL/BLOCKED)
 

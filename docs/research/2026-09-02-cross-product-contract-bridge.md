@@ -1,5 +1,10 @@
 # Cross-product contract bridge — Control Plane ↔ PrettyK SecOps ↔ QGFCS
 
+> **⚠️ Naming note (2026-09-04, PK-DIR-008 §1):** продукт, называвшийся здесь
+> QGFCS, переименован в **PrettyK Hub** (репозиторий `prettyk-hub`, локально
+> `D:\prettyk-hub`). Текст ниже сохранён как исторический снимок контрактов
+> на дату 2026-09-02 — имя QGFCS в нём означает нынешний PrettyK Hub.
+
 > Status: research / contract-planning brief. Not canon and not an API freeze.
 > Date: 2026-09-02
 > Owner: Cosmo / PrettyK Control Plane

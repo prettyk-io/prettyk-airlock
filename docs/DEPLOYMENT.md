@@ -1,4 +1,4 @@
-# Cosmoport 2.0 — полноценное развёртывание контуров
+﻿# Cosmoport 2.0 — полноценное развёртывание контуров
 
 > **Статус:** рабочий deployment-plan для ревью Gemini. Это план сборки и ввода
 > Cosmoport 2.0, а не утверждение, что все перечисленные компоненты уже готовы.
@@ -14,7 +14,7 @@
 Документ фиксирует, как из уже существующих наработок Pure Box собрать
 самостоятельные контуры Cosmoport 2.0:
 
-- что переносится в репозиторий `D:\prettyk-control-plane` как исходный код;
+- что переносится в репозиторий `D:\prettyk-airlock` как исходный код;
 - что остаётся в Pure Box и вызывается только по внешнему контракту;
 - какие инфраструктурные компоненты Buddy собирает заново;
 - как разворачиваются локальный, интеграционный, enterprise и airgap-контуры;
@@ -87,7 +87,7 @@ execution engine исполняет отдельные jobs. Security-ранне
 
 ## 3. Инвентарь передачи
 
-### 3.1. Переносится в `D:\prettyk-control-plane` как исходный код
+### 3.1. Переносится в `D:\prettyk-airlock` как исходный код
 
 Исходники портируются и становятся частью Cosmoport. После переноса они не
 должны импортировать Pure Box и не должны тянуть его внутренние зависимости.
@@ -382,7 +382,7 @@ Airgap — это профиль доставки, применимый к ло�
 
 ### 6.1. Сервисы
 
-Buddy собирает отдельный Cosmo Compose в `D:\prettyk-control-plane\services\`.
+Buddy собирает отдельный Cosmo Compose в `D:\prettyk-airlock\services\`.
 Файл `D:\prettyk-dev\services\docker-compose.cosmo.yml` используется как
 референс, но не считается готовым переносом.
 
@@ -1004,7 +1004,7 @@ network policies или production values.
 
 ```text
 Разрешённые исходники Pure Box
-  → D:\prettyk-control-plane\orchestrator\cosmo + frontend\src\cosmo
+  → D:\prettyk-airlock\orchestrator\cosmo + frontend\src\cosmo
 
 Cosmo-owned infrastructure
   → dedicated PostgreSQL + Valkey + MinIO + OpenBao

@@ -36,6 +36,31 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+# ── COS-105: Vault dependency ──────────────────────────────────────────
+
+_vault_client: "VaultClient | None" = None  # type: ignore[name-defined]  # noqa: F821
+
+
+def init_vault() -> "VaultClient":  # type: ignore[name-defined]  # noqa: F821
+    """Вызывается lifespan'ом перед yield."""
+    from orchestrator.cosmo.infra.vault import VaultClient
+
+    global _vault_client
+    _vault_client = VaultClient()
+    _vault_client.authenticate()
+    return _vault_client
+
+
+def get_vault() -> "VaultClient":  # type: ignore[name-defined]  # noqa: F821
+    """FastAPI dependency: ОТКАЗЫВАЕТ на 503, если Vault не инициализирован."""
+    if _vault_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vault not initialized (startup bootstrap skipped)",
+        )
+    return _vault_client
+
+
 # ── Principal extraction (SAN-006 [COS-031]) ──
 
 def _clean_str(val: Any) -> Optional[str]:

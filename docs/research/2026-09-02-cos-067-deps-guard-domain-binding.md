@@ -1,4 +1,4 @@
-# COS-067 Research: deps._guard Domain Binding Hardening
+﻿# COS-067 Research: deps._guard Domain Binding Hardening
 
 - **Дата:** 2026-09-02
 - **Пакет:** deps._guard Domain Binding Hardening
@@ -131,7 +131,7 @@ spoof через заголовок для не-админа невозможе�
    карточка на стабилизацию (идемпотентный bootstrap scratch-БД).
 5. SAWarning в `test_steel_thread` ссылается на путь `D:\cosmoport2\...`
    (stale-путь предупреждения; тест зелёный, пакеты резолвятся из
-   `D:\prettyk-control-plane`).
+   `D:\prettyk-airlock`).
 
 ## 6. Acceptance
 

@@ -33,6 +33,7 @@ from sqlalchemy import select
 from orchestrator.cosmo.api import sse_backlog
 from orchestrator.cosmo.db.session import get_sessionmaker
 from orchestrator.cosmo.db.models import Run, Batch, Gate, EvidenceLedgerEntry, Domain
+from orchestrator.cosmo.db.models_execution import ExecutionHandleRow, TERMINAL_STORED_STATUSES
 
 router = APIRouter(tags=["sse"])
 
@@ -274,6 +275,246 @@ async def _run_stream(
 
         snap = new_snap
         last_hash = new_hash
+
+
+# ── Run step logs stream (COS-109) ───────────────────────────────────────────
+
+_LOGS_POLL_S = 1.0
+_LOGS_KEEPALIVE_S = 15.0
+
+# Woodpecker step states considered "active" (generating log output)
+_ACTIVE_STEP_STATES = frozenset({"running", "pending"})
+
+# Woodpecker step states considered terminal
+_TERMINAL_STEP_STATES = frozenset({"success", "failure", "killed", "skipped", "error", "declined"})
+
+
+async def _run_logs_stream(
+    run_id: str, request: Request, last_event_id: str = "",
+) -> AsyncIterator[dict[str, Any]]:
+    """COS-109: SSE multiplexer — live Woodpecker step logs for Web IDE drawer.
+
+    Polls Woodpecker API for each batch's pipeline: detects step transitions
+    (step_start / step_finish) and streams new log chunks (log_chunk) with
+    xterm.js-compatible formatting. Emits run_finish when all pipelines
+    reach terminal state, then closes.
+    """
+    # ── DB handles: resolve Woodpecker pipeline handles for this run ──
+    from orchestrator.cosmo.adapters.execution_woodpecker import WoodpeckerAdapter
+
+    adapter: WoodpeckerAdapter | None = None
+    last_keepalive = time.monotonic()
+
+    # Per-step cursor tracking: (batch_id, step_name) -> (state, lines_seen_count)
+    step_cursors: dict[tuple[str, str], tuple[str, int]] = {}
+
+    # Known batch_ids to detect new batches
+    known_batches: set[str] = set()
+
+    try:
+        # ── Validate run exists ──
+        sm = get_sessionmaker()
+        async with sm() as db:
+            run_row = await db.execute(select(Run).where(Run.id == run_id))
+            run_row = run_row.scalar_one_or_none()
+        if run_row is None:
+            yield {"event": "error", "data": json.dumps({"error": "run_not_found", "run_id": run_id})}
+            return
+
+        # ── If run is already terminal, emit run_finish and close ──
+        if run_row.status in ("passed", "failed", "blocked"):
+            yield {
+                "event": "run_finish",
+                "data": json.dumps({"run_id": run_id, "status": run_row.status}),
+            }
+            return
+
+        adapter = WoodpeckerAdapter()
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            await asyncio.sleep(_LOGS_POLL_S)
+            now = time.monotonic()
+
+            # Keepalive ping
+            if now - last_keepalive >= _LOGS_KEEPALIVE_S:
+                yield {"comment": "keepalive"}
+                last_keepalive = now
+                continue
+
+            # ── Refresh handles from DB (new batches may appear mid-run) ──
+            async with sm() as db:
+                handles = await db.execute(
+                    select(ExecutionHandleRow).where(
+                        ExecutionHandleRow.run_id == run_id,
+                    )
+                )
+                handles = list(handles.scalars().all())
+
+            if not handles:
+                # No Woodpecker pipeline dispatched yet — keep waiting
+                continue
+
+            all_terminal = True
+            had_events = False
+
+            for h in handles:
+                handle_dict = h.as_handle_dict()
+                bid = h.batch_id
+                known_batches.add(bid)
+
+                # ── Poll pipeline state ──
+                try:
+                    pipeline = await asyncio.to_thread(
+                        adapter.get_pipeline, handle_dict,
+                    )
+                except Exception:
+                    # Woodpecker unreachable / pipeline not found — skip this tick
+                    if h.last_status and h.last_status not in TERMINAL_STORED_STATUSES:
+                        all_terminal = False
+                    continue
+
+                p_status = pipeline.get("status", "pending")
+                if p_status not in TERMINAL_STORED_STATUSES:
+                    all_terminal = False
+
+                # ── Flatten steps and detect transitions ──
+                steps = await asyncio.to_thread(
+                    adapter._flatten_steps, pipeline,
+                )
+
+                for step in steps:
+                    step_name = step.get("name", "unknown")
+                    step_state = step.get("state", "pending")
+                    cursor_key = (bid, step_name)
+                    prev = step_cursors.get(cursor_key)
+                    prev_state, lines_seen = prev if prev else (None, 0)
+
+                    # ── step_start: first time we see this step (running or terminal) ──
+                    emit_start = False
+                    if prev_state is None:
+                        # First encounter — always announce the step
+                        emit_start = True
+                    elif step_state == "running" and prev_state != "running":
+                        # Transition: pending/skipped → running
+                        emit_start = True
+
+                    if emit_start:
+                        yield {
+                            "event": "step_start",
+                            "data": json.dumps({
+                                "run_id": run_id,
+                                "batch_id": bid,
+                                "step_name": step_name,
+                                "step_id": step.get("id"),
+                            }),
+                        }
+                        had_events = True
+                        last_keepalive = now
+
+                    # ── log_chunk: fetch new log lines for active/terminal steps ──
+                    need_logs = (
+                        step_state in ("running", "success", "failure")
+                        or (prev_state is None and step_state in _TERMINAL_STEP_STATES)
+                    )
+                    if need_logs:
+                        try:
+                            all_lines = await asyncio.to_thread(
+                                adapter._fetch_step_logs, handle_dict, step,
+                            )
+                        except Exception:
+                            all_lines = []
+                        if len(all_lines) > lines_seen:
+                            new_lines = all_lines[lines_seen:]
+                            yield {
+                                "event": "log_chunk",
+                                "data": json.dumps({
+                                    "run_id": run_id,
+                                    "batch_id": bid,
+                                    "step_name": step_name,
+                                    "lines": new_lines,
+                                }),
+                            }
+                            had_events = True
+                            last_keepalive = now
+                            lines_seen = len(all_lines)
+
+                    # ── step_finish: transition to terminal OR catch-up ──
+                    if step_state in _TERMINAL_STEP_STATES:
+                        if prev_state is None or prev_state == "running":
+                            exit_code = (
+                                0 if step_state == "success"
+                                else (1 if step_state == "failure" else None)
+                            )
+                            yield {
+                                "event": "step_finish",
+                                "data": json.dumps({
+                                    "run_id": run_id,
+                                    "batch_id": bid,
+                                    "step_name": step_name,
+                                    "exit_code": exit_code,
+                                    "state": step_state,
+                                }),
+                            }
+                            had_events = True
+                            last_keepalive = now
+
+                    # Update cursor
+                    step_cursors[cursor_key] = (step_state, lines_seen)
+
+                # Update last_status in handle
+                h.last_status = p_status
+
+            if not had_events:
+                continue
+
+            # ── Check run status: if all handles are terminal, emit run_finish ──
+            if all_terminal and handles:
+                async with sm() as db:
+                    run_final = await db.execute(select(Run).where(Run.id == run_id))
+                    run_final = run_final.scalar_one_or_none()
+                final_status = run_final.status if run_final else "unknown"
+                yield {
+                    "event": "run_finish",
+                    "data": json.dumps({"run_id": run_id, "status": final_status}),
+                }
+                return
+
+    except asyncio.CancelledError:
+        # Client disconnected — clean exit, no error
+        pass
+    finally:
+        if adapter is not None:
+            try:
+                await asyncio.to_thread(adapter.close)
+            except Exception:
+                pass
+
+
+@router.get("/api/v1/runs/{run_id}/logs/stream")
+async def stream_run_logs(
+    run_id: str, request: Request, ticket: str = "", last_event_id: str = "",
+):
+    """COS-109: SSE stream of Woodpecker step logs (step_start, log_chunk, step_finish, run_finish).
+
+    Клиент Web IDE получает живой лог шага за шагом. При завершении прогона
+    соединение закрывается. Формат чанков совместим с xterm.js.
+
+    Ticket-аутентификация — аналог COS-079 для существующих SSE-эндпоинтов.
+    """
+    from fastapi import HTTPException
+
+    from orchestrator.cosmo.api.sse_tickets import validate_ticket
+
+    if not ticket or validate_ticket(ticket) is None:
+        raise HTTPException(status_code=401, detail="invalid or expired sse ticket")
+    last_id = _resolve_last_event_id(request, last_event_id)
+    return _sse_response(
+        _run_logs_stream(run_id, request, last_id),
+        extra_headers={"X-Cosmo-Backlog": sse_backlog.backlog_mode()},
+    )
 
 
 # в”Ђв”Ђ Domain-wide multiplexer (COS-101) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ

@@ -7,21 +7,22 @@
 > **Правило:** worker читает это ПЕРВЫМ действием после `pwd`.
 
 ## Последнее действие
-2026-09-03 | Cosmo | Приняты и закоммичены COS-100 (Flash: Web IDE Surface B), COS-101 (Apex: Bridge Findings ↔ Gates + SigV4 MinIO), COS-099 (Apex: SBOM CycloneDX + Grype offline report). Baseline: pytest 2559 passed / 0 failed, vitest 76/76.
+2026-09-06 | Flash & Luna | COS-115 & COS-114 delivered: Web IDE Run trigger flow (20 vitest passed, tsc -b green) + Workspace search & grep (20 passed, ReDoS-защита, suite gate 2727/0).
 
 ## Текущее состояние
-Clean working tree (`origin/dev`). Baseline: pytest 2559 passed / 8 skipped / 0 failed (100% green), vitest 76/76 passed, Playwright 2/2 web-ide + 2/2 readiness. Все задачи закрыты: COS-093, COS-096, COS-097, COS-098, COS-100, COS-101, COS-099. Воркеры Apex и Flash на простое до завтрашней сессии.
+Репозиторий: `D:\prettyk-airlock`. Закрыты COS-102..COS-116 (Workspace API + Run Trigger + SSE logs + Drafts/Diff + Run History + Search + OpenBao + Hub rename + Web IDE Terminal Drawer + Branches/Tags + Commits History + Run Trigger Flow).
+Тестовый базис: 2727 passed / 17 skipped / 0 failed (100% green в Cosmo) + 20/20 passed (Web IDE).
 
-## Следующее действие
-1. Формирование следующего пакета работ:
-   - Apex: SARIF-парсинг отчётов Woodpecker-шагов или интеграция build_secured_package с release-оркестрацией.
-   - Flash: COS-102 (Live terminal / xterm streaming в Web IDE Drawer) или COS-103 (Transfer / Package Landing UI в Control Station).
+## Следующие действия (диспетч)
+1. Boss: `Boss, COS-117, D:\prettyk-airlock\docs\BACKLOG.md` (GET /workspace/blame: построчная аннотация файла / git blame).
+2. Luna: `Luna, COS-118, D:\prettyk-airlock\docs\BACKLOG.md` (GET /workspace/pipelines: обнаружение и валидация пайплайнов репозитория).
+3. Flash: `Flash, COS-119, D:\prettyk-airlock\docs\BACKLOG.md` (Web IDE Branch Switcher & Creation Flow: переключение и создание веток в UI).
 
 ---
 
 ## История (последние 5)
-- 2026-09-03 | Apex | COS-099: SBOM (CycloneDX 1.5 via syft/fallback) + Grype report + 3-layer tamper-evidence (2559 passed) | docs/research/2026-09-03-cos-099-sbom-vuln-report.md
-- 2026-09-03 | Apex | COS-101: Мост Findings ↔ Gates + SigV4 MinIO + OpenAPI fix (2526 passed / 0 failed) | docs/research/2026-09-03-cos-101-findings-gate-bridge.md
-- 2026-09-03 | Flash | COS-100: Web IDE Surface B (Monaco + Workspace shell из Коробки, e2e 2/2, vitest 76/76) | docs/BACKLOG.md
-- 2026-09-03 | Cosmo | Коммит и пуш 14 партий P01-P14 (149427e), ростер пула: Apex + Flash | git log
-- 2026-09-03 | Apex | COS-097: Woodpecker Live Run Cycle (5 багов устранено, 2498 passed, P13) | docs/research/2026-09-02-cos-097-woodpecker-live-cycle.md
+- 2026-09-06 | Boss | COS-116: Commits History & Timeline (14 passed, 2727 suite gate) | docs/research/2026-09-06-cos-116-workspace-commits.md
+- 2026-09-06 | Luna | COS-114: Workspace search & grep engine (20 passed, 2713 suite gate) | docs/research/2026-09-05-cos-114-workspace-search.md
+- 2026-09-06 | Boss | COS-113: Branches & Tags API (20 passed, 2693 suite gate) | docs/research/2026-09-06-cos-113-workspace-branches-tags.md
+- 2026-09-06 | Flash | COS-111: Web IDE Terminal Drawer & live SSE logs viewer (14 vitest passed) | App.tsx + WebIDETerminalDrawer.tsx
+- 2026-09-05 | Luna | COS-112: Workspace run history + step logs REST (29 passed) | docs/research/2026-09-05-cos-112-run-history.md

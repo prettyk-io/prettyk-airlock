@@ -1,4 +1,4 @@
-# Battlecruiser — общие каноны экосистемы
+﻿# Battlecruiser — общие каноны экосистемы
 
 > **Назначение:** единая папка для согласованных архитектурных канонов PureK/PrettyK и Cosmoport 2.0.  
 > **Дата создания:** 30 августа 2026
@@ -6,7 +6,7 @@
 ## Структура
 
 ```text
-D:\prettyk-control-plane\battlecruiser\
+D:\prettyk-airlock\battlecruiser\
 ├── README.md
 ├── captains_bridge.md
 ├── ADMISSION.md
@@ -61,7 +61,7 @@ Cosmoport 2.0
 Основной продуктовый монолит пока находится в:
 
 ```text
-D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-airlock\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 Индекс связки — `prettyk-control-plane/CANON-INDEX.md`.

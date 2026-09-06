@@ -1,7 +1,7 @@
-# Cosmoport 2.0 — Architecture & Onboarding
+﻿# Cosmoport 2.0 — Architecture & Onboarding
 
 > **Статус:** 2FA sealed 28 августа 2026. 277 тестов, 0 skipped.  
-> **Repo:** https://github.com/prettyk-io/prettyk-control-plane  
+> **Repo:** https://github.com/prettyk-io/prettyk-airlock  
 > **Parent:** `D:\prettyk-dev` (Pure Box + планирование в `sanctuary/cosmoport2/`)
 
 ---
@@ -251,7 +251,7 @@ GET /health  — полный health-контракт
 ## 9. Ссылки
 
 ```
-Repo:          https://github.com/prettyk-io/prettyk-control-plane
+Repo:          https://github.com/prettyk-io/prettyk-airlock
 OpenAPI:       docs/cosmo-openapi.yaml (2917 строк)
 Концепт:       docs/CONCEPT.md
 Стек:          docs/STACK.md

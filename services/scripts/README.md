@@ -1,9 +1,9 @@
-# Cosmoport 2.0 — Scripts Reference
+﻿# Cosmoport 2.0 — Scripts Reference
 
 ## Быстрый старт
 
 ```powershell
-cd D:\prettyk-control-plane
+cd D:\prettyk-airlock
 
 # Поднять стек
 docker compose -f services/docker-compose.yml up -d cosmo-postgres cosmo-valkey cosmo-api cosmo-caddy

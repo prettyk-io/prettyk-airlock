@@ -1,4 +1,4 @@
-# Cosmoport 2.0 — инженерный план Projects, Release Types и Steel Thread
+﻿# Cosmoport 2.0 — инженерный план Projects, Release Types и Steel Thread
 
 > **Статус:** engineering draft / SoT для следующей волны планирования  
 > **Дата:** 30 августа 2026  
@@ -979,7 +979,7 @@ created_at DESC
 
 Временно не участвует в этой feature-wave. Его отдельная задача:
 
-- `D:\prettyk-control-plane\.venv`;
+- `D:\prettyk-airlock\.venv`;
 - npm/pip/Playwright caches;
 - OpenCode tool-output/cache;
 - Docker/WSL/PostgreSQL storage;

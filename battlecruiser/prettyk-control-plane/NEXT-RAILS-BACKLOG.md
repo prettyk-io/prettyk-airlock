@@ -1,8 +1,8 @@
-# Cosmoport 2.0 — NEXT RAILS backlog
+﻿# Cosmoport 2.0 — NEXT RAILS backlog
 
 > **Статус:** живой delivery backlog  
 > **Старый backlog:** заморожен; следующие задачи ведём здесь  
-> **Основной канон:** `D:\prettyk-control-plane\battlecruiser\ADMISSION.md`  
+> **Основной канон:** `D:\prettyk-airlock\battlecruiser\ADMISSION.md`  
 > **Текущий target:** Cosmoport ПлЦР / ЗР  
 > **Экипаж:** Boss, Flash, Luna, Buddy  
 > **Правило:** данные и ошибки честные; неизвестное помечается `UNKNOWN`; новые каноны проходят 2FA

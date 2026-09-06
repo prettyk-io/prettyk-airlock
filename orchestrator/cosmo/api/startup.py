@@ -150,6 +150,17 @@ async def lifespan(app):
     except Exception as exc:  # bootstrap не роняет старт, но факт фиксирует
         logger.warning("Gate trail bootstrap skipped: %s", exc)
 
+    # COS-097/COS-108: execution handles + workspace run tracking — отдельный
+    # ExecutionBase вне замороженной цепочки (см. models_execution.py).
+    try:
+        from orchestrator.cosmo.db.models_execution import ExecutionBase
+        _boot_engine2 = _cae(resolve_database_url(), echo=False)
+        async with _boot_engine2.begin() as _conn:
+            await _conn.run_sync(ExecutionBase.metadata.create_all)
+        await _boot_engine2.dispose()
+    except Exception as exc:
+        logger.warning("Execution bootstrap skipped: %s", exc)
+
     # ── Notification Delivery Hardening: background outbox worker ──
     # Доставка уведомлений без ручного POST /process. Endpoint остаётся.
     outbox_worker = None
@@ -179,6 +190,22 @@ async def lifespan(app):
         app.state.execution_service = exec_service
     else:
         logger.info("Execution service disabled via COSMO_EXECUTOR_ENABLED")
+
+    # ── COS-105: OpenBao Vault adapter (AppRole в prod, dev root token в test) ──
+    vault_client = None
+    try:
+        from orchestrator.cosmo.api import deps as _deps
+        vault_client = _deps.init_vault()
+        health = vault_client.health()
+        logger.info(
+            "Vault ready at %s: initialized=%s sealed=%s version=%s",
+            vault_client.addr,
+            health.get("initialized"),
+            health.get("sealed"),
+            health.get("version", "?"),
+        )
+    except Exception as exc:
+        logger.warning("Vault bootstrap skipped (surface will 503): %s", exc)
 
     yield
 

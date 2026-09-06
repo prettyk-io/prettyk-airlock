@@ -12,7 +12,7 @@
 |---|---|
 | **PrettyK SecOps Studio/Editor + results verdict** | `prettyk box`, `DAST коробка`, `коробка`, `студия` |
 | **PrettyK Control Plane** | `control plane`, `prettyk-cp`, `Портал Управления`, `ПУ`, `Космо2`, `Космопорт2` |
-| **PrettyK Findings Control Station & QG Triage** | `гейт портал`, `гейты`, `центр уязвимостей`, `хаб отчетов`, `хаб уязвимостей`, `хаб` |
+| **PrettyK Hub (ранее Findings Control Station)** | `prettyk-hub`, `hub`, `гейт портал`, `гейты`, `центр уязвимостей`, `хаб отчетов`, `хаб уязвимостей`, `хаб` |
 
 ## Правило употребления
 

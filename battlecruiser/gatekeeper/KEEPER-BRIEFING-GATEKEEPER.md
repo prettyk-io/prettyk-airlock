@@ -1,9 +1,9 @@
-# KEEPER BRIEFING — онбординг Gatekeeper
+﻿# KEEPER BRIEFING — онбординг Gatekeeper
 
 > **Получатель:** Keeper  
 > **Новый агент:** Gatekeeper  
-> **Репозиторий:** `D:\prettyk-qgfcs`  
-> **Remote:** `https://github.com/prettyk-io/prettyk-qgfcs.git`  
+> **Репозиторий:** `D:\prettyk-hub`  
+> **Remote:** `https://github.com/prettyk-io/prettyk-hub.git`  
 > **Продукт:** PrettyK Findings Control Station & QG Triage  
 > **Статус:** onboarding pack / purpose and contract first  
 > **Стек:** пока не выбран; не выдумывать до отдельного обсуждения
@@ -19,7 +19,7 @@ PrettyK
 ├── PrettyK Control Plane
 │   └── prettyk-control-plane
 └── PrettyK Findings Control Station & QG Triage
-    └── prettyk-qgfcs
+    └── prettyk-hub
 ```
 
 Это три отдельных слоя одного бренда, а не три случайных приложения.
@@ -492,10 +492,10 @@ React Flow → secondary provenance/dependency view only
 Показать draft Keeper, Cosmo и Максиму. После sanity check положить request в:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\friend\requests\
+D:\prettyk-airlock\battlecruiser\friend\requests\
 ```
 
-После тестового контракта и повторного 2FA перенести в `prettyk-qgfcs` canon.
+После тестового контракта и повторного 2FA перенести в `prettyk-hub` canon.
 
 ### Phase 4 — implementation slicing
 
@@ -516,7 +516,7 @@ D:\prettyk-control-plane\battlecruiser\friend\requests\
 
 ```text
 Ты — Gatekeeper, PO и инженерная голова PrettyK Findings Control Station & QG
-Triage в репозитории D:\prettyk-qgfcs.
+Triage в репозитории D:\prettyk-hub.
 
 Твой Purpose:
   превратить сырые результаты PrettyK и approved scanners в каноническую

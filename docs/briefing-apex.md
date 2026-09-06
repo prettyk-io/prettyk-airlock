@@ -1,11 +1,11 @@
-# Briefing from Cosmo to Apex
+﻿# Briefing from Cosmo to Apex
 
 > **Инициализация:** Apex
 > **Роль:** правая рука Cosmo и персональный full-dev worker Control Plane
 > **Модель:** GLM-5.3-Flash Max
 > **PO-владелец:** Cosmo
 > **Продукт:** PrettyK Control Plane
-> **Workspace:** `D:\prettyk-control-plane`
+> **Workspace:** `D:\prettyk-airlock`
 
 ## Кто ты
 
@@ -400,11 +400,11 @@ Blockers:
 Прочитай:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\captains_bridge.md
-D:\prettyk-control-plane\battlecruiser\ADMISSION.md
-D:\prettyk-control-plane\battlecruiser\MAXIM-PROFILE.md
-D:\prettyk-control-plane\AGENTS.md
-D:\prettyk-control-plane\.opencode\skills\worker-delegation-ops\SKILL.md
+D:\prettyk-airlock\battlecruiser\captains_bridge.md
+D:\prettyk-airlock\battlecruiser\ADMISSION.md
+D:\prettyk-airlock\battlecruiser\MAXIM-PROFILE.md
+D:\prettyk-airlock\AGENTS.md
+D:\prettyk-airlock\.opencode\skills\worker-delegation-ops\SKILL.md
 ```
 
 Пойми:
@@ -436,17 +436,17 @@ D:\prettyk-dev\docs\
 Прочитай по порядку:
 
 ```text
-D:\prettyk-control-plane\docs\CONCEPT.md
-D:\prettyk-control-plane\docs\DISCOVERY.md
-D:\prettyk-control-plane\docs\STACK.md
-D:\prettyk-control-plane\docs\INVENTORY.md
-D:\prettyk-control-plane\docs\BACKLOG.md
-D:\prettyk-control-plane\docs\PERSISTENCE.md
-D:\prettyk-control-plane\docs\ARCHITECTURE.md
-D:\prettyk-control-plane\docs\ARCHITECTURE-DIRECTION.md
-D:\prettyk-control-plane\docs\TRANSFER-OPTIONS.md
-D:\prettyk-control-plane\docs\PO-TODO.md
-D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-airlock\docs\CONCEPT.md
+D:\prettyk-airlock\docs\DISCOVERY.md
+D:\prettyk-airlock\docs\STACK.md
+D:\prettyk-airlock\docs\INVENTORY.md
+D:\prettyk-airlock\docs\BACKLOG.md
+D:\prettyk-airlock\docs\PERSISTENCE.md
+D:\prettyk-airlock\docs\ARCHITECTURE.md
+D:\prettyk-airlock\docs\ARCHITECTURE-DIRECTION.md
+D:\prettyk-airlock\docs\TRANSFER-OPTIONS.md
+D:\prettyk-airlock\docs\PO-TODO.md
+D:\prettyk-airlock\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 Если файл отсутствует, отметь это как gap, не выдумывай его содержание.
@@ -456,8 +456,8 @@ D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 Только как внешний контекст:
 
 ```text
-D:\prettyk-qgfcs\chambers\CONSTITUTION.md
-D:\prettyk-qgfcs\
+D:\prettyk-hub\docs\  (канон Gatekeeper; ранее — D:\prettyk-qgfcs, переименован по PK-DIR-008 §1)
+D:\prettyk-hub\
 ```
 
 Пойми, что Control Plane потребляет QG verdict, но не пересчитывает findings и

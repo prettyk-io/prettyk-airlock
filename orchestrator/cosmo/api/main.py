@@ -26,6 +26,7 @@ from orchestrator.cosmo.api.routes.transfer import (
 from orchestrator.cosmo.api.routes.metrics import router as metrics_router
 from orchestrator.cosmo.api.routes.status import router as status_router
 from orchestrator.cosmo.api.routes.repos import router as repos_router
+from orchestrator.cosmo.api.routes.workspace import router as workspace_router, run_log_router
 from orchestrator.cosmo.api.routes.audit import router as audit_router
 from orchestrator.cosmo.api.routes.evidence import router as evidence_router
 from orchestrator.cosmo.api.routes.notifications import router as notifications_router
@@ -59,8 +60,11 @@ app.include_router(health_router)
 app.include_router(domains_router)
 app.include_router(apps_router)
 app.include_router(pipelines_router)
+# COS-112: run_log_router BEFORE runs_router — чтобы GET /api/v1/runs/{run_id}/steps/{step_id}/logs
+# не затенялся GET /api/v1/runs/{id} (run_log_router имеет более конкретный сигнальный путь)
 # COS-097: evidence_router BEFORE runs_router — чтобы GET /api/v1/runs/{id}/evidence
 # и GET /api/v1/runs/{id}/gost-act не затенялись GET /api/v1/runs/{id}
+app.include_router(run_log_router)
 app.include_router(evidence_router)
 app.include_router(runs_router)
 app.include_router(gates_router)
@@ -75,6 +79,10 @@ app.add_exception_handler(_HTTPException, transfer_error_handler)
 app.include_router(metrics_router)
 app.include_router(status_router)
 app.include_router(repos_router)
+# COS-103: workspace-роуты ПЕРЕД repos_router — /workspace/bootstrap и
+# CAS-переопределения /tree, /file резолвятся первыми (оба роутера имеют
+# prefix /api/v1/repos).
+app.include_router(workspace_router)
 app.include_router(audit_router)
 app.include_router(notifications_router)
 app.include_router(artifacts_router)

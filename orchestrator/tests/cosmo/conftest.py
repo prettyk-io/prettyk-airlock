@@ -124,6 +124,8 @@ async def pg_client():
             "cosmo_deployments", "cosmo_builds",
             "project_applications", "project_teams", "projects", "kits_tags",
             "repo_bindings", "apps", "groups", "domains",
+            # COS-097/COS-108: ExecutionBase tables (outside frozen chain)
+            "cosmo_execution_handles", "cosmo_workspace_runs",
         ]
         for tbl in delete_order:
             await conn.exec_driver_sql(f'DELETE FROM "{tbl}"')
@@ -143,6 +145,9 @@ async def pg_client():
         await conn.run_sync(GateTrailBase.metadata.create_all)
         from orchestrator.cosmo.db.models_transfer import TransferRegistryBase
         await conn.run_sync(TransferRegistryBase.metadata.create_all)
+        # COS-097/COS-108: execution handles + workspace runs
+        from orchestrator.cosmo.db.models_execution import ExecutionBase
+        await conn.run_sync(ExecutionBase.metadata.create_all)
 
     # Clean all tables before the test
     async with engine.begin() as conn:

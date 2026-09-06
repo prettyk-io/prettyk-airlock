@@ -1,4 +1,4 @@
-# Provider direction: PureK Harbor, Cosmoport Т1-Сфера
+﻿# Provider direction: PureK Harbor, Cosmoport Т1-Сфера
 
 > **Статус:** friend-request / first 2FA agreed / awaiting implementation evidence  
 > **Дата:** 30 августа 2026  
@@ -109,8 +109,8 @@ Harbor не заменяет Nexus для всех package ecosystems и не д
 После evidence и targeted tests request можно перенести в:
 
 ```text
-D:\prettyk-control-plane\battlecruiser\pure\
-D:\prettyk-control-plane\battlecruiser\prettyk-control-plane\
+D:\prettyk-airlock\battlecruiser\pure\
+D:\prettyk-airlock\battlecruiser\prettyk-control-plane\
 ```
 
 только после повторного 2FA и polish.

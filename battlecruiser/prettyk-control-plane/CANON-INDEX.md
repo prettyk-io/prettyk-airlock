@@ -1,9 +1,9 @@
-# Cosmoport 2.0 — индекс канонов Battlecruiser
+﻿# Cosmoport 2.0 — индекс канонов Battlecruiser
 
 ## Главный монолит
 
 ```text
-D:\prettyk-control-plane\docs\COSMOPORT2-CANONICAL-MONOLITH.md
+D:\prettyk-airlock\docs\COSMOPORT2-CANONICAL-MONOLITH.md
 ```
 
 Он содержит согласованную модель:
@@ -52,4 +52,4 @@ Cosmoport
 
 - Официальная страница платформы Сфера: <https://www.sferaplatform.ru/sfera-platform>
 - Официальная страница «Сфера.Дистрибутивы и лицензии»: <https://www.sferaplatform.ru/distributivy-licenzii>
-- Документация PrettyK Control Plane в репозитории: `D:\prettyk-control-plane\docs\`
+- Документация PrettyK Control Plane в репозитории: `D:\prettyk-airlock\docs\`

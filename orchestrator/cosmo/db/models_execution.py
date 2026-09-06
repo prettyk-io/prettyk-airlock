@@ -89,3 +89,38 @@ class ExecutionHandleRow(ExecutionBase):
             "repo_name": self.repo_name,
             "branch": self.branch,
         }
+
+
+# ── COS-108: Workspace Run tracking ─────────────────────────────────────
+
+class WorkspaceRunRow(ExecutionBase):
+    """Лёгкий трекер workspace-прогонов для IDE (run → Woodpecker pipeline).
+
+    COS-109 SSE-стриминг читает wp_number отсюда по run_id.
+    """
+
+    __tablename__ = "cosmo_workspace_runs"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="")
+    repo_owner: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    repo_name: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    branch: Mapped[str] = mapped_column(String(128), nullable=False, default="main")
+    commit_sha: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    # Woodpecker pipeline handle
+    repo_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    wp_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    wp_pipeline_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    tracking_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_workspace_runs_status", "status"),
+        {"comment": "COS-108: workspace run → Woodpecker pipeline tracker"},
+    )

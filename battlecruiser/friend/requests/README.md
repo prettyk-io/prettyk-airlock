@@ -1,9 +1,9 @@
-# Friend Requests
+﻿# Friend Requests
 
 Это промежуточная зона предложений, которые ещё не стали канонами.
 
 ```text
-D:\prettyk-control-plane\battlecruiser\friend\requests\
+D:\prettyk-airlock\battlecruiser\friend\requests\
 ```
 
 ## Правило

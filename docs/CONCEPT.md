@@ -1,6 +1,6 @@
-# 🏛️ Cosmoport 2.0 — Полный концепт платформы
+﻿# 🏛️ Cosmoport 2.0 — Полный концепт платформы
 
-> **Repo:** https://github.com/prettyk-io/prettyk-control-plane · `D:\prettyk-control-plane`  
+> **Repo:** https://github.com/prettyk-io/prettyk-airlock · `D:\prettyk-airlock`  
 > **Parent:** `D:\prettyk-dev` (Pure Box + планирование в `sanctuary/cosmoport2/`)  
 > **Статус:** ✅ 2FA sealed 28 августа 2026. Gemini & GPT допущены к Алтарю.  
 > **Discovery:** `D:\cosmo\` (3 цикла, 80+ таблиц, 97 сервисов, 14 томов ТЗ ЦБ).
