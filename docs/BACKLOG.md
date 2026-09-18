@@ -2006,6 +2006,70 @@ are accepted; UI is the next product surface.
 
 ---
 
+## ⬜ READY — SOVEREIGN WORKSPACE WAVE 3: WORKBENCH LIFECYCLE, SECURITY AUDIT LENS & HUB CONTRACT A
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-134** | Flash | 20-24h | P1 | COS-133, COS-111, COS-128 | Интеграция жизненного цикла запусков и управления пайплайнами в Web IDE (Cancel, Rerun, Step-Breakdown и тайминги в Terminal Drawer) |
+| **COS-135** | Luna | 20-24h | P1 | COS-132, IDE-CORE-010, IDE-UI-003 | Панель аудита безопасности и инспектор SARIF в Web IDE: сканирование репозитория, навигация по violations и экспорт отчёта |
+| **COS-136** | Boss | 20-24h | P1 | COS-101, PK-C-003, PK-DIR-008 | Contract A: Ingestion вердиктов PrettyK Hub в Cosmoport, крипто-связка с Evidence Ledger и закрытие чеклиста анти-паттернов PK-C-003 |
+
+### Карточки волны
+
+#### COS-134 · Flash · Web IDE: Cancel, Rerun & Step-Breakdown
+> **Scope:**
+> (1) В `D:\prettyk-ide\src\workspace\client.ts`: добавить типизированные вызовы жизненного цикла запусков:
+>     - `getRunDetail(repo: string, runId: string): Promise<WorkspaceRunDetailResponse>` (`GET /api/v1/repos/workspace/runs/{run_id}`);
+>     - `cancelRun(repo: string, runId: string): Promise<WorkspaceRunCancelResponse>` (`POST /api/v1/repos/workspace/runs/{run_id}/cancel`);
+>     - `rerunRun(repo: string, runId: string): Promise<WorkspaceRunRerunResponse>` (`POST /api/v1/repos/workspace/runs/{run_id}/rerun`);
+> (2) В `D:\prettyk-ide\src\workspace\types.ts`: зафиксировать интерфейсы DTO `WorkspaceRunStepSummary` (name, status, exitCode, durationMs, startedAt, finishedAt), `WorkspaceRunDetailResponse`, `WorkspaceRunCancelResponse`, `WorkspaceRunRerunResponse` в соответствии с контрактом COS-133;
+> (3) В `D:\prettyk-ide\src\cosmo\ide\WebIDETerminalDrawer.tsx`:
+>     - Добавить панель детализации шагов пайплайна (Steps breakdown): статусы шагов с цветовой индикацией (`running`, `success`, `failure`, `killed`, `pending`), длительность каждого шага и код завершения;
+>     - Кнопка "Отменить запуск" (Cancel Pipeline): активна для незавершённых запусков (`running`/`pending`), при подтверждении выполняет `cancelRun`;
+>     - Кнопка "Перезапустить запуск" (Rerun Pipeline): активна для терминальных запусков, выполняет `rerunRun`, обновляет `runId` в URL/состоянии с сохранением связи `originalRunId`;
+> (4) Vitest тесты: моки запросов `getRunDetail`, `cancelRun`, `rerunRun`, отображение шагов, состояния кнопок cancel/rerun при разных статусах; `tsc -b` green, vitest passed.
+>
+> **Out of scope:** правки бэкенда; изменение схемы БД.
+> **Acceptance:** WebIDETerminalDrawer корректно отображает детализированные шаги с таймингами; кнопки Cancel и Rerun инициируют соответствующие вызовы API; `tsc -b` — 0 ошибок, vitest зелёный.
+
+#### COS-135 · Luna · Web IDE: Security Audit Lens & SARIF Inspector
+> **Scope:**
+> (1) В `D:\prettyk-ide\src\workspace\client.ts`: реализовать вызовы Quality Gate сканирования:
+>     - `triggerGateScan(repo: string, ref?: string, maxFiles?: number): Promise<WorkspaceGateScanResponse>`;
+>     - `exportGateScanSarif(repo: string, ref?: string, maxFiles?: number): Promise<Blob>`;
+> (2) В `D:\prettyk-ide\src\workspace\types.ts`: объявить типизацию `WorkspaceGateScanRequest`, `WorkspaceGateScanResponse`, `WorkspaceGateViolation`;
+> (3) Создать компонент `D:\prettyk-ide\src\cosmo\ide\SecurityLens.tsx` (и подключить в `App.tsx`):
+>     - Кнопка "Security Audit" в панели инструментов/статус-баре;
+>     - Карточка вердикта Quality Gate: бейдж `PASS` / `WARN` / `BLOCK`, количество файлов, время проверки;
+>     - Список нарушений: категория правила, критичность (`error`, `warning`), путь к файлу, номер строки и сообщение;
+>     - Клик по нарушению: переключение активного файла в редакторе на указанный путь и строку;
+>     - Кнопка "Download SARIF": экспорт отчёта SARIF 2.1.0 (`cosmo-security-audit.sarif`);
+> (4) Vitest тесты: моки ответов `gate-scan`, рендеринг вердиктов BLOCK/WARN/PASS, навигация по нарушениям, обработка ошибки 413; `tsc -b` green, vitest passed.
+>
+> **Out of scope:** правки алгоритма сканирования на бэкенде.
+> **Acceptance:** по нажатию кнопки запускается сканирование репозитория через `POST /workspace/gate-scan`, отображаются нарушения и вердикт, работает переход по файлам и скачивание SARIF; `tsc -b` — 0 ошибок, vitest зелёный.
+
+#### COS-136 · Boss · Cosmoport: Contract A Hub Ingestion & PK-C-003 Hardening
+> **Scope:**
+> (1) В `orchestrator/cosmo/domain/hub_verdict.py`: Pydantic-модели:
+>     - `HubVerdictIngestRequest` (run_id: str, box_verdict: str, hub_verdict: str, finding_ids: list[str], evidence_hashes: list[str], provenance_metadata: dict, idempotency_key: str);
+>     - `HubVerdictIngestResponse` (accepted: bool, ledger_entry_id: str, run_id: str, status: str);
+> (2) В `orchestrator/cosmo/api/routes/hub.py`: эндпоинт `POST /api/v1/hub/verdicts/ingest`:
+>     - Валидация входного контракта Contract A (PrettyK Hub → Cosmoport);
+>     - Идемпотентность по `idempotency_key` и хэшу `(run_id, hub_verdict)`;
+>     - Формирование криптографической записи в `cosmo_evidence_ledger` с фиксацией provenance-хэша;
+>     - Блокировка промоушена релиза при `hub_verdict == "BLOCK"`, разблокировка при `PASS`;
+> (3) Канонизация требований чеклиста анти-паттернов PK-C-003:
+>     - `docs/DEPLOYMENT.md`: формализация процедуры миграции (PK-C-003.3), ownership стенда и suite gate (PK-C-003.1), канонические digest-теги (PK-C-003.4);
+>     - `docs/ARCHITECTURE-DIRECTION.md`: фиксация "Failover = Phase 3, not Phase 1" (PK-C-003.2);
+>     - Обновление чеклиста в `docs/BACKLOG.md` (PK-C-003.1..003.6);
+> (4) Unit + route тесты: `tests/cosmo/test_hub_verdict_ingest.py` (приём вердикта, дедупликация повторов, запись в ledger, блокировка промоушена); suite gate ≥3046 passed, 0 failed.
+>
+> **Out of scope:** разработка UI; генерация findings на стороне Hub.
+> **Acceptance:** `POST /api/v1/hub/verdicts/ingest` принимает и дедуплицирует вердикты Hub с крипто-записью в ledger; требования PK-C-003 формализованы в документации; suite gate зелёный.
+
+---
+
 # PK-C-003 — ЧЕКЛИСТ-ТРЕБОВАНИЯ 2.0 ИЗ АНТИ-ПАТТЕРНОВ ИНКУМБЕНТА
 
 > Источник: D:\prettyk\control-plane\2026-09-02-cosmoport-1-recon.md (Vector).
