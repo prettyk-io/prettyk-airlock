@@ -7,18 +7,23 @@
 > **Правило:** worker читает это ПЕРВЫМ действием после `pwd`.
 
 ## Последнее действие
+2026-09-18 | Cosmo | Git commit & push выполнены в обоих репозиториях по прямому указанию Максима:
+- prettyk-airlock: commit 6862c83 в origin/dev (COS-120..COS-133 suite, 3046/0/17 passed);
+- prettyk-ide: commit 0a1e5c9 в origin/vision (COS-100..COS-131 Web IDE standalone suite, 155/155 passed, vite build green).
+Рабочие деревья в обоих репозиториях чистые.
 2026-09-18 | Boss | COS-133 closed: Workspace Run Lifecycle — Detail Sync, Cancel & Rerun API. `GET /workspace/runs/{run_id}` (шаги `WorkspaceRunStepSummary` + sync статуса из Woodpecker для незавершённых), `POST .../cancel` (killed, 400 на терминальном), `POST .../rerun` (новая WorkspaceRunRow с `original_run_id`); адаптер `get_pipeline_detail`/`cancel_pipeline`/`rerun_pipeline`; миграция `f5a6b7c8d9e0` (nullable `original_run_id`, guarded); 35 passed, suite gate 3046/0/17.
 2026-09-18 | Flash | COS-131 closed: Web IDE File Operations & Local Dirty Diff Engine — createFile, deleteFile (JSON body), moveFile по контракту COS-120 API; локальный in-memory LCS-diff в ChangeReviewPanel (снято ограничение COS-130); диалоги New File, New Folder (.gitkeep), Rename, Delete с подтверждением; guards (beforeunload, смен ветки и файлов с dirty); 155 passed (10 тестовых файлов, baseline 114, порог ≥130), `tsc -b` 0, vite build green.
 2026-09-18 | Luna | COS-132 closed: `POST /workspace/gate-scan` — полный скан дерева репозитория/ветки (resolve_ref → get_tree_by_sha → scan_tree), вердикт PASS/WARN/BLOCK, SARIF 2.1.0 export (`application/sarif+json`), лимит maxFiles→413, ghost/unknown-ref 404; 53 passed, suite gate 3011/0/17.
 
 ## Текущее состояние
-Репозиторий: `D:\prettyk-airlock` + `D:\prettyk-ide`. Доставлены COS-102..COS-133 (COS-117 blame остаётся blocked до Gitea ≥1.23). Airlock и Web IDE содержат незакоммиченные изменения; чистая точка сохраняется до команды Максима на коммит.
+Репозитории: `D:\prettyk-airlock` (`dev`, 6862c83) и `D:\prettyk-ide` (`vision`, 0a1e5c9). Обе ветки засинхронизированы с remote, деревья чистые.
 Тестовый базис: 3046 passed / 0 failed / 17 skipped (Cosmo suite gate) + 155/155 passed (Web IDE vitest, `tsc -b` 0, `vite build` green).
 
-**Resolved (COS-133):** детализация запусков с live-sync статуса из Woodpecker, отмена активного пайплайна и перезапуск со связью `original_run_id`.
-**Resolved (COS-131):** полный набор файловых операций в проводнике Web IDE (создание, переименование, удаление) + локальный in-memory diff для dirty-файлов до коммита + guards потери данных.
-**Resolved (COS-132):** полный аудит безопасности дерева репозитория с экспортом в SARIF 2.1.0.
-**Resolved (COS-130):** сквозное сравнение веток работает в UI Web IDE против живого бэкенда.
+**Завершены задачи волны Sovereign Workspace:**
+- COS-131: Web IDE File Operations & Local Dirty Diff Engine (создание, удаление, переименование, in-memory diff, dirty guards).
+- COS-132: Workspace Full Repository Security Scan & SARIF Export API (`POST /workspace/gate-scan`, SARIF 2.1.0).
+- COS-133: Workspace Run Lifecycle (sync, cancel, rerun с сохранением `original_run_id`).
+- COS-117: Git Blame API — BLOCKED (ждёт обновления Gitea ≥1.23).
 
 ## Следующие действия — параллельная волна воркеров (~20–24h)
 1. **Boss: COS-133 закрыт** — ожидает коммит-батча / следующего диспетча.
