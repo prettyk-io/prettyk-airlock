@@ -13,7 +13,9 @@ prettyk-ide ``src/workspace/types.ts``). Роуты:
     расхождение → 409, честный CAS).
   - GET /api/v1/repos/file — blob + base_blob_sha (база черновика для
     3-way merge).
-  - POST /api/v1/repos/workspace/commit — CAS-коммит (COS-107).
+  - POST /api/v1/repos/workspace/commit — CAS-коммит (COS-107, legacy).
+  - POST /api/v1/repos/workspace/commits — атомарный multi-file коммит
+    create/update/delete одной транзакцией + pre-flight gate (COS-124).
   - POST /api/v1/repos/workspace/run — запуск Woodpecker pipeline из IDE
     (COS-108): resolve binding → CAS → submit → WorkspaceRunRow → response.
 
@@ -29,9 +31,15 @@ from __future__ import annotations
 
 import datetime
 import re
+import time
 import uuid
 
+from typing import Any
+
+import yaml
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +48,7 @@ from orchestrator.cosmo.api.domain_guard import (
     resolve_caller_domain,
     verify_ownership,
 )
+from orchestrator.cosmo.adapters.forge_gitea import GiteaCompareLimitError
 from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
 from orchestrator.cosmo.api.woodpecker_client import (
     build_woodpecker,
@@ -49,7 +58,10 @@ from orchestrator.cosmo.db.models import (
     Application as ApplicationModel,
     RepositoryBinding as RepoBindingModel,
 )
-from orchestrator.cosmo.db.models_execution import WorkspaceRunRow
+from orchestrator.cosmo.db.models_execution import (
+    TERMINAL_STORED_STATUSES,
+    WorkspaceRunRow,
+)
 from orchestrator.cosmo.domain.rbac import PrincipalContext
 from orchestrator.cosmo.domain.workspace import (
     StepLogsResponse,
@@ -59,17 +71,36 @@ from orchestrator.cosmo.domain.workspace import (
     WorkspaceBranchListResponse,
     WorkspaceBranchSummary,
     WorkspaceCommitListResponse,
-    WorkspaceCommitSummary,
     WorkspaceCommitRequest,
     WorkspaceCommitResponse,
+    WorkspaceCommitSummary,
+    WorkspaceCompareFile,
+    WorkspaceCompareResponse,
+    WorkspaceContentsCommitRequest,
+    WorkspaceContentsCommitResponse,
     WorkspaceContractError,
     WorkspaceCreateBranchRequest,
     WorkspaceDiffResponse,
     WorkspaceDraftResponse,
     WorkspaceDraftUpsertRequest,
+    WorkspaceFileActionResponse,
+    WorkspaceFileCreateRequest,
+    WorkspaceFileDeleteRequest,
+    WorkspaceFileMoveRequest,
+    WorkspaceGateCheckRequest,
+    WorkspaceGateScanRequest,
+    WorkspaceGateScanResponse,
+    WorkspaceGateVerdictResponse,
+    WorkspaceGateViolation,
+    WorkspacePipelineListResponse,
+    WorkspacePipelineSummary,
+    WorkspaceRunCancelResponse,
+    WorkspaceRunDetailResponse,
     WorkspaceRunListResponse,
     WorkspaceRunRequest,
     WorkspaceRunResponse,
+    WorkspaceRunRerunResponse,
+    WorkspaceRunStepSummary,
     WorkspaceRunSummary,
     WorkspaceSearchMatch,
     WorkspaceSearchResponse,
@@ -277,12 +308,11 @@ async def workspace_file(
     )
 
 
-# ── COS-107: Workspace commit (CAS через git Tree API) ─────────────────
+# ── COS-107: Workspace commit (CAS через Contents API; legacy) ─────────
 
 from orchestrator.cosmo.domain.workspace import (  # noqa: E402
-    FileChange,
-    WorkspaceCommitRequest,
-    WorkspaceCommitResponse,
+    WorkspaceContentsCommitRequest,
+    WorkspaceContentsCommitResponse,
 )
 
 
@@ -295,13 +325,13 @@ def _current_blob_sha(adapter, owner: str, repo: str, path: str, ref: str) -> st
         return None
 
 
-@router.post("/workspace/commit", response_model=WorkspaceCommitResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/workspace/commit", response_model=WorkspaceContentsCommitResponse, status_code=status.HTTP_201_CREATED)
 async def workspace_commit(
-    body: WorkspaceCommitRequest,
+    body: WorkspaceContentsCommitRequest,
     caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
     principal: PrincipalContext = Depends(require_principal()),
-) -> WorkspaceCommitResponse:
+) -> WorkspaceContentsCommitResponse:
     """CAS-коммит в живой Gitea через git tree API.
 
     changes — список {path, content, base_blob_sha?, action: 'upsert'|'delete'}.
@@ -416,7 +446,7 @@ async def workspace_commit(
     except Exception:
         pass  # audit — soft; коммит не роняем
 
-    return WorkspaceCommitResponse(
+    return WorkspaceContentsCommitResponse(
         commit_sha=commit.sha,
         branch=body.branch,
         tree_sha=getattr(commit, "tree_sha", commit.sha),
@@ -477,12 +507,31 @@ async def workspace_run(
             ),
         )
 
+    # ── COS-127: выбор pipeline-конфига (валидация против discovery) ──
+    config_file: str | None = None
+    if body.pipeline_name is not None:
+        try:
+            discovered = _discover_pipelines(forge, owner, name, body.branch)
+        except Exception as exc:  # noqa: BLE001
+            raise forge_http_error(exc, f"pipelines of {body.repo}@{body.branch}") from exc
+        match = next((p for p in discovered if p.name == body.pipeline_name), None)
+        if match is None:
+            available = ", ".join(p.name for p in discovered) or "(none)"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"unknown pipeline {body.pipeline_name!r} in {body.repo}"
+                    f"@{body.branch}; available: {available}"
+                ),
+            )
+        config_file = match.path
+
     # ── Phase 2: submit to Woodpecker ──
     run_id = uuid.uuid4().hex[:12]
     woodpecker = build_woodpecker()
 
     try:
-        handle = woodpecker.submit_run(owner, name, body.branch)
+        handle = woodpecker.submit_run(owner, name, body.branch, config_file)
     except Exception as exc:
         raise woodpecker_http_error(exc, f"repo {body.repo}")
 
@@ -594,6 +643,227 @@ async def workspace_list_runs(
 
     return WorkspaceRunListResponse(
         runs=runs, total=total, limit=limit, offset=offset,
+    )
+
+
+# ── COS-133: Workspace Run Lifecycle (detail / cancel / rerun) ─────────
+
+# Woodpecker отдаёт "success"/"failure"; исторические строки COS-112 писали
+# "succeeded"/"failed". Оба варианта — terminal, иначе detail-роут
+# перезапишет завершённый прогон статусом из Woodpecker.
+_TERMINAL_RUN_STATUSES = frozenset(TERMINAL_STORED_STATUSES | {"succeeded", "failed"})
+
+
+def _iso_from_epoch(value: Any) -> str | None:
+    """Unix-секунды Woodpecker → ISO-8601; строки — as-is; None/0 — None."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return None
+        return datetime.datetime.utcfromtimestamp(value).isoformat() + "Z"
+    return str(value)
+
+
+def _duration_ms(started: Any, finished: Any) -> int | None:
+    """Длительность (сек) → мс; None если тайминги неполные."""
+    if isinstance(started, (int, float)) and isinstance(finished, (int, float)):
+        if started > 0 and finished >= started:
+            return int((finished - started) * 1000)
+    return None
+
+
+def _step_summaries(detail: dict) -> list[WorkspaceRunStepSummary]:
+    """workflows[].steps[] (v3.5) → плоский список WorkspaceRunStepSummary."""
+    out: list[WorkspaceRunStepSummary] = []
+    for wf in detail.get("workflows") or []:
+        for st in wf.get("steps") or []:
+            name = st.get("name") or f"workflow-{wf.get('name')}/step"
+            raw_exit = st.get("exit_code")
+            out.append(WorkspaceRunStepSummary(
+                name=str(name),
+                status=str(st.get("state") or "pending"),
+                exit_code=raw_exit if isinstance(raw_exit, int) else None,
+                duration_ms=_duration_ms(st.get("started"), st.get("finished")),
+                started_at=_iso_from_epoch(st.get("started")),
+                finished_at=_iso_from_epoch(st.get("finished")),
+            ))
+    return out
+
+
+async def _run_row_for_domain(
+    db: AsyncSession,
+    run_id: str,
+    principal: PrincipalContext,
+    caller_domain: str | None,
+) -> WorkspaceRunRow:
+    """run_id → WorkspaceRunRow с ownership-чеком (чужой домен → 404 ghost)."""
+    row = await db.get(WorkspaceRunRow, run_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{run_id}' not found",
+        )
+    await _binding_for_repo(
+        db, f"{row.repo_owner}/{row.repo_name}", principal, caller_domain,
+    )
+    return row
+
+
+def _run_handle(row: WorkspaceRunRow) -> dict:
+    """WorkspaceRunRow → handle адаптера (числовой repo_id + number)."""
+    if row.wp_number is None or row.repo_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline not created for run '{row.run_id}'",
+        )
+    return {
+        "number": row.wp_number,
+        "repo_id": row.repo_id,
+        "repo_owner": row.repo_owner,
+        "repo_name": row.repo_name,
+    }
+
+
+@router.get(
+    "/workspace/runs/{run_id}",
+    response_model=WorkspaceRunDetailResponse,
+)
+async def workspace_run_detail(
+    run_id: str,
+    x_cosmo_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> WorkspaceRunDetailResponse:
+    """Детали запуска: опрос Woodpecker + синхронизация статуса в БД.
+
+    Статус пишется обратно в WorkspaceRunRow только для незавершённых
+    прогонов (running/pending/blocked); терминальный статус — источник
+    истины в БД, Woodpecker повторно не перезаписывает.
+    """
+    caller_domain = resolve_caller_domain(principal, x_cosmo_domain)
+    row = await _run_row_for_domain(db, run_id, principal, caller_domain)
+    handle = _run_handle(row)
+
+    wp = build_woodpecker()
+    try:
+        detail = wp.get_pipeline_detail(handle)
+    except Exception as exc:
+        raise woodpecker_http_error(exc, f"run {run_id}")
+
+    raw_status = str(detail.get("status") or row.status)
+    if row.status not in _TERMINAL_RUN_STATUSES and raw_status != row.status:
+        row.status = raw_status
+        row.updated_at = datetime.datetime.utcnow()
+        await db.commit()
+
+    return WorkspaceRunDetailResponse(
+        run_id=row.run_id,
+        repo=f"{row.repo_owner}/{row.repo_name}",
+        branch=row.branch,
+        commit_sha=row.commit_sha,
+        status=row.status,
+        pipeline_number=row.wp_number,
+        original_run_id=row.original_run_id,
+        duration_ms=_duration_ms(detail.get("started"), detail.get("finished")),
+        started_at=_iso_from_epoch(detail.get("started")),
+        finished_at=_iso_from_epoch(detail.get("finished")),
+        steps=_step_summaries(detail),
+    )
+
+
+@router.post(
+    "/workspace/runs/{run_id}/cancel",
+    response_model=WorkspaceRunCancelResponse,
+)
+async def workspace_run_cancel(
+    run_id: str,
+    x_cosmo_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> WorkspaceRunCancelResponse:
+    """Отмена активного запуска; терминальный прогон → 400."""
+    caller_domain = resolve_caller_domain(principal, x_cosmo_domain)
+    row = await _run_row_for_domain(db, run_id, principal, caller_domain)
+
+    if row.status in _TERMINAL_RUN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Run '{run_id}' already finished (status={row.status})",
+        )
+    handle = _run_handle(row)
+
+    wp = build_woodpecker()
+    try:
+        wp.cancel_pipeline(handle)
+    except Exception as exc:
+        raise woodpecker_http_error(exc, f"run {run_id}")
+
+    row.status = "killed"
+    row.updated_at = datetime.datetime.utcnow()
+    await db.commit()
+
+    return WorkspaceRunCancelResponse(
+        run_id=run_id, status="killed", cancelled=True,
+    )
+
+
+@router.post(
+    "/workspace/runs/{run_id}/rerun",
+    response_model=WorkspaceRunRerunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def workspace_run_rerun(
+    run_id: str,
+    x_cosmo_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> WorkspaceRunRerunResponse:
+    """Повторный запуск пайплайна: новый WorkspaceRunRow со связью с исходным."""
+    caller_domain = resolve_caller_domain(principal, x_cosmo_domain)
+    row = await _run_row_for_domain(db, run_id, principal, caller_domain)
+    handle = _run_handle(row)
+
+    wp = build_woodpecker()
+    try:
+        result = wp.rerun_pipeline(handle)
+    except Exception as exc:
+        raise woodpecker_http_error(exc, f"run {run_id}")
+
+    new_run_id = uuid.uuid4().hex[:12]
+    new_number = result.get("number")
+    new_pipeline_id = result.get("job_id")
+    repo_id = result.get("repo_id") or row.repo_id
+    tracking_url = _build_tracking_url(
+        wp._base if hasattr(wp, "_base") else "",
+        row.repo_owner, row.repo_name, new_number or 0,
+    )
+
+    new_row = WorkspaceRunRow(
+        run_id=new_run_id,
+        repo_owner=row.repo_owner,
+        repo_name=row.repo_name,
+        branch=row.branch,
+        commit_sha=row.commit_sha,
+        repo_id=repo_id,
+        wp_number=new_number,
+        wp_pipeline_id=new_pipeline_id,
+        status="running",
+        tracking_url=tracking_url,
+        original_run_id=row.run_id,
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow(),
+    )
+    db.add(new_row)
+    await db.commit()
+
+    return WorkspaceRunRerunResponse(
+        run_id=new_run_id,
+        original_run_id=row.run_id,
+        pipeline_number=new_number or 0,
+        pipeline_id=new_pipeline_id,
+        status="running",
+        tracking_url=tracking_url,
     )
 
 
@@ -1181,7 +1451,7 @@ async def workspace_commits_list(
     from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
     try:
         adapter = build_adapter()
-        commits = adapter.list_commits(owner, name, branch=branch, path=path, limit=limit, page=page)
+        commits = adapter.list_commits_history(owner, name, branch=branch, path=path, limit=limit, page=page)
     except Exception as exc:  # noqa: BLE001
         raise forge_http_error(exc, f"commits of {repo}") from exc
 
@@ -1195,4 +1465,643 @@ async def workspace_commits_list(
     ]
     return WorkspaceCommitListResponse(
         commits=summaries, total=len(summaries), has_more=len(summaries) == limit,
+    )
+
+
+# ─ COS-124: Atomic multi-file commit ────────────────────────────────────
+
+
+@router.post(
+    "/workspace/commits",
+    response_model=WorkspaceCommitResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def workspace_commits_create(
+    body: WorkspaceCommitRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> WorkspaceCommitResponse:
+    """Атомарный multi-file коммит (COS-124).
+
+    Порядок:
+      1. Pre-flight quality gate: секреты/запрещённые паттерны → 422 с
+         violations, коммит в forge не летит;
+      2. Ghost-check binding приложения → 404;
+      3. Ветка должна существовать → 404;
+      4. CAS-состояние файлов: create только для отсутствующих, update/delete
+         только для существующих → 409 (конкурентный коммит);
+      5. Bulk Contents API одной транзакцией → sha/htmlUrl/authoredAt/filesChanged.
+    """
+    # 1. Pre-flight gate (только реально записываемое содержимое).
+    from orchestrator.cosmo.domain.gate_verdict import scan_file, compute_verdict
+
+    all_violations = []
+    for ch in body.file_changes:
+        if ch.action in ("create", "update") and ch.content is not None:
+            all_violations.extend(scan_file(ch.path, ch.content))
+
+    if compute_verdict(all_violations) == "BLOCK":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "verdict": "BLOCK",
+                "message": "commit blocked by quality gate: secrets detected",
+                "violations": [
+                    WorkspaceGateViolation(
+                        path=v.path,
+                        rule_id=v.rule_id,
+                        severity=v.severity,
+                        message=v.message,
+                        line_number=v.line_number,
+                        snippet=v.snippet,
+                    ).model_dump(by_alias=True, mode="json")
+                    for v in all_violations
+                ],
+            },
+        )
+
+    # 2. Ownership / ghost 404.
+    await _binding_for_repo(db, body.repo, principal, caller_domain)
+    owner, _, name = body.repo.partition("/")
+
+    from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
+    from orchestrator.cosmo.adapters.forge_gitea import GiteaConflictError
+
+    try:
+        adapter = build_adapter()
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"workspace commits in {body.repo}") from exc
+
+    # 3. Ветка должна существовать (иначе честный 404).
+    try:
+        parent = adapter.get_commit(owner, name, body.branch)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"branch {body.branch} of {body.repo}") from exc
+
+    # 4. CAS-состояние каждого файла → сборка операций с blob sha.
+    def _safe_current_sha(path: str) -> str | None:
+        try:
+            return _current_blob_sha(adapter, owner, name, path, ref=parent.sha)
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise forge_http_error(exc, f"{path} in {body.repo}") from exc
+
+    operations: list[dict] = []
+    for ch in body.file_changes:
+        current = _safe_current_sha(ch.path)
+
+        if ch.action == "create":
+            if current:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"create conflict on {ch.path}: file already exists "
+                           f"at {body.branch} (concurrent commit; refresh workspace)",
+                )
+            operations.append({
+                "path": ch.path, "content": ch.content, "action": "create",
+            })
+            continue
+
+        if not current:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{ch.action} conflict on {ch.path}: file does not exist "
+                       f"at {body.branch} (concurrent commit; refresh workspace)",
+            )
+        operations.append({
+            "path": ch.path,
+            "content": ch.content if ch.action == "update" else None,
+            "action": ch.action,
+            "sha": current,
+        })
+
+    # 5. Одна атомарная операция в forge.
+    try:
+        result = adapter.commit_changes(
+            owner, name, body.branch, body.message, operations,
+            author_name=body.author_name,
+            author_email=body.author_email,
+        )
+    except HTTPException:
+        raise
+    except GiteaConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"commit conflict on {body.repo}@{body.branch}: {exc}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"commit to {body.repo}@{body.branch}") from exc
+
+    # Audit trail — soft; коммит не роняем.
+    try:
+        from orchestrator.cosmo.api.routes.audit import record_system_event
+        record_system_event(
+            user_id=principal.user_id,
+            action="commit_push",
+            resource_type="repo",
+            resource_id=body.repo,
+            status="success",
+            details={
+                "branch": body.branch,
+                "commit_sha": result.get("sha", ""),
+                "file_count": len(body.file_changes),
+                "atomic": True,
+            },
+        )
+    except Exception:
+        pass
+
+    return WorkspaceCommitResponse(**result)
+
+
+# ── COS-120: Workspace File Actions & Mutator API ────────────────────────
+
+
+@router.post("/workspace/files", status_code=status.HTTP_201_CREATED)
+async def workspace_file_create(
+    body: WorkspaceFileCreateRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> WorkspaceFileActionResponse:
+    """Создаёт файл в репозитории (409 если существует, 400 traversal)."""
+    await _binding_for_repo(db, body.repo, principal, caller_domain)
+    owner, _, name = body.repo.partition("/")
+
+    from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
+    try:
+        adapter = build_adapter()
+        result = adapter.create_file(
+            owner, name, body.path, body.content,
+            branch=body.base_branch or "",
+            message=body.message,
+            is_base64=body.is_base64,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"create file {body.path} in {body.repo}") from exc
+
+    return WorkspaceFileActionResponse(**result)
+
+
+@router.delete("/workspace/files", status_code=status.HTTP_200_OK)
+async def workspace_file_delete(
+    body: WorkspaceFileDeleteRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> WorkspaceFileActionResponse:
+    """Удаляет файл из репозитория (404 если не найден)."""
+    await _binding_for_repo(db, body.repo, principal, caller_domain)
+    owner, _, name = body.repo.partition("/")
+
+    from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
+    try:
+        adapter = build_adapter()
+        result = adapter.delete_file(
+            owner, name, body.path,
+            branch=body.branch or "",
+            message=body.message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"delete file {body.path} in {body.repo}") from exc
+
+    return WorkspaceFileActionResponse(**result)
+
+
+@router.post("/workspace/files/move", status_code=status.HTTP_200_OK)
+async def workspace_file_move(
+    body: WorkspaceFileMoveRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+) -> WorkspaceFileActionResponse:
+    """Перемещает/переименовывает файл (409 target занят, 404 source не найден)."""
+    await _binding_for_repo(db, body.repo, principal, caller_domain)
+    owner, _, name = body.repo.partition("/")
+
+    from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
+    try:
+        adapter = build_adapter()
+        result = adapter.move_file(
+            owner, name, body.source_path, body.target_path,
+            branch=body.branch or "",
+            message=body.message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"move {body.source_path} → {body.target_path} in {body.repo}") from exc
+
+    return WorkspaceFileActionResponse(**result)
+
+
+# ── COS-118: Workspace Pipeline Discovery ────────────────────────────────
+
+# Пути, сканируемые для обнаружения пайплайнов
+_PIPELINE_ROOTS: tuple[str, ...] = (
+    ".woodpecker.yaml",
+    ".woodpecker.yml",
+    ".woodpecker/.yaml",   # отсеется — не файл, но оставляем для ясности
+    ".pipeline.yaml",
+    ".pipeline.yml",
+)
+_WOODPECKER_DIR = ".woodpecker"
+_WOODPECKER_EXTS = (".yaml", ".yml")
+
+
+def _extract_step_names(yaml_doc: dict) -> list[str]:
+    """Извлечь имена шагов из YAML-документа pipeline.
+
+    Поддерживает:
+      - Woodpecker v1 (map): pipeline: { build: {...}, test: {...} }
+        → имена = ключи словаря
+      - Woodpecker v2 (list): steps: [ { name: "build" }, { name: "test" } ]
+        → имена = item["name"]
+      - Generic: pipeline: { stages: [ { steps: [ { name } ] } ] }
+    """
+    if not isinstance(yaml_doc, dict):
+        return []
+
+    def _name_of(step: dict) -> str:
+        return str(step.get("name", step.get("id", "?")))
+
+    # Woodpecker v1/v2: top-level "pipeline" or "steps" key
+    steps = yaml_doc.get("steps")
+    if steps is None:
+        steps = yaml_doc.get("pipeline")
+
+    if isinstance(steps, dict):
+        # v1: pipeline: { build: {...}, test: {...} } — keys are step names
+        # But values could be config dicts → use key as name
+        return list(steps.keys())
+    if isinstance(steps, list):
+        return [_name_of(s) for s in steps if isinstance(s, dict)]
+
+    # Nested: pipeline: { stages: [ { steps: [...] } ] }
+    pipe = yaml_doc.get("pipeline")
+    if isinstance(pipe, dict):
+        inner = pipe.get("steps") or pipe.get("stages")
+        if isinstance(inner, list):
+            return [_name_of(s) for s in inner if isinstance(s, dict)]
+        if isinstance(inner, dict):
+            return list(inner.keys())
+
+    return []
+
+
+def _parse_pipeline_yaml(content: str) -> tuple[str, list[str]]:
+    """Парсинг YAML-файла пайплайна. Возвращает (format, step_names).
+
+    Невалидный YAML → ("invalid", []) — толерантность, не 500.
+    """
+    try:
+        doc = yaml.safe_load(content)
+    except yaml.YAMLError:
+        return "invalid", []
+    if doc is None:
+        return "invalid", []
+    if not isinstance(doc, dict):
+        return "invalid", []
+    step_names = _extract_step_names(doc)
+    return "yaml", step_names
+
+
+def _discover_pipelines(
+    adapter: Any, owner: str, name: str, branch: str,
+) -> list[WorkspacePipelineSummary]:
+    """COS-118/COS-127: обнаружение pipeline-конфигов репозитория.
+
+    Возвращает список с is_default по порядку обнаружения.
+    name — имя из discovery (COS-118), path — путь конфига для
+    repo.config_file (COS-127). Исключения адаптера пробрасываются.
+    """
+    tree = adapter.get_tree(owner, name, ref=branch, recursive=True)
+    head = adapter.get_commit(owner, name, branch)
+    head_ref = head.sha
+
+    # Строим индекс: path → blob entry
+    blob_map: dict[str, object] = {}
+    for e in tree:
+        if e.type == "blob":
+            blob_map[e.path] = e
+
+    pipelines: list[WorkspacePipelineSummary] = []
+    seen_names: set[str] = set()
+
+    def _add_pipeline(pname: str, path: str, fmt: str, steps: list[str]) -> None:
+        if pname in seen_names:
+            return
+        seen_names.add(pname)
+        pipelines.append(WorkspacePipelineSummary(
+            name=pname, path=path, format=fmt,
+            is_default=(len(pipelines) == 0),
+            step_names=steps,
+        ))
+
+    # ── Сканирование корневых файлов ──
+    for root_path in (".woodpecker.yaml", ".woodpecker.yml", ".pipeline.yaml", ".pipeline.yml"):
+        entry = blob_map.get(root_path)
+        if entry is not None:
+            try:
+                content, _ = adapter.read_file(owner, name, root_path, ref=head_ref)
+            except (ValueError, LookupError):
+                continue
+            fmt, steps = _parse_pipeline_yaml(content)
+            pname = root_path.rsplit(".", 1)[0]  # ".woodpecker" / ".pipeline"
+            _add_pipeline(pname, root_path, fmt, steps)
+
+    # ── Сканирование папки .woodpecker/ ──
+    for path, entry in blob_map.items():
+        if path.startswith(f"{_WOODPECKER_DIR}/") and path.endswith(_WOODPECKER_EXTS):
+            try:
+                content, _ = adapter.read_file(owner, name, path, ref=head_ref)
+            except (ValueError, LookupError):
+                continue
+            fmt, steps = _parse_pipeline_yaml(content)
+            # Имя: "deploy" из ".woodpecker/deploy.yaml"
+            base = path.rsplit("/", 1)[-1]  # "deploy.yaml"
+            pname = base.rsplit(".", 1)[0]  # "deploy"
+            _add_pipeline(pname, path, fmt, steps)
+
+    return pipelines
+
+
+@router.get("/workspace/pipelines", response_model=WorkspacePipelineListResponse)
+async def workspace_pipelines_list(
+    repo: str = Query(..., min_length=1),
+    branch: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+    x_cosmo_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+) -> WorkspacePipelineListResponse:
+    """Обнаружение пайплайнов репозитория.
+
+    GET /api/v1/repos/workspace/pipelines?repo=owner/name&branch=main
+    """
+    _validate_or_400(repo=repo)
+
+    app, binding = await _binding_for_repo(db, repo, principal, x_cosmo_domain)
+    owner, _, name = repo.partition("/")
+    resolved_branch = branch or binding.default_branch or "main"
+
+    try:
+        adapter = build_adapter()
+        pipelines = _discover_pipelines(adapter, owner, name, resolved_branch)
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"tree of {repo}@{resolved_branch}") from exc
+
+    return WorkspacePipelineListResponse(
+        pipelines=pipelines,
+        default_pipeline=pipelines[0].name if pipelines else None,
+    )
+
+
+# ── COS-123: Pre-flight Quality Gate ─────────────────────────────────────────
+
+
+@router.post("/workspace/gate-check", response_model=WorkspaceGateVerdictResponse)
+async def workspace_gate_check(
+    body: WorkspaceGateCheckRequest,
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+    x_cosmo_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+) -> WorkspaceGateVerdictResponse:
+    """Пре-флайт проверка: сканирование файлов на секреты и запрещённые паттерны.
+
+    POST /api/v1/repos/workspace/gate-check
+    Body: { repo, branch, files: [{ path, content }] }
+    Response: { verdict: "PASS"|"WARN"|"BLOCK", violations, summary }
+    """
+    _validate_or_400(repo=body.repo, branch=body.branch or "main")
+
+    # Ghost-check: verify repo binding exists
+    _app, _binding = await _binding_for_repo(
+        db, body.repo, principal, x_cosmo_domain,
+    )
+
+    from orchestrator.cosmo.domain.gate_verdict import (
+        scan_file,
+        compute_verdict,
+        Violation,
+    )
+
+    all_violations: list[Violation] = []
+    for f in body.files:
+        all_violations.extend(scan_file(f.path, f.content))
+
+    verdict = compute_verdict(all_violations)
+
+    return WorkspaceGateVerdictResponse(
+        verdict=verdict,
+        violations=[
+            WorkspaceGateViolation(
+                path=v.path,
+                rule_id=v.rule_id,
+                severity=v.severity,
+                message=v.message,
+                line_number=v.line_number,
+                snippet=v.snippet,
+            )
+            for v in all_violations
+        ],
+        summary={
+            "total": len(all_violations),
+            "block": sum(1 for v in all_violations if v.severity == "BLOCK"),
+            "warn": sum(1 for v in all_violations if v.severity == "WARN"),
+        },
+    )
+
+
+# ── COS-125: Workspace Compare (tree snapshot diff) ──────────────────────────
+
+
+def _validate_compare_ref(ref: str) -> None:
+    """ref сравнения — branch/tag/sha. Кривой ref → 400 (не 500)."""
+    from orchestrator.cosmo.domain.workspace import (
+        validate_branch, validate_head_sha,
+    )
+    try:
+        validate_branch(ref)
+        return
+    except WorkspaceContractError:
+        pass
+    try:
+        validate_head_sha(ref)
+    except WorkspaceContractError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid ref: {ref!r}",
+        ) from exc
+
+
+@router.get("/workspace/compare", response_model=WorkspaceCompareResponse)
+async def workspace_compare(
+    repo: str = Query(..., description="owner/repo"),
+    base: str = Query(..., description="Base ref (branch/tag/sha)"),
+    head: str = Query(..., description="Head ref (branch/tag/sha)"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+    x_cosmo_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+) -> WorkspaceCompareResponse:
+    """Сравнение двух Git tree snapshot-ов (клиентский diff).
+
+    GET /api/v1/repos/workspace/compare?repo=owner/name&base=main&head=feature
+
+    base == head → 400; неизвестный ref → 404; >500 файлов → 413.
+    Патчи строятся локально (difflib); бинарные файлы → isBinary=true,
+    patch=null. base/head в ответе — разрешённые commit SHA.
+    """
+    _validate_or_400(repo=repo)
+    _validate_compare_ref(base)
+    _validate_compare_ref(head)
+    if base == head:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="base and head must be different refs",
+        )
+
+    _app, _binding = await _binding_for_repo(db, repo, principal, x_cosmo_domain)
+    owner, _, name = repo.partition("/")
+
+    try:
+        adapter = build_adapter()
+        result = adapter.compare_refs(owner, name, base, head)
+    except GiteaCompareLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"compare {repo} {base}..{head}") from exc
+
+    files = [
+        WorkspaceCompareFile(
+            path=f.path,
+            old_path=f.old_path,
+            status=f.status,
+            additions=f.additions,
+            deletions=f.deletions,
+            patch=f.patch,
+            is_binary=f.is_binary,
+            truncated=f.truncated,
+        )
+        for f in result.files
+    ]
+    return WorkspaceCompareResponse(
+        base=result.base_sha,
+        head=result.head_sha,
+        files=files,
+        total_additions=sum(f.additions for f in files),
+        total_deletions=sum(f.deletions for f in files),
+        files_changed=len(files),
+    )
+
+
+# ── COS-132: Full repository security scan & SARIF export ────────────────────
+
+
+@router.post("/workspace/gate-scan", response_model=WorkspaceGateScanResponse)
+async def workspace_gate_scan(
+    body: WorkspaceGateScanRequest,
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(require_principal()),
+    x_cosmo_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+):
+    """Полный аудит безопасности дерева репозитория/ветки.
+
+    POST /api/v1/repos/workspace/gate-scan
+    Body: { repo, ref?, maxFiles?, exportFormat? }
+
+    ref пуст → default branch binding'а. Дерево берётся через
+    resolve_ref + get_tree_by_sha (COS-125). Файлы > maxFiles → 413.
+    exportFormat="sarif" → `application/sarif+json` (SARIF 2.1.0).
+    """
+    _validate_or_400(repo=body.repo)
+    if body.ref:
+        _validate_compare_ref(body.ref)
+
+    _app, binding = await _binding_for_repo(
+        db, body.repo, principal, x_cosmo_domain,
+    )
+    owner, _, name = body.repo.partition("/")
+    resolved_ref = body.ref or binding.default_branch or "main"
+
+    from orchestrator.cosmo.domain.gate_verdict import (
+        compute_verdict,
+        scan_tree,
+        to_sarif,
+    )
+
+    started = time.perf_counter()
+    try:
+        adapter = build_adapter()
+        commit_sha = adapter.resolve_ref(owner, name, resolved_ref)
+        tree = adapter.get_tree_by_sha(owner, name, commit_sha, recursive=True)
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"tree of {body.repo}@{resolved_ref}") from exc
+
+    blob_entries = [e for e in tree if getattr(e, "type", "blob") == "blob"]
+    if len(blob_entries) > body.max_files:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=(
+                f"Repository {body.repo}@{resolved_ref} has "
+                f"{len(blob_entries)} files (maxFiles={body.max_files})"
+            ),
+        )
+
+    def _blob_loader(entry):
+        """bytes blob-а: git/blobs по sha, fallback contents/{path}."""
+        try:
+            return adapter.get_blob(owner, name, entry.sha)
+        except (LookupError, ValueError):
+            try:
+                text, _ = adapter.read_file(
+                    owner, name, entry.path, ref=commit_sha,
+                )
+                return text
+            except (LookupError, ValueError):
+                return None
+
+    scan = scan_tree(tree, _blob_loader)
+    verdict = compute_verdict(scan.violations)
+    duration_ms = int((time.perf_counter() - started) * 1000)
+
+    if body.export_format == "sarif":
+        sarif = to_sarif(scan.violations)
+        sarif["runs"][0]["properties"] = {
+            "repo": body.repo,
+            "ref": resolved_ref,
+            "commitSha": commit_sha,
+            "scannedFiles": scan.scanned_files,
+            "cleanFiles": scan.clean_files,
+            "skippedFiles": scan.skipped_files,
+            "verdict": verdict,
+        }
+        return JSONResponse(content=sarif, media_type="application/sarif+json")
+
+    return WorkspaceGateScanResponse(
+        scanned_files=scan.scanned_files,
+        clean_files=scan.clean_files,
+        block_violations=sum(
+            1 for v in scan.violations if v.severity == "BLOCK"
+        ),
+        warn_violations=sum(
+            1 for v in scan.violations if v.severity == "WARN"
+        ),
+        verdict=verdict,
+        duration_ms=duration_ms,
+        violations=[
+            WorkspaceGateViolation(
+                path=v.path,
+                rule_id=v.rule_id,
+                severity=v.severity,
+                message=v.message,
+                line_number=v.line_number,
+                snippet=v.snippet,
+            )
+            for v in scan.violations
+        ],
     )

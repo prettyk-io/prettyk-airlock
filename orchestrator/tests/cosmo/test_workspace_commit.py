@@ -23,9 +23,9 @@ if str(_orch) not in sys.path:
     sys.path.insert(0, str(_orch))
 
 from orchestrator.cosmo.domain.workspace import (
-    FileChange,
-    WorkspaceCommitRequest,
-    WorkspaceCommitResponse,
+    WorkspaceContentsFileChange,
+    WorkspaceContentsCommitRequest,
+    WorkspaceContentsCommitResponse,
     WorkspaceContractError,
     validate_head_sha,
     validate_tree_path,
@@ -39,9 +39,9 @@ SHA = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a7b8c9d0"
 
 class TestCommitDto:
     def test_request_minimal_single_file(self):
-        r = WorkspaceCommitRequest(
+        r = WorkspaceContentsCommitRequest(
             repo="org/app", branch="main", message="feat: add x",
-            changes=[FileChange(path="src/x.py", content="print(1)")],
+            changes=[WorkspaceContentsFileChange(path="src/x.py", content="print(1)")],
         )
         assert r.repo == "org/app"
         assert r.changes[0].action == "upsert"
@@ -55,42 +55,42 @@ class TestCommitDto:
             ],
             "expectedHeadSha": SHA,
         }
-        r = WorkspaceCommitRequest.model_validate_json(json.dumps(payload))
+        r = WorkspaceContentsCommitRequest.model_validate_json(json.dumps(payload))
         assert r.expected_head_sha == SHA
         assert r.changes[0].base_blob_sha == SHA
         assert r.changes[1].action == "delete"
 
     def test_request_extra_forbidden(self):
         with pytest.raises(ValidationError):
-            WorkspaceCommitRequest(
+            WorkspaceContentsCommitRequest(
                 repo="org/app", branch="main", message="x",
-                changes=[FileChange(path="x.py", content="y")],
+                changes=[WorkspaceContentsFileChange(path="x.py", content="y")],
                 hack=1,
             )
 
     def test_empty_changes_rejected(self):
         with pytest.raises(ValidationError):
-            WorkspaceCommitRequest(
+            WorkspaceContentsCommitRequest(
                 repo="org/app", branch="main", message="x",
                 changes=[],
             )
 
     def test_empty_message_rejected(self):
         with pytest.raises(ValidationError):
-            WorkspaceCommitRequest(
+            WorkspaceContentsCommitRequest(
                 repo="org/app", branch="main", message="",
-                changes=[FileChange(path="x.py", content="y")],
+                changes=[WorkspaceContentsFileChange(path="x.py", content="y")],
             )
 
     def test_traversal_in_change_path_rejected(self):
         with pytest.raises(ValidationError):
-            WorkspaceCommitRequest(
+            WorkspaceContentsCommitRequest(
                 repo="org/app", branch="main", message="x",
-                changes=[FileChange(path="../secrets.yaml", content="evil")],
+                changes=[WorkspaceContentsFileChange(path="../secrets.yaml", content="evil")],
             )
 
     def test_response_dump_alias(self):
-        r = WorkspaceCommitResponse(
+        r = WorkspaceContentsCommitResponse(
             commit_sha=SHA, branch="main", tree_sha=SHA,
         )
         d = json.loads(r.model_dump_json(by_alias=True))
@@ -98,7 +98,7 @@ class TestCommitDto:
 
     def test_file_change_base_blob_sha_camel_alias(self):
         """base_blob_sha принимается и как snake, и как camel (baseBlobSha)."""
-        r = WorkspaceCommitRequest.model_validate_json(json.dumps({
+        r = WorkspaceContentsCommitRequest.model_validate_json(json.dumps({
             "repo": "org/app", "branch": "main", "message": "x",
             "changes": [{"path": "f.py", "content": "y", "baseBlobSha": SHA}],
         }))

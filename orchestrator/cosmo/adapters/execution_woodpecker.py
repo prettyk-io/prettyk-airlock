@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
 _LOOKUP_TTL_SEC = 300.0
 
+# COS-127: repo.config_file — глобальная настройка репозитория; свап
+# выбранного конфига сериализуем в процессе API (cosmo-api — один инстанс).
+_CONFIG_SWAP_LOCK = threading.Lock()
+
 
 class JobStatus(str, Enum):
     """Woodpecker pipeline statuses (model.StatusValue, v3.5)."""
@@ -85,8 +89,13 @@ class ExecutionAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def submit_run(self, repo_owner: str, repo_name: str, branch: str = "main") -> dict:
-        """Создать и запустить пайплайн. Возвращает handle."""
+    def submit_run(self, repo_owner: str, repo_name: str, branch: str = "main",
+                   config_file: str | None = None) -> dict:
+        """Создать и запустить пайплайн. Возвращает handle.
+
+        config_file — путь к выбранному конфигу пайплайна (COS-127);
+        None → default-конфиг репозитория (backward-compatible).
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -126,6 +135,9 @@ class WoodpeckerAdapter(ExecutionAdapter):
 
     def _post(self, path: str, **kwargs: Any):
         return self._session.post(f"{self._base}{path}", timeout=DEFAULT_TIMEOUT, **kwargs)
+
+    def _patch(self, path: str, **kwargs: Any):
+        return self._session.patch(f"{self._base}{path}", timeout=DEFAULT_TIMEOUT, **kwargs)
 
     # ── COS-097: repo_id resolution (v3.5: только числовой id) ──
 
@@ -193,17 +205,45 @@ class WoodpeckerAdapter(ExecutionAdapter):
 
         return yaml.dump(pipeline, default_flow_style=False, allow_unicode=True)
 
-    def submit_run(self, repo_owner: str, repo_name: str, branch: str = "main") -> dict:
+    def submit_run(self, repo_owner: str, repo_name: str, branch: str = "main",
+                   config_file: str | None = None) -> dict:
         """POST /api/repos/{repo_id}/pipelines, тело PipelineOptions.
 
         Тело (не query): v3.5 CreatePipeline декодирует JSON
         PipelineOptions {branch, variables}; query-параметр игнорируется.
+
+        COS-127: v3.5 не принимает имя конфига в PipelineOptions — конфиг
+        берётся из repo.config_file. Поэтому при config_file задан:
+          GET repo → original config_file;
+          PATCH repo.config_file = выбранный путь;
+          POST pipeline (сервер читает конфиг СИНХРОННО в этом запросе);
+          PATCH repo.config_file обратно (finally).
+        Пустой original → default-порядок Woodpecker (.woodpecker/,
+        .woodpecker.yaml, .woodpecker.yml).
         """
         repo_id = self.resolve_repo_id(repo_owner, repo_name)
-        r = self._post(
-            f"/api/repos/{repo_id}/pipelines",
-            json={"branch": branch},
-        )
+        if config_file:
+            with _CONFIG_SWAP_LOCK:
+                original = self._get_repo_config_by_id(repo_id)
+                if original == config_file:
+                    return self._create_pipeline(repo_id, repo_owner, repo_name, branch)
+                self._patch_repo_config(repo_id, config_file)
+                try:
+                    return self._create_pipeline(repo_id, repo_owner, repo_name, branch)
+                finally:
+                    try:
+                        self._patch_repo_config(repo_id, original)
+                    except Exception:  # noqa: BLE001
+                        logger.error(
+                            "Failed to restore config_file for %s/%s "
+                            "(was %r, selected %r) — repo config may be stale",
+                            repo_owner, repo_name, original, config_file,
+                        )
+        return self._create_pipeline(repo_id, repo_owner, repo_name, branch)
+
+    def _create_pipeline(self, repo_id: int, repo_owner: str, repo_name: str,
+                         branch: str) -> dict:
+        r = self._post(f"/api/repos/{repo_id}/pipelines", json={"branch": branch})
         if r.status_code in (401, 403):
             raise PermissionError(
                 f"Woodpecker denied submit for {repo_owner}/{repo_name} "
@@ -219,6 +259,28 @@ class WoodpeckerAdapter(ExecutionAdapter):
             "repo_name": repo_name,
             "branch": branch,
         }
+
+    # ── COS-127: repo config_file (выбор pipeline-конфига) ──
+
+    def get_repo_config(self, repo_owner: str, repo_name: str) -> str:
+        """Текущий repo.config_file ("" → default-порядок Woodpecker)."""
+        return self._get_repo_config_by_id(self.resolve_repo_id(repo_owner, repo_name))
+
+    def _get_repo_config_by_id(self, repo_id: int) -> str:
+        r = self._get(f"/api/repos/{repo_id}")
+        if r.status_code == 404:
+            raise LookupError(f"Woodpecker repo id={repo_id} not found")
+        r.raise_for_status()
+        return str((r.json() or {}).get("config_file") or "")
+
+    def _patch_repo_config(self, repo_id: int, config_file: str) -> None:
+        r = self._patch(f"/api/repos/{repo_id}", json={"config_file": config_file})
+        if r.status_code in (401, 403):
+            raise PermissionError(
+                f"Woodpecker denied repo settings update for id={repo_id} "
+                f"(HTTP {r.status_code}) — нужен token с admin-доступом к repo"
+            )
+        r.raise_for_status()
 
     def get_pipeline(self, handle: dict) -> dict:
         """Полный pipeline JSON (с workflows[].steps[] деревом)."""
@@ -314,6 +376,54 @@ class WoodpeckerAdapter(ExecutionAdapter):
         repo_id = self._repo_ref(handle)
         r = self._post(f"/api/repos/{repo_id}/pipelines/{handle['number']}/cancel")
         return r.status_code in (200, 202, 204)
+
+    # ── COS-133: run lifecycle (detail / cancel / rerun) ──
+
+    def get_pipeline_detail(self, handle: dict) -> dict:
+        """Актуальный статус, шаги и тайминги пайплайна.
+
+        v3.5: GET /api/repos/{repo_id}/pipelines/{number} отдаёт
+        workflows[].steps[] c state/started/finished/exit_code.
+        """
+        return self.get_pipeline(handle)
+
+    def cancel_pipeline(self, handle: dict) -> dict:
+        """Отмена пайплайна (v3.5 POST .../pipelines/{number}/cancel).
+
+        В отличие от cancel_run(bool) — честный PermissionError при
+        auth-отказе и raise_for_status на прочих ошибках, чтобы route
+        отдал осмысленный HTTP-код, а не молчаливый False.
+        """
+        repo_id = self._repo_ref(handle)
+        r = self._post(f"/api/repos/{repo_id}/pipelines/{handle['number']}/cancel")
+        if r.status_code in (401, 403):
+            raise PermissionError(
+                f"Woodpecker denied cancel for pipeline #{handle.get('number')} "
+                f"(HTTP {r.status_code}) — нужен token с push-доступом к repo"
+            )
+        r.raise_for_status()
+        return {"number": handle.get("number"), "cancelled": True}
+
+    def rerun_pipeline(self, handle: dict) -> dict:
+        """Повторный запуск пайплайна (v3.5 POST .../pipelines/{number}).
+
+        Сервер создаёт НОВЫЙ пайплайн по тому же коммиту/конфигу;
+        возвращаем handle-совместимый dict (job_id/number/repo_id).
+        """
+        repo_id = self._repo_ref(handle)
+        r = self._post(f"/api/repos/{repo_id}/pipelines/{handle['number']}")
+        if r.status_code in (401, 403):
+            raise PermissionError(
+                f"Woodpecker denied rerun for pipeline #{handle.get('number')} "
+                f"(HTTP {r.status_code}) — нужен token с push-доступом к repo"
+            )
+        r.raise_for_status()
+        data = r.json()
+        return {
+            "job_id": data["id"],
+            "number": data["number"],
+            "repo_id": repo_id,
+        }
 
     def close(self) -> None:
         self._session.close()

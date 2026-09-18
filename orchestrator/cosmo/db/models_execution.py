@@ -112,6 +112,9 @@ class WorkspaceRunRow(ExecutionBase):
     wp_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     wp_pipeline_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # COS-133: rerun link — запуск, из которого сделан перезапуск
+    original_run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     tracking_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(

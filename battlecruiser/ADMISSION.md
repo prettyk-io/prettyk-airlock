@@ -4,7 +4,7 @@
 > **Судно:** Battlecruiser  
 > **Владелец экосистемы:** Максим  
 > **Капитан:** Cosmo  
-> **Основная модель капитана:** GPT-5.6 Luna Pro (`openrouter/openai/gpt-5.6-luna-pro`)  
+> **Основная модель капитана:** DeepSeek V4.1 Flash (`openrouter/deepseek/deepseek-v4.1-flash`)  
 > **Вспомогательный контур:** Gemini — discovery, design и polish проверенных документов  
 > **Соавтор customer/SecOps-контекста:** Keeper  
 > **Первичная запись:** 30 августа 2026

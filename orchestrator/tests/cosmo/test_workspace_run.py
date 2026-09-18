@@ -70,13 +70,16 @@ class FakeWoodpecker:
         self._submit_count = 0
         self.submit_error: Optional[Exception] = None
         self.resolve_repo_error: Optional[Exception] = None
+        self.last_config_file: Optional[str] = None
 
     def submit_run(self, repo_owner: str, repo_name: str,
-                   branch: str = "main") -> dict:
+                   branch: str = "main",
+                   config_file: Optional[str] = None) -> dict:
         if self.submit_error:
             raise self.submit_error
         if self.resolve_repo_error:
             raise self.resolve_repo_error
+        self.last_config_file = config_file
         number = self.next_number
         pid = self.next_pipeline_id
         self.next_number += 1

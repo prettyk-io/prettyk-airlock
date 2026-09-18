@@ -1623,12 +1623,14 @@ are accepted; UI is the next product surface.
 >
 > **Acceptance:** Web IDE может отображать список последних коммитов по ветке и историю изменений конкретного файла; пагинация и фильтр пути работают корректно; тесты проверяют DTO, адаптер, роут и ghost-изоляцию (404).
 
-## ⬜ READY — WORKSPACE FILE BLAME & ANNOTATION ENGINE (PK-DIR-008 §3 / PK-C-006.16)
+## ⏸️ BLOCKED — WORKSPACE FILE BLAME & ANNOTATION ENGINE (PK-DIR-008 §3 / PK-C-006.16)
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-117** | Boss | 6-8h | P2 | COS-116 | GET /api/v1/repos/workspace/blame: построчная аннотация файла (git blame) для Web IDE |
+| **COS-117** | Boss | 6-8h | P2 | Gitea ≥1.23 | GET /api/v1/repos/workspace/blame: построчная аннотация файла (git blame) для Web IDE |
 
+> **Blocker note (2026-09-06 Boss):** В Gitea 1.22.6 эндпоинт `/repos/{owner}/{repo}/blame/{filepath}` отсутствует (blame REST API появился только в Gitea ≥1.23). Прямой вызов CLI `git blame` на хосте нарушает суверенный decoupled-контракт ForgeAdapter. Задача запаркована до инфраструктурного апгрейда Gitea до 1.23+. Boss переключён на **COS-120**.
+>
 > **Scope:** (1) DTO `WorkspaceBlamePart` (commitSha: str, commitShortSha: str, authorName: str, authorEmail: str, committedAt: datetime, lines: list[str]) и `WorkspaceBlameResponse` (path: str, branch: str, parts: list[WorkspaceBlamePart]) в `domain/workspace.py` (camelCase, extra="forbid");
 > (2) Метод в `GiteaForgeAdapter` (`orchestrator/cosmo/adapters/forge_gitea.py`):
 > `get_file_blame(owner, repo, filepath, ref)` — запрос к Gitea API `/repos/{owner}/{repo}/blame/{filepath}?ref={ref}` с разбором структуры блоков коммитов и строк;
@@ -1640,13 +1642,13 @@ are accepted; UI is the next product surface.
 >
 > **Acceptance:** Web IDE при просмотре файла может получить построчную аннотацию коммитов (автор, хэш, дата, строки); тесты покрывают DTO, адаптер (включая мок Gitea blame API), роут, бинарные/отсутствующие файлы и ghost-изоляцию.
 
-## ⬜ READY — WORKSPACE PIPELINE DISCOVERY & METADATA ENGINE (PK-DIR-008 §3 / PK-C-006.17)
+## ✅ DONE (2026-09-06 Luna) — WORKSPACE PIPELINE DISCOVERY & METADATA ENGINE (PK-DIR-008 §3 / PK-C-006.17)
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-118** | Luna | 6-8h | P2 | COS-108 | GET /api/v1/repos/workspace/pipelines: обнаружение и валидация пайплайнов репозитория |
+| **COS-118** | Luna | 4h | P2 | COS-108 | GET /api/v1/repos/workspace/pipelines: обнаружение и валидация пайплайнов репозитория |
 
-> **Scope:** (1) DTO `WorkspacePipelineSummary` (name: str, path: str, format: str, isDefault: bool, stepNames: list[str]) и `WorkspacePipelineListResponse` (pipelines: list[WorkspacePipelineSummary], defaultPipeline: str | None) в `domain/workspace.py` (camelCase, extra="forbid");
+> **Scope:** (1) DTO `WorkspacePipelineSummary` (name, path, format, isDefault, stepNames) и `WorkspacePipelineListResponse` (pipelines, defaultPipeline) в `domain/workspace.py` (camelCase, extra="forbid");
 > (2) Маршрут `GET /api/v1/repos/workspace/pipelines` в `orchestrator/cosmo/api/routes/workspace.py`:
 > Параметры: `repo` (обязателен), `branch` (опционален, default HEAD);
 > (3) Механизм обнаружения:
@@ -1656,17 +1658,18 @@ are accepted; UI is the next product surface.
 > - чтение файлов через `ForgeAdapter.read_file`, безопасный парсинг `yaml.safe_load`, извлечение списка шагов (pipeline/steps);
 > - толерантность к битым/невалидным YAML-файлам (не падать 500, возвращать `format: "invalid"`, `stepNames: []` или пропускать с логированием);
 > (4) Безопасность: Bearer auth, domain ownership check, traversal guard, ghost 404;
-> (5) Unit + route тесты в `test_workspace_pipelines.py`.
+> (5) Unit + route тесты в `test_workspace_pipelines.py` (21 passed, suite gate: 2748 passed / 0 failed).
 >
-> **Acceptance:** Web IDE получает список всех доступных пайплайнов репозитория со списком шагов для выбора в UI перед запуском; тесты проверяют single-file конфигурации, multi-file `.woodpecker/`, битый YAML и ghost-изоляцию.
+> **Acceptance:** принято 6 сентября 2026 (Luna).
+> 21 passed в `test_workspace_pipelines.py`. Suite gate: 2748 passed / 0 failed.
 
-## ⬜ READY — WEB IDE BRANCH SWITCHER & CREATION FLOW (PK-DIR-008 §3 / PK-C-006.18)
+## ✅ DONE (2026-09-06 Flash) — WEB IDE BRANCH SWITCHER & CREATION FLOW (PK-DIR-008 §3 / PK-C-006.18)
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
 | **COS-119** | Flash | 6-8h | P1 | COS-113, COS-115 | Web IDE: переключение веток, создание feature-ветки и удаление через Workspace API |
 
-> **Scope:** (1) TypeScript типы в `D:\prettyk-ide\src\workspace\types.ts`: `WorkspaceBranchSummary` (name, commitSha, isDefault, isProtected), `WorkspaceBranchListResponse` (branches, defaultBranch);
+> **Scope:** (1) TypeScript типы в `D:\prettyk-ide\src\workspace\types.ts`: `WorkspaceBranchSummary` (name, sha, isDefault, isProtected), `WorkspaceBranchListResponse` (branches, defaultBranch);
 > (2) Методы клиента в `D:\prettyk-ide\src\workspace\client.ts`:
 > - `listBranches(repo: string): Promise<WorkspaceBranchListResponse>` (GET `/api/v1/repos/workspace/branches`);
 > - `createBranch(repo: string, branch: string, baseBranch: string): Promise<WorkspaceBranchSummary>` (POST `/api/v1/repos/workspace/branches`);
@@ -1676,10 +1679,330 @@ are accepted; UI is the next product surface.
 > - список веток с поиском/фильтрацией и бейджами `default` / `protected`;
 > - переключение ветки с обновлением URL query param `?branch=...` и перезагрузкой дерева файлов;
 > - диалог «Create branch» (ввод имени новой ветки, валидация, создание от текущей ветки и автоматический переход);
-> - обработка 409 коллизий и 400 защиты default-ветки с выводом понятного сообщения в UI;
-> (4) Vitest тесты: клиентские тесты в `client.test.ts` (покрытие GET, POST, DELETE, ошибки 409/400) + компонентные тесты селектора.
+> - удаление не-default веток (кнопка ×), обработка 409 коллизий и 400 защиты default-ветки;
+> (4) Vitest тесты: клиентские тесты в `client.test.ts` (14 passed) + `useRunLogsStream.test.tsx` (12 passed), всего 26/26 passed, `tsc -b` green.
 >
-> **Acceptance:** пользователь в Web IDE видит текущую ветку, может кликнуть на неё, выбрать другую ветку (дерево мгновенно обновляется) или создать новую feature-ветку от текущей без перезагрузки всей страницы.
+> **Acceptance:** принято 6 сентября 2026 (Flash).
+> Пользователь видит текущую ветку, открывает дропдаун, фильтрует, переключается (дерево перезагружается без полного ремаунта), создаёт и удаляет ветки.
+
+## ✅ DONE (2026-09-06 Boss) — WORKSPACE FILE ACTIONS & MUTATOR API (PK-DIR-008 §3 / PK-C-006.19)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-120** | Boss | 6-8h | P2 | COS-107 | POST/DELETE /api/v1/repos/workspace/files & /move: прямое создание, удаление и перемещение файлов с CAS |
+
+> **Scope:** (1) DTO `WorkspaceFileCreateRequest` (path, content, message?, baseBranch?, isBase64?), `WorkspaceFileDeleteRequest` (path, message?, branch?, lastCommitSha?), `WorkspaceFileMoveRequest` (sourcePath, targetPath, message?, branch?, lastCommitSha?) и `WorkspaceFileActionResponse` (commitSha, path, status) в `domain/workspace.py` (camelCase, extra="forbid");
+> (2) Методы в `GiteaForgeAdapter` (`orchestrator/cosmo/adapters/forge_gitea.py`):
+> `create_file`, `delete_file`, `move_file` — вызов Gitea Contents API `/repos/{owner}/{repo}/contents/{path}`;
+> (3) Эндпоинты в `orchestrator/cosmo/api/routes/workspace.py`:
+> `POST /api/v1/repos/workspace/files` (201/409/400),
+> `DELETE /api/v1/repos/workspace/files` (200/404),
+> `POST /api/v1/repos/workspace/files/move` (200/404/409);
+> (4) Безопасность: Bearer auth, domain ownership check через `_binding_for_repo`, traversal guard до вызова адаптера, ghost 404;
+> (5) Unit + route тесты в `test_workspace_files.py` (24/24 passed).
+> **Баг, найденный тестами:** 4 DTO использовались в аннотациях route-обработчиков, но не были импортированы; `from __future__ import annotations` скрывал ошибку при импорте модуля, но FastAPI превращал body в query-параметр → 422. Добавлен импорт — все тесты зелёные.
+>
+> **Acceptance:** принято 6 сентября 2026 (Boss).
+> 24/24 passed в `test_workspace_files.py`. Suite gate: 2821 passed / 1 failed / 17 skipped (единственный failure — pre-existing test_duplicate_trigger_no_duplicate_notification).
+
+## ✅ DONE (2026-09-06 Flash) — WEB IDE CODE SEARCH & GREP PALETTE (PK-DIR-008 §3 / PK-C-006.20)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-121** | Flash | 8-10h | P1 | COS-114 | Web IDE: модальная палитра поиска Ctrl+Shift+F с подсветкой вхождений и мгновенным переходом к строке |
+
+> **Scope:** (1) Метод клиента `client.searchWorkspace(repo, query, options)` с DTO `WorkspaceSearchResponse`;
+> (2) React-компонент `SearchPalette.tsx` — шорткат `Ctrl+Shift+F`, debounced поиск (300ms), переключатели Match Case/Regex/Subpath,
+> группировка по файлам с бейджем вхождений, сниппеты с подсветкой, клик → переход к строке в редакторе, индикатор «Showing 50 matches (more available)», красное сообщение при 400 (невалидный regex);
+> (3) Vitest тесты — клиентские + компонентные.
+>
+> **Acceptance:** принято 6 сентября 2026 (Flash).
+> 40/40 vitest passed, `tsc -b` green.
+
+## ✅ DONE (2026-09-18 Flash) — WEB IDE PIPELINE RUNNER DIALOG (PK-DIR-008 §3 / PK-C-006.21)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-122** | Flash | 6-8h | P1 | COS-118, COS-115 | Web IDE: селектор пайплайнов по кнопке ▶ Run, инспектор шагов и передача pipelineName в запуск |
+
+> **Scope:** (1) Метод клиента `client.listPipelines(repo, branch)` в `D:\prettyk-ide\src\workspace\client.ts` с DTO `WorkspacePipelineListResponse`;
+> (2) UI модалка/поповер `PipelineRunModal.tsx` в `D:\prettyk-ide\src\cosmo\ide\`:
+> - при клике на стрелку рядом с кнопкой `▶ Run` открывается селектор обнаруженных пайплайнов (из COS-118);
+> - превью шагов выбранного пайплайна (названия шагов, тип);
+> - выбор дефолтного пайплайна или любого из обнаруженных в `.woodpecker/*.yaml`;
+> - кнопка запуска вызывает `client.runWorkspace(repo, branch, headSha, selectedPipelineName)`;
+> - закрытие модалки с переходом в открывшийся Terminal Drawer;
+> (3) Vitest тесты: проверка выбора пайплайна, передачи `pipelineName` в API и дефолтного fallback.
+>
+> **Acceptance:** принято 18 сентября 2026 (Flash).
+> `tsc -b` — 0 ошибок; `vitest run` — 54/54 passed (4 файла).
+>
+> **Контрактный нюанс:** дефолтный `▶ Run` не отправляет `pipelineName` (`JSON.stringify` отбрасывает `undefined`) и сохраняет совместимость с текущим BE COS-108. Выбор конкретного pipeline через `▾` отправляет `pipelineName`; его исполнение требует отдельного BE-контракта COS-127.
+
+## ✅ DONE (2026-09-06 Luna) — WORKSPACE PRE-FLIGHT QUALITY GATE VERDICT (PK-DIR-008 §3 / PK-C-006.22)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-123** | Luna | 5h | P2 | COS-110, COS-107 | POST /api/v1/repos/workspace/gate-check: пре-флайт сканирование черновиков на секреты и запрещённые паттерны |
+
+> **Scope:** (1) DTO `WorkspaceGateCheckRequest`, `WorkspaceGateViolation`, `WorkspaceGateVerdictResponse` в `domain/workspace.py`;
+> (2) Модуль `domain/gate_verdict.py` — verdict engine (7 BLOCK + 3 WARN rules: RSA/OPENSSH ключи, токены AWS/OpenBao/GitHub/Gitea, пароли, .env/.pem/.key/credentials.json);
+> (3) Роут `POST /api/v1/repos/workspace/gate-check` в `routes/workspace.py` — сканирование diff/draft, вердикт PASS/WARN/BLOCK с точным указанием пути и строки;
+> (4) Безопасность: Bearer auth, domain ownership check, traversal guard;
+> (5) Unit + route тесты в `test_workspace_gate_check.py` (50/50 passed).
+>
+> **Acceptance:** принято 6 сентября 2026 (Luna).
+> 50/50 passed. Suite gate: 2772/0.
+
+## ✅ DONE (2026-09-18 Boss) — WORKSPACE COMMIT API: MULTI-FILE ATOMIC COMMIT (PK-DIR-008 §3 / PK-C-006.23)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-124** | Boss | 8-10h | P1 | COS-120, COS-123 | POST /api/v1/repos/workspace/commits: атомарный коммит нескольких файлов через bulk Contents API (Gitea 1.22.6) |
+
+> **Scope:** (1) DTO `WorkspaceCommitRequest` (repo: str, branch: str, message: str, authorName: str | None, authorEmail: str | None, fileChanges: list[WorkspaceFileChange]) где `WorkspaceFileChange` = (path: str, content: str | None, action: Literal["create", "update", "delete"]) и `WorkspaceCommitResponse` (sha: str, htmlUrl: str, authoredAt: datetime, filesChanged: int) в `domain/workspace.py` (camelCase, extra="forbid");
+> (2) Метод в `GiteaForgeAdapter` (`orchestrator/cosmo/adapters/forge_gitea.py`):
+> `commit_changes(owner, repo, branch, message, fileChanges, authorName, authorEmail)` — реальный Gitea 1.22.6 bulk Contents API:
+> POST `/repos/{owner}/{repo}/contents` с `ChangeFilesOptions` / `repoChangeFiles` (`operation ∈ {create, update, delete}`); content кодируется base64, `sha` обязателен для update/delete;
+> ответ `FilesResponse` → `commit.{sha, created, html_url}` + `files[]`; create/update/delete выполняются одной атомарной операцией;
+> (3) Эндпоинт `POST /api/v1/repos/workspace/commits` в `orchestrator/cosmo/api/routes/workspace.py`:
+> - Параметры: body = WorkspaceCommitRequest;
+> - Пре-флайт gate-check: вызов gate_verdict.check() на fileChanges перед деревом (если BLOCK → 422 с violations);
+> - 400 при пустом fileChanges[] или path traversal;
+> - 404 при несуществующей ветке;
+> - 409 при конфликте ref (конкурентный коммит — передавать SHA для retry);
+> (4) Безопасность: Bearer auth, domain ownership check, traversal guard на всех путях, ghost 404;
+> (5) Unit + route тесты в `test_workspace_commits_api.py` (~25 тестов: DTO validation, create/update/delete комбинации, gate BLOCK, empty changes, traversal, ghost).
+>
+> **Acceptance:** принято 18 сентября 2026 (Boss).
+> `test_workspace_commits_api.py`: 35 passed; legacy COS-107: 16 passed; 2 live skipped.
+> Suite gate: 2857 passed / 0 failed / 17 skipped.
+> Web IDE может за один запрос создать, изменить и удалить несколько файлов в одном атомарном коммите; gate BLOCK возвращает 422 до вызова forge; конкурентный commit/CAS drift возвращает 409.
+>
+> **Scope deviation:** Git Trees pipeline из исходной карточки невыполним в Gitea 1.22.6 (`POST /git/trees` → 404; подтверждено swagger v1.22.6). Принят эквивалентный атомарный bulk Contents API. Пустой репозиторий без commit остаётся честным `404`, как в legacy COS-107.
+
+> **Файлы:** `domain/workspace.py`, `adapters/forge_gitea.py`, `api/routes/workspace.py`, `tests/cosmo/test_workspace_commits_api.py`, `tests/cosmo/test_workspace_commit.py` (renames).
+
+## ✅ DONE (2026-09-18 Luna) — WORKSPACE COMPARE API: TREE SNAPSHOT DIFF (PK-DIR-008 §3 / PK-C-006.24)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-125** | Luna | 5-6h | P2 | COS-116 | GET /api/v1/repos/workspace/compare: сравнение двух Git tree snapshot-ов без server-side diff |
+
+> **Scope:** (1) DTO `WorkspaceCompareFile` (path, oldPath?, status: `added | modified | deleted | renamed`, additions, deletions, patch?, isBinary) и `WorkspaceCompareResponse` (base, head, files, totalAdditions, totalDeletions, filesChanged) в `domain/workspace.py` (camelCase, extra="forbid");
+> (2) Метод `GiteaForgeAdapter.compare_refs(owner, repo, base, head)`:
+> - разрешить оба ref в commit SHA через существующий commit API;
+> - получить recursive tree snapshot для каждого commit через `GET /api/v1/repos/{owner}/{repo}/git/trees/{commit_sha}?recursive=1`;
+> - сравнить `{path -> blob_sha}` локально;
+> - загрузить содержимое только добавленных/удалённых/изменённых blob-ов через Git Blobs API либо существующий `contents/{path}?ref=` fallback;
+> - построить unified patch локально через `difflib.unified_diff()`;
+> - бинарные файлы вернуть с `isBinary=true` и `patch=null`; rename определить по совпадающему blob SHA (иначе `deleted + added`);
+> (3) Эндпоинт `GET /api/v1/repos/workspace/compare` в `orchestrator/cosmo/api/routes/workspace.py`:
+> параметры `repo` (обязателен), `base`, `head`; `404` для неизвестного ref, `400` для `base == head`;
+> (4) Безопасность: Bearer auth, domain ownership check, ghost 404, traversal guard; лимиты — до 500 файлов и ограничение размера blob;
+> (5) Unit + route тесты в `test_workspace_compare.py` (~20 тестов: snapshots, add/modify/delete, rename по SHA, binary, empty compare, unknown ref, limits, ghost).
+>
+> **Механизм (утв. Максимом):** client-side snapshot compare через Gitea Git API. Дополнительно к scope: поле `truncated` (blob >2 MiB не читается), fallback `contents/{path}?ref=` при отказе Git Blobs API.
+>
+> **Acceptance:** принято 18 сентября 2026 (Luna). 49/49 passed. Suite gate: 2906/0/17. Файлы: `domain/workspace.py`, `adapters/forge_gitea.py`, `api/routes/workspace.py`, `tests/cosmo/test_workspace_compare.py`.
+
+## ✅ DELIVERED (2026-09-18 Flash; scope deviation recorded) — WEB IDE FILE SAVE & COMMIT FLOW (PK-DIR-008 §3 / PK-C-006.25)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-126** | Flash | 8-10h | P1 | COS-120, COS-124 | Web IDE: сохранение файлов по Ctrl+S, dirty-индикатор в табах, диалог коммита с multi-file stage |
+
+> **Scope:** (1) Типы в `D:\prettyk-ide\src\workspace\types.ts`:
+> `FileEditState` (path, originalContent, currentContent, isDirty, isNew),
+> `WorkspaceCommitRequest` и `WorkspaceCommitResponse` из COS-124;
+> (2) Методы клиента в `D:\prettyk-ide\src\workspace\client.ts`:
+> `commitChanges(repo, branch, message, fileChanges, author?)` → POST `/api/v1/repos/workspace/commits`;
+> (3) EditStateManager (React-контекст или хук `useEditState`):
+> - отслеживание dirty-файлов (`textarea` onChange → сравнение с originalContent);
+> - индикатор ● в заголовке таба редактора при грязном состоянии;
+> - Ctrl+S → локальный `SAVE` → сброс dirty, обновление originalContent;
+> (4) CommitDialog (`D:\prettyk-ide\src\cosmo\ide\CommitDialog.tsx`):
+> - открывается по кнопке в тулбаре/через `Ctrl+Enter`;
+> - список изменённых файлов с чекбоксами (stage/unstage);
+> - поле commit message (обязательное, max 500 симв, валидация);
+> - поля author name/email (опциональные, предзаполненные);
+> - кнопка Commit → вызов `commitChanges()` → успех: закрыть диалог, сбросить dirty-стейт, обновить HEAD ref в topbar;
+> - обработка 422 (gate BLOCK — показать список violations в диалоге);
+> - обработка 409 (конфликт — предложить обновить и повторить);
+> (5) Vitest тесты: `client.test.ts` (+4 теста: saveFile, commitChanges success/422/409), компонентные тесты `CommitDialog.test.tsx` (~8 тестов).
+>
+> **Acceptance:** принято 18 сентября 2026 (Flash).
+> `tsc -b` — 0 ошибок; `vitest run` — 68/68 passed (5 файлов).
+> Разработчик редактирует несколько файлов в `<textarea>`, видит ● на грязных табах, выполняет локальный Ctrl+S, открывает CommitDialog и атомарно коммитит выбранные изменения; gate BLOCK показывает violations без коммита.
+>
+> **Scope deviation:** Monaco в текущей кодовой базе отсутствует, поэтому использован `<textarea>`. Ctrl+S пока локальный и не вызывает PUT `/workspace/files`; сохранение в Gitea происходит атомарно через `commitChanges()` → COS-124. Monaco и отдельный remote-save flow не входят в принятие COS-126.
+
+## ✅ DONE (2026-09-18 Boss) — WORKSPACE RUN PIPELINE SELECTION BE CONTRACT (PK-DIR-008 §3 / PK-C-006.26)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-127** | Boss | 20-24h | P1 | COS-108, COS-122 | Выбранный в Web IDE pipeline реально передаётся и исполняется backend/ Woodpecker; default Run сохраняет обратную совместимость |
+
+> **Scope:** (1) Расширить `WorkspaceRunRequest` полем `pipelineName: str | None = None`, сохранив `extra="forbid"` для остальных полей и старое поведение при отсутствии поля;
+> (2) Протянуть `pipeline_name` через `POST /api/v1/repos/workspace/run` → run manager → `WoodpeckerExecutionAdapter.submit_run`;
+> (3) Проверить фактический API текущего Woodpecker и выбрать поддерживаемый механизм выбора pipeline-конфига; нельзя имитировать выбор только на FE или молча запускать default;
+> (4) Добавить валидацию pipeline относительно discovery COS-118: unknown pipeline → честный `400/404`, invalid name → `400`;
+> (5) Добавить route/adapter tests: legacy request без `pipelineName`, selected pipeline propagation, unknown pipeline, auth/ownership, submit failure, retry/timeout;
+> (6) Обновить OpenAPI/контрактные fixtures и `PROGRESS.md`/research note с фактическим Woodpecker limitation.
+>
+> **Out of scope:** Web IDE UI COS-122/COS-126; Gitea compare COS-125; изменение pipeline YAML semantics.
+>
+> **Acceptance:** default `▶ Run` продолжает работать без `pipelineName`; выбор через `▾` запускает именно выбранный pipeline или возвращает честную ошибку; backend не принимает поле формально с последующим запуском другого pipeline. Минимум 20 новых unit/route/adapter тестов, suite gate без регрессий.
+>
+> **Acceptance:** принято 18 сентября 2026 (Boss).
+> `test_workspace_run_pipeline_selection.py`: 32 passed (DTO 10 / adapter 14 / route 8); legacy `test_workspace_run.py` обновлён под сигнатуру, 45 passed.
+> Suite gate: 2938 passed / 0 failed / 17 skipped.
+> Запрос без `pipelineName` запускает default-конфиг Woodpecker (обратная совместимость); `pipelineName` валидируется против discovery COS-118 и при совпадении прокидывает путь конфига в `repo.config_file`; неизвестный pipeline → честный `400` со списком доступных, без молчаливого запуска default.
+>
+> **Scope deviation:** (1) run manager в кодовой базе отсутствует — `POST /workspace/run` сам оркестратор; `pipeline_name` протянут route → `WoodpeckerExecutionAdapter.submit_run` (пункт 2 карточки без промежуточного слоя).
+> (2) Woodpecker v3.5 `PipelineOptions` = `{branch, variables}` — селектора имени pipeline НЕТ (верифицировано по `server/model/pipeline.go` тега v3.5.0). Конфиг берётся из `repo.config_file`; выбран `GET repo → PATCH config_file → POST pipeline (сервер читает конфиг синхронно) → PATCH restore` под module-level lock, restore в `finally`. Пустой original → default-порядок Woodpecker (`.woodpecker/`, `.woodpecker.yaml`, `.woodpecker.yml`); `.pipeline.yaml`/`.pipeline.yml` достижимы только явным выбором.
+> (3) OpenAPI fixtures (`docs/cosmo-openapi.json`/`.yaml`) регенерированы из живого `app.openapi()` — прежняя версия не содержала даже COS-108 run-эндпоинта (124 → 156 схем); contract-гвард `test_openapi_contract.py` 13 passed.
+> (4) Live-верификация PATCH `config_file` на живом Woodpecker не выполнена: нет токена с repo-admin правами; адаптер покрыт юнитами на моках сессии.
+> (5) Некорректное имя (`""`, пробелы, `\`, `\n`, >200) отклоняется DTO-валидатором → `422`, а не `400`: тот же эндпоинт уже отдаёт `422` на `bad repo`/`short sha` (тесты `test_bad_repo_422`/`test_short_sha_422`), поэтому `422` консистентен внутри `POST /workspace/run`. Unknown (формально валидное, но отсутствующее в discovery) имя → `400` со списком доступных, как в карточке.
+
+## ✅ DELIVERED (2026-09-18 Flash) — WEB IDE CHANGE REVIEW & STAGING SURFACE (PK-DIR-008 §3 / PK-C-006.27)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-128** | Flash | 20-24h | P1 | COS-124, COS-125, COS-126 | Панель изменений Web IDE: staged/unstaged files, compare preview и безопасный вход в CommitDialog |
+
+> **Scope:** (1) FE-only surface в `D:\prettyk-ide`: `ChangesPanel`/`ChangeReviewPanel` без правок Airlock backend;
+> (2) Показывать dirty-файлы из `useEditState`, разделять staged/unstaged, stage/unstage по файлам, discard с подтверждением;
+> (3) Интегрировать `GET /workspace/compare` после готовности COS-125; до этого использовать typed fixture/mock adapter, не изобретать второй backend contract;
+> (4) Для выбранного файла показывать unified patch, additions/deletions, binary marker и empty-state; ограничить UI для truncated/large files;
+> (5) Кнопка `Commit selected` открывает существующий CommitDialog COS-126 с точным набором staged changes;
+> (6) Keyboard/accessibility: `Ctrl+Shift+G` открыть панель, Escape закрыть, focus management, dirty/discard confirmation;
+> (7) Vitest/component tests: stage/unstage, discard confirmation, compare loading/error/empty/binary, CommitDialog handoff, keyboard flow; `tsc -b` green.
+>
+> **Out of scope:** Monaco migration; remote Ctrl+S PUT; BE routes/adapters; изменение COS-124 commit contract.
+>
+> **Acceptance:** принято 18 сентября 2026 (Flash).
+> `tsc -b` — 0 ошибок; `vitest run` — 97/97 passed (7 файлов).
+> Файлы: `src/cosmo/ide/compare.ts`, `src/cosmo/ide/useEditState.ts`, `src/cosmo/ide/ChangeReviewPanel.tsx`, `src/app/App.tsx`, `src/app/app.css`.
+> Разработчик видит секции staged/unstaged, управляет stage/unstage по файлам и bulk, выполняет discard с подтверждением, просматривает patch/binary/empty states и открывает CommitDialog (`Ctrl+Shift+G` / тулбар) строго с выбранными файлами.
+> Diff на данном этапе изолирован через seam `createFixtureCompare()`; сквозная интеграция с живым эндпоинтом COS-125 передана в COS-130.
+
+## ✅ DONE (2026-09-18 Boss) — GITEA FORGE ADAPTER COMMIT API UNIFICATION (PK-DIR-008 §3 / PK-C-006.28)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-129** | Boss | 20-24h | P1 | COS-096, COS-103, COS-116, COS-125 | Устранение дублирования и затенения list_commits в GiteaForgeAdapter, починка get_commit/get_tree против живого Gitea |
+
+> **Scope:** (1) В `orchestrator/cosmo/adapters/forge_gitea.py` обнаружено два метода `list_commits`: legacy COS-096 (`ref: str = "", limit: int = 10`) на строке 460 затенён методом COS-116 (`branch: str | None = None, path: str | None = None, limit: int = 30, page: int = 1`) на строке 840;
+> (2) В результате вызов `get_commit` (строка 484: `list_commits(..., ref=ref)`) падает с `TypeError: unexpected keyword argument 'ref'` против живого Gitea; ломаются `get_commit` и `get_tree` (затронуты COS-103/118 и `routes/apps.py:641`);
+> (3) Объединить сигнатуры в единый непротиворечивый контракт `list_commits(self, owner: str, repo: str, ref: str = "", branch: str | None = None, path: str | None = None, limit: int = 30, page: int = 1) -> list[GiteaCommit | dict]` либо разделить на явный низкоуровневый `list_commits(...) -> list[GiteaCommit]` и расширенный `get_commit_history(...) -> list[dict]` с сохранением обратной совместимости для всех вызывающих мест;
+> (4) Проверить и согласовать возвращаемые типы во всех точках использования: `get_commit`, `get_tree`, `routes/apps.py:641`, `routes/workspace.py:1222`, `compare_refs`;
+> (5) Написать юнит-тесты на совмещённую сигнатуру и регрессионные тесты против живого/эмулированного Gitea (включая проверку, что `ref` и `branch` не конфликтуют);
+> (6) Прогнать полный suite gate (`pytest orchestrator/tests/cosmo/ -q`), подтвердив отсутствие регрессий.
+>
+> **Out of scope:** переработка других адаптеров; изменения в Gitea API.
+>
+> **Acceptance:** вызовы `get_commit(owner, repo, ref)` и `get_tree(owner, repo, ref)` не падают с TypeError; `routes/apps.py` и `routes/workspace.py` корректно получают данные коммитов; suite gate ≥2938 passed, 0 failed.
+>
+> **Acceptance:** принято 18 сентября 2026 (Boss).
+> `test_forge_gitea_commits_unified.py`: 20 passed (регрессия shadowing + обе проекции + resolve_ref); `test_workspace_commits.py` / `test_workspace_compare.py` / `test_forge_cycle.py` — 121 passed суммарно.
+> Suite gate: 2958 passed / 0 failed / 17 skipped.
+> `get_commit(ref=...)` и `get_tree(ref=...)` возвращают `GiteaCommit`/`GiteaTreeEntry` без `TypeError`; `GET /workspace/commits` сохраняет пагинацию (`offset→page`) и фильтры `branch`/`path`; `routes/apps.py` снова отдаёт recent-коммиты.
+>
+> **Стратегия унификации (вариант из карточки):** единый HTTP-слой `_fetch_commits(owner, repo, ref, path, limit, page)` (сырой ответ Gitea, 404 → LookupError), поверх него две явные проекции:
+> - `list_commits(owner, repo, ref="", branch=None, path=None, limit=10, page=1) -> list[GiteaCommit]` — канонический (COS-096), `ref`/`branch` — алиасы Gitea-параметра `sha`; потребители `get_commit`/`get_tree`/`routes/apps.py`;
+> - `list_commits_history(owner, repo, branch=None, path=None, limit=30, page=1) -> list[dict]` — COS-116-проекция; потребители `GET /workspace/commits` и `resolve_ref` (COS-125).
+>
+> **Scope deviation:** имена выбраны как `list_commits` (GiteaCommit) + `list_commits_history` (dict) вместо `get_commit_history` из примера карточки — так сохранён исторический COS-096-контракт и не тронут внешний REST `GET /workspace/commits`. Лимит `_fetch_commits` унифицирован на cap 100 (было 50 у COS-096 / 100 у COS-116); для `limit=1` и `limit=5` потребителей разницы нет.
+
+## ✅ DONE (2026-09-18 Flash) — WEB IDE LIVE COMPARE WIRE-UP & TREE STATUS (PK-DIR-008 §3 / PK-C-006.29)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-130** | Flash | 20-24h | P1 | COS-125, COS-128 | Сквозное подключение реального GET /workspace/compare в Web IDE, индикация статусов файлов в дереве проводника |
+
+> **Scope:** (1) В `D:\prettyk-ide\src\workspace\client.ts` реализовать метод `compare(repo: str, base: str, head: str): Promise<WorkspaceCompareResponse>`, полностью соответствующий DTO COS-125 (`GET /api/v1/repos/workspace/compare`);
+> (2) В `D:\prettyk-ide\src\cosmo\ide\ChangeReviewPanel.tsx` заменить mock/fixture seam `createFixtureCompare()` на вызов реального `client.compare()`, передавая активный репозиторий и сравниваемые ref-ы (текущая ветка / base ref);
+> (3) Корректно обрабатывать ответы сервера: 200 (список файлов с patch), 400 (base == head, сообщение "Ветки идентичны"), 404 (ref не найден), 413 (>500 файлов — предупреждение о лимите), сетевые ошибки;
+> (4) Визуальная индикация в дереве файлов Web IDE (FileTree / Explorer): отображать маркеры статуса (● или цветные бейджи M/A/D) для изменённых и staged файлов на основе `useEditState`;
+> (5) Компонентные и юнит-тесты Vitest: вызов `client.compare`, обработка ошибок/граничных случаев, отображение индикаторов в дереве; `tsc -b` 0 ошибок.
+>
+> **Out of scope:** Monaco editor; бекенд-изменения Airlock.
+>
+> **Acceptance:** принято 18 сентября 2026 (Flash).
+> `tsc -b` — 0 ошибок; `vitest run` — 114 passed (8 файлов, +17 новых тестов).
+> Панель вызывает реальный `client.compare()`, парсит и рендерит серверный patch; ошибки 400/404/413 выводятся понятным текстом с кнопкой Retry; в дереве проводника отображаются маркеры modified/staged файлов. Сравнение ведётся между base = default branch и head = активная ветка.
+>
+> **Follow-up:** серверный diff показывает committed-изменения между ref-ами; локальный in-memory diff для незакоммиченных dirty-файлов вынесен в COS-131.
+
+## ✅ DONE (2026-09-18 Flash) — WEB IDE FILE OPERATIONS & LOCAL DIRTY DIFF ENGINE (PK-DIR-008 §3 / PK-C-006.30)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-131** | Flash | 20-24h | P1 | COS-120, COS-126, COS-130 | Операции над файлами в дереве проводника Web IDE (создание, удаление, переименование) и локальный diff для dirty-файлов |
+
+> **Scope:** (1) В `D:\prettyk-ide\src\workspace\client.ts` реализовать вызовы File Mutator API (COS-120): `createFile(repo, branch, path, content)`, `deleteFile(repo, branch, path)`, `moveFile(repo, branch, fromPath, toPath)`;
+> (2) В Explorer / дереве файлов добавить контекстное меню и панель действий: "Новый файл", "Новая папка", "Переименовать", "Удалить" (с модальным окном подтверждения удаления);
+> (3) Локальный In-Memory Diff Engine в `ChangeReviewPanel.tsx`: для файлов с незакоммиченными правками вычислять и отображать клиентский unified diff (`originalContent` vs `currentContent`) без ожидания коммита на сервер (решает ограничение COS-130);
+> (4) Защита от потери данных: предупреждающий диалог при попытке закрыть вкладку с несохранёнными изменениями или переключить ветку при наличии dirty-файлов;
+> (5) Vitest компонентные тесты: создание/удаление/переименование файлов, подтверждение удаления, генерация локального diff, защита при переключении веток; `tsc -b` green, vitest ≥130 passed.
+>
+> **Out of scope:** Monaco editor; правки бекенда в `prettyk-airlock`.
+>
+> **Acceptance:** принято 18 сентября 2026 (Flash).
+> `tsc -b` — 0 ошибок; `vitest run` — 155 passed (10 тестовых файлов, +41 новый тест, порог ≥130 перевыполнен); `vite build` — green.
+> Реализованы: `client.ts` (createFile / deleteFile с JSON / moveFile по COS-120 API), `compare.ts` (in-memory LCS diff c защитой 2M ячеек), `ChangeReviewPanel.tsx` (локальный vs серверный diff с бейджем local · uncommitted / committed — ограничение COS-130 снято), `fileOps.ts` + `FileOpsDialogs.tsx` (New File / New Folder через `.gitkeep` / Rename / Delete с подтверждением), `guard.ts` (beforeunload, смен ветки и файлов с dirty).
+>
+> **Ограничения:** Monaco out of scope (остаётся textarea); рекурсивный rename папки не поддержан.
+
+## ✅ DONE (2026-09-18 Luna) — WORKSPACE FULL REPOSITORY SECURITY SCAN & SARIF EXPORT API (PK-DIR-008 §3 / PK-C-006.31)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-132** | Luna | 20-24h | P1 | COS-123, COS-125 | Эндпоинт полного аудита безопасности репозитория и ветки с экспортом в SARIF 2.1.0 |
+
+> **Scope:** (1) DTO в `orchestrator/cosmo/domain/workspace.py`: `WorkspaceGateScanRequest` (repo, ref?, maxFiles?, exportFormat: `json | sarif`), `WorkspaceGateScanResponse` (scannedFiles, cleanFiles, blockViolations, warnViolations, verdict: `PASS | WARN | BLOCK`, durationMs, violations: list[WorkspaceGateViolation]);
+> (2) В `orchestrator/cosmo/domain/gate_verdict.py` добавить метод `scan_tree(tree_entries, blob_loader)` с потоковым сканированием содержимого файлов дерева Gitea; пропуск бинарных и больших файлов (>2 MiB);
+> (3) SARIF 2.1.0 Serializer в `gate_verdict.py`: преобразование violations в стандартный JSON-отчёт SARIF (runs, tool.driver.rules, results с locations, physicalLocation, region, message);
+> (4) Эндпоинт `POST /api/v1/repos/workspace/gate-scan` в `orchestrator/cosmo/api/routes/workspace.py`:
+> - параметры repo, ref (по умолчанию default branch);
+> - получение рекурсивного дерева через `GiteaForgeAdapter.get_tree_by_sha`;
+> - сканирование файлов через `scan_tree`;
+> - при `exportFormat == "sarif"` возвращает `application/sarif+json`;
+> - аутентификация Bearer, domain ownership guard, лимит на сканирование (до 1000 файлов в репо, 413 при превышении);
+> (5) Unit + route тесты в `test_workspace_gate_scan.py` (~25 тестов: полный скан дерева, вердикты BLOCK/WARN/PASS, генерация валидного SARIF 2.1.0, лимиты, ghost 404, auth).
+>
+> **Out of scope:** UI в Web IDE; мутация файлов в forge.
+>
+> **Acceptance:** принято 18 сентября 2026 (Luna). `POST /workspace/gate-scan` сканирует дерево репозитория, возвращает агрегированный вердикт и violations; при `exportFormat="sarif"` отдаётся валидный SARIF 2.1.0 (`application/sarif+json`); 413 при >maxFiles, ghost 404, unknown ref 404. 53/53 passed. Suite gate: 3011/0/17. Файлы: `domain/workspace.py`, `domain/gate_verdict.py`, `api/routes/workspace.py`, `tests/cosmo/test_workspace_gate_scan.py`.
+
+## ✅ DONE (2026-09-18 Boss) — WORKSPACE RUN LIFECYCLE: DETAIL SYNC, CANCEL & RERUN API (PK-DIR-008 §3 / PK-C-006.32)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-133** | Boss | 20-24h | P1 | COS-108, COS-111, COS-127 | Детализация и управление жизненным циклом запусков Workspace: синхронизация статуса, отмена и перезапуск пайплайнов |
+
+> **Scope:** (1) DTO в `orchestrator/cosmo/domain/workspace.py`: новый `WorkspaceRunStepSummary` (name, status, exitCode: int | None, durationMs: int | None, startedAt: str | None, finishedAt: str | None), `WorkspaceRunDetailResponse` (runId, repo, branch, commitSha, status, pipelineNumber, durationMs, startedAt, finishedAt, steps: list[WorkspaceRunStepSummary]), `WorkspaceRunCancelResponse`, `WorkspaceRunRerunResponse` (новый runId + originalRunId);
+> (2) Методы в `WoodpeckerExecutionAdapter` (`orchestrator/cosmo/adapters/execution_woodpecker.py`):
+> - `get_pipeline_detail(handle) -> dict`: получение актуального статуса, шагов и таймингов пайплайна;
+> - `cancel_pipeline(handle) -> dict`: отмена запущенного пайплайна (`POST /repos/{repo_id}/pipelines/{number}/cancel`);
+> - `rerun_pipeline(handle) -> dict`: повторный запуск (`POST /repos/{repo_id}/pipelines/{number}`);
+> (3) Эндпоинты в `orchestrator/cosmo/api/routes/workspace.py`:
+> - `GET /api/v1/repos/workspace/runs/{run_id}`: получение детальной информации по запуску; если статус `running`/`pending`, выполняет опрос Woodpecker и синхронизирует статус в `WorkspaceRunRow` в БД;
+> - `POST /api/v1/repos/workspace/runs/{run_id}/cancel`: отмена выполняющегося запуска, перевод статуса в `killed` в БД; 400 если запуск уже завершён;
+> - `POST /api/v1/repos/workspace/runs/{run_id}/rerun`: повторный запуск пайплайна, создание новой записи `WorkspaceRunRow` с `original_run_id = {run_id}`; для этого — новая nullable-колонка `original_run_id: String(64)` на `cosmo_workspace_runs` (`orchestrator/cosmo/db/models_execution.py`) + alembic-ревизия (`down_revision` = текущий head, `alembic heads`), upgrade добавляет колонку, downgrade её снимает;
+> (4) Защита: Bearer auth, проверка принадлежности домену, 404 при неизвестном run_id;
+> (5) Unit + route тесты в `test_workspace_run_lifecycle.py` (~27 тестов: получение деталей, синхронизация статуса с Woodpecker, отмена активного, ошибка отмены завершённого, перезапуск с сохранением `original_run_id`, upgrade/downgrade ревизии, auth/ghost guards).
+>
+> **Out of scope:** Web IDE UI (терминал логов уже есть в COS-110); изменение логики сборки пайплайнов.
+>
+> **Acceptance:** эндпоинт `GET /workspace/runs/{run_id}` отдаёт полные шаги и синхронизирует статус из Woodpecker в БД; `cancel` прерывает пайплайн и ставит `killed`; `rerun` перезапускает, возвращает новый run_id и `originalRunId` = исходный, связь сохраняется в `WorkspaceRunRow.original_run_id`; `alembic upgrade head` применяется без ошибок и `downgrade -1` откатывает колонку; suite gate ≥2958 passed, 0 failed.
+>
+> **Delivered (2026-09-18 Boss):** `test_workspace_run_lifecycle.py`: 35 passed (10 DTO + 25 route). Suite gate: 3046 passed / 0 failed / 17 skipped.
+> `GET /workspace/runs/{run_id}` отдаёт шаги (`WorkspaceRunStepSummary`) и синхронизирует статус из Woodpecker в БД для незавершённых прогонов; `cancel` ставит `killed` и 400 на терминальном; `rerun` создаёт новую `WorkspaceRunRow` с `original_run_id` и возвращает новый run_id.
+> Артефакты: `domain/workspace.py` (4 DTO), `adapters/execution_woodpecker.py` (`get_pipeline_detail`/`cancel_pipeline`/`rerun_pipeline`), `api/routes/workspace.py` (3 эндпоинта + `_run_row_for_domain`/`_step_summaries`), `db/models_execution.py` (`original_run_id`), `alembic/versions/f5a6b7c8d9e0_cos133_run_original_run_id.py`, `tests/cosmo/conftest.py` (idempotent ALTER для stale test-DB), `tests/cosmo/test_migration_reconciliation.py` (`_HEAD` → `f5a6b7c8d9e0`), `docs/cosmo-openapi.{json,yaml}` (127 путей / 162 схемы).
+>
+> **Scope deviation:** статус синхронизируется только для незавершённых прогонов (`running`/`pending`/`blocked`) — терминальный статус в БД источник истины; `_TERMINAL_RUN_STATUSES` расширен алиасами `succeeded`/`failed` (исторические строки COS-112). Рерун-линк — новая nullable-колонка `original_run_id`; миграция guarded (no-op на чистом alembic-скратче и на create_all-БД). Живой Woodpecker cancel/rerun не верифицирован (нет repo-admin токена) — адаптер покрыт юнитами на моках.
 
 ---
 

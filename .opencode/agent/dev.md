@@ -1,7 +1,7 @@
 ---
 description: Dev — инженерный режим: код, архитектура, бэкенд, фронт, исполнение (DeepSeek V4 Pro)
 mode: primary
-model: openrouter/deepseek/deepseek-v4-pro
+model: openrouter/deepseek/deepseek-v4.1-flash
 permission:
   task: deny
 ---

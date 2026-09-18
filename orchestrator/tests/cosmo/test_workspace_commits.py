@@ -56,7 +56,7 @@ class FakeCommitAdapter:
         self._commits = commits or list(ALL_COMMITS)
         self.last_params: dict | None = None
 
-    def list_commits(
+    def list_commits_history(
         self,
         owner: str,
         repo: str,

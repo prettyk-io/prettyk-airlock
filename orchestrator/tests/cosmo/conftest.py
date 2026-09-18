@@ -148,6 +148,12 @@ async def pg_client():
         # COS-097/COS-108: execution handles + workspace runs
         from orchestrator.cosmo.db.models_execution import ExecutionBase
         await conn.run_sync(ExecutionBase.metadata.create_all)
+        # COS-133: cosmo_workspace_runs predates the rerun-link column and
+        # create_all does not ALTER existing tables — heal stale test DBs.
+        await conn.exec_driver_sql(
+            "ALTER TABLE cosmo_workspace_runs "
+            "ADD COLUMN IF NOT EXISTS original_run_id VARCHAR(64)"
+        )
 
     # Clean all tables before the test
     async with engine.begin() as conn:

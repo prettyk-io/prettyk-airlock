@@ -30,7 +30,7 @@ for p in (str(_repo), str(_orch)):
 SCRATCH_DB = _testpg.scratch_name("mig_recon")  # per-run unique (COS-078)
 _POSTGRES_ADMIN_URL = _testpg.admin_dsn()
 _MAIN_URL = os.getenv("COSMO_DATABASE_URL", _testpg.TEST_PG_URL)
-_HEAD = "e4f5a6b7c8d9"
+_HEAD = "f5a6b7c8d9e0"
 _NOTIF_TABLES = {
     "notification_events",
     "notification_inbox",
