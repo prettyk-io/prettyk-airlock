@@ -38,6 +38,7 @@ import _testpg  # noqa: E402  (test dir is on sys.path)
 _PG_URL = _testpg.TEST_PG_URL
 _testpg.refuse_dev_stand(_PG_URL)
 os.environ["COSMO_DATABASE_URL"] = _PG_URL
+os.environ.setdefault("COSMO_ENV", "test")
 
 _orch = Path(__file__).resolve().parents[1]
 if str(_orch) not in sys.path:
@@ -100,34 +101,21 @@ async def pg_client():
     """
 
     async def _wipe(conn):
-        """Nullify circular FKs → ordered DELETE (данные тестов не переживают
-        ни тест, ни сессию)."""
-        await conn.exec_driver_sql("UPDATE apps SET pipeline_plan_id = NULL")
-        await conn.exec_driver_sql("UPDATE runs SET batch_id = NULL")
-        delete_order = [
-            # COS-055 notification tables (no FK to domain tables)
-            "notification_inbox", "notification_events",
-            "notification_subscriptions", "notification_channel_configs",
-            # COS-081 gate decision trail (no FK — logical links only)
-            "gate_decision_trail",
-            # COS-077 transfer registry tail: FK items→plans, landing_states→items;
-            # received_revisions без FK. Порядок child → parent.
-            "transfer_received_revisions", "transfer_landing_states",
-            "transfer_items", "transfer_plans",
-            # evidence_ledger ссылается на runs/batches — удалять ДО них
-            "evidence_ledger",
-            "plan_bricks", "batches", "gates", "runs", "releases",
-            "pipeline_plans", "pipeline_bricks",
-            # COS-083: LR-wave surfaces — builds/deploys ссылаются на apps,
-            # project-таблицы ссылаются на apps логически (application_ids);
-            # без них — cross-run 409/призраки при повторных прогонах.
-            "cosmo_deployments", "cosmo_builds",
-            "project_applications", "project_teams", "projects", "kits_tags",
-            "repo_bindings", "apps", "groups", "domains",
-            # COS-097/COS-108: ExecutionBase tables (outside frozen chain)
-            "cosmo_execution_handles", "cosmo_workspace_runs",
-        ]
-        for tbl in delete_order:
+        """COS-151: canonical topological wipe (see _wipe_order).
+
+        Nullify circular FKs → ordered DELETE child-before-parent for EVERY
+        table with a FK onto runs/releases/apps/deployments. Раньше releases
+        удалялись раньше cosmo_deployments, а scan_*/LR-дети
+        (scan_findings/scan_evidence/scan_results, release_batches,
+        application_teams, application_kits_tags) в порядке отсутствовали —
+        первый же FK-violation ронял транзакцию, и строки переживали очистку
+        между тестами (фантомы/конфликты). Данные тестов не переживают ни
+        тест, ни сессию."""
+        from _wipe_order import CIRCULAR_NULLIFY, DELETE_ORDER
+
+        for stmt in CIRCULAR_NULLIFY:
+            await conn.exec_driver_sql(stmt)
+        for tbl in DELETE_ORDER:
             await conn.exec_driver_sql(f'DELETE FROM "{tbl}"')
 
     engine = create_async_engine(_PG_URL, echo=False)

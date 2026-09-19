@@ -37,6 +37,25 @@ from orchestrator.cosmo.domain.release_model import (
     ReleaseZone,
     next_zone,
 )
+from orchestrator.cosmo.ledger.hub_verdict_gate import blocked_run_ids
+from orchestrator.cosmo.domain.sbom_scan import (
+    ReleaseSbomAttachRequest,
+    ReleaseSbomAttestationResponse,
+)
+from orchestrator.cosmo.ledger.sbom_gate import (
+    SbomGateError,
+    latest_sbom_attestation,
+    verify_and_attest_release_sbom,
+)
+from orchestrator.cosmo.control_plane.transfer_guard import (
+    ReleaseTransferGuard,
+    bypass_permitted,
+    get_transfer_guard,
+)
+from orchestrator.cosmo.domain.transfer_authorization import (
+    TransferReplayResponse,
+    TransferTransition,
+)
 
 try:
     from cosmo.ledger.release_envelope import (
@@ -94,6 +113,11 @@ class TransferRequest(BaseModel):
     initiated_by: str = Field(..., min_length=1, description="ID оператора")
     comment: str = Field(default="", description="Комментарий к трансферу")
     target_zone: Optional[str] = Field(default=None, description="Целевая зона: zt или zpe")
+    # COS-146: оптимистичный CAS — клиент заявляет ожидаемую текущую зону.
+    expected_current_zone: Optional[str] = Field(
+        default=None,
+        description="Ожидаемая текущая зона (CAS); расхождение → 409 Conflict",
+    )
 
 
 class TransferReleaseRequest(BaseModel):
@@ -103,6 +127,11 @@ class TransferReleaseRequest(BaseModel):
     sign_signature: str = Field(..., min_length=1, description="Цифровая подпись офицера")
     token_2fa: str | None = Field(None, description="Одноразовый 2FA-токен")
     transfer_notes: str | None = Field(None, description="Заметки к трансферу")
+    # COS-146: оптимистичный CAS — клиент заявляет ожидаемую текущую зону.
+    expected_current_zone: Optional[str] = Field(
+        default=None,
+        description="Ожидаемая текущая зона (CAS); расхождение → 409 Conflict",
+    )
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -130,6 +159,72 @@ def _to_release_schema(r: ReleaseModel) -> Release:
             for t in (r.transfer_history or [])
         ],
     )
+
+
+# ── COS-145: fail-closed авторизация межзонного трансфера ──────────────
+
+#: Один инстанс capability-guard'а — FastAPI кэширует зависимость по callable
+#: (маршрут и зависимость авторизации используют ровно один RBAC-прогон).
+_RELEASE_TRANSFER_GUARD = require_capability(
+    Action.RELEASE_TRANSFER, domain_binding="identity",
+)
+
+
+async def enforce_release_transfer_authorization(
+    release_id: str,
+    principal: PrincipalContext = Depends(_RELEASE_TRANSFER_GUARD),
+    db: AsyncSession = Depends(get_db),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    bypass_authorization: bool = Query(
+        False,
+        alias="bypass_authorization",
+        description=(
+            "COS-145: обход авторизации — только system admin в dev-окружении, "
+            "каждая попытка фиксируется в аудите (BYPASS_ATTEMPT)"
+        ),
+    ),
+    guard: ReleaseTransferGuard = Depends(get_transfer_guard),
+) -> None:
+    """COS-145: отказать в трансфере (403), если крипто-свидетельства не сходятся.
+
+    Выполняется ДО тела маршрута. Несуществующий релиз и чужой домен — не
+    предмет этой проверки: пропускаем, и маршрут отвечает своим 404 (прежняя
+    семантика guard-regression сохраняется). Строка релиза читается под
+    ``SELECT … FOR UPDATE`` — конкурентные трансферы одного релиза
+    сериализуются в рамках транзакции запроса (COS-146).
+    """
+    rel = await guard.lock_release(db, release_id)
+    if rel is None:
+        return
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+
+    target_zone = next_zone(rel.current_zone or "zr")  # type: ignore[arg-type]
+    if bypass_authorization:
+        permitted = bypass_permitted(principal.is_system_admin)
+        guard.record_bypass(
+            actor=principal.user_id,
+            release_id=release_id,
+            target_zone=target_zone,
+            permitted=permitted,
+        )
+        if not permitted:
+            raise HTTPException(
+                403,
+                "Transfer authorization bypass is not permitted "
+                "(system administrator + dev environment required)",
+            )
+        return
+
+    decision = await guard.authorize(
+        db, release_id, target_zone=target_zone, actor=principal.user_id,
+    )
+    if not decision.authorized:
+        raise HTTPException(status_code=403, detail=decision.model_dump())
 
 
 # ── Routes ─────────────────────────────────────────────────────────────
@@ -397,14 +492,18 @@ async def delete_release(
 # COS-054: Межзонный трансфер
 # ═══════════════════════════════════════════════════════════════════════
 
-@router.post("/{release_id}/transfer", response_model=Release)
+@router.post(
+    "/{release_id}/transfer",
+    response_model=Release | TransferReplayResponse,
+    dependencies=[Depends(enforce_release_transfer_authorization)],
+)
 async def transfer_release(
     release_id: str,
     body: TransferRequest,
     caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
-    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_TRANSFER, domain_binding="identity")),
-) -> Release:
+    principal: PrincipalContext = Depends(_RELEASE_TRANSFER_GUARD),  # require_capability(Action.RELEASE_TRANSFER)
+) -> Release | TransferReplayResponse:
     """COS-054: трансфер релиза в следующую зону (ЗР→ЗТ→ЗПЭ).
 
     Требования:
@@ -457,7 +556,35 @@ async def transfer_release(
             f"Gates pending decision: {gate_ids}. All gates must be evaluated before transfer.",
         )
 
-    # 3. SAN-009 / CLN-008: Linear zone promotion validation
+    # 2b. COS-136: Contract A — Hub BLOCK держит релиз в текущей зоне.
+    # PASS после BLOCK снимает блокировку by construction (последний вердикт).
+    hub_blocked = await blocked_run_ids(db, list(rel.run_ids or []))
+    if hub_blocked:
+        raise HTTPException(
+            400,
+            f"Promotion blocked by Hub verdict BLOCK for runs: {hub_blocked}. "
+            f"A PASS verdict from PrettyK Hub is required before transfer.",
+        )
+
+    # 3. COS-146: CAS-переход — конфликт ожиданий или идемпотентный replay.
+    # Повтор уже выполненного перехода отдаёт 200 duplicate_success без
+    # второй записи в transfer_history и без повторной эмиссии уведомлений.
+    transition = get_transfer_guard().evaluate_transition(
+        rel,
+        target_zone=body.target_zone,
+        expected_current_zone=body.expected_current_zone,
+    )
+    if transition is TransferTransition.CONFLICT:
+        raise HTTPException(
+            409,
+            f"Transfer state conflict: release '{rel.id}' is in zone "
+            f"'{rel.current_zone or 'zr'}', expected "
+            f"'{body.expected_current_zone}'.",
+        )
+    if transition is TransferTransition.REPLAY:
+        return get_transfer_guard().replay_payload(rel)
+
+    # 4. SAN-009 / CLN-008: Linear zone promotion validation
     current = rel.current_zone or "zr"
     valid_paths = {"zr": "zt", "zt": "zpe"}
     expected_next = valid_paths.get(current)
@@ -476,7 +603,7 @@ async def transfer_release(
             f"Expected next zone: '{expected_next}'.",
         )
 
-    # 4. Создаём TransferRecord
+    # 5. Создаём TransferRecord
     transfer = TransferRecord(
         from_zone=current,  # type: ignore
         to_zone=target,
@@ -524,14 +651,18 @@ async def transfer_release(
     return _to_release_schema(rel)
 
 
-@router.post("/{release_id}/transfer-v2", response_model=Release)
+@router.post(
+    "/{release_id}/transfer-v2",
+    response_model=Release | TransferReplayResponse,
+    dependencies=[Depends(enforce_release_transfer_authorization)],
+)
 async def transfer_release_v2(
     release_id: str,
     body: TransferReleaseRequest,
     caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
     db: AsyncSession = Depends(get_db),
-    principal: PrincipalContext = Depends(require_capability(Action.RELEASE_TRANSFER, domain_binding="identity")),
-) -> Release:
+    principal: PrincipalContext = Depends(_RELEASE_TRANSFER_GUARD),  # require_capability(Action.RELEASE_TRANSFER)
+) -> Release | TransferReplayResponse:
     """SAN-009: Трансфер релиза с цифровой подписью, 2FA и линейной валидацией зон.
 
     Строгий линейный путь: ЗР → ЗТ → ЗПЭ.
@@ -564,6 +695,31 @@ async def transfer_release_v2(
 
     if blocked_gates or pending_gates:
         raise HTTPException(400, "All gates must have decision='pass' before transfer.")
+
+    # COS-136: Contract A — Hub BLOCK держит релиз в текущей зоне.
+    hub_blocked = await blocked_run_ids(db, list(rel.run_ids or []))
+    if hub_blocked:
+        raise HTTPException(
+            400,
+            f"Promotion blocked by Hub verdict BLOCK for runs: {hub_blocked}. "
+            f"A PASS verdict from PrettyK Hub is required before transfer.",
+        )
+
+    # COS-146: CAS-переход — конфликт ожиданий или идемпотентный replay.
+    transition = get_transfer_guard().evaluate_transition(
+        rel,
+        target_zone=body.target_zone,
+        expected_current_zone=body.expected_current_zone,
+    )
+    if transition is TransferTransition.CONFLICT:
+        raise HTTPException(
+            409,
+            f"Transfer state conflict: release '{rel.id}' is in zone "
+            f"'{rel.current_zone or 'zr'}', expected "
+            f"'{body.expected_current_zone}'.",
+        )
+    if transition is TransferTransition.REPLAY:
+        return get_transfer_guard().replay_payload(rel)
 
     # SAN-009: Strict linear zone promotion
     current = rel.current_zone or "zr"
@@ -704,3 +860,68 @@ def _try_notify_transfer(rel: ReleaseModel, from_zone: str, to_zone: str, initia
         )
     except Exception:
         pass  # нотификация не должна ломать ответ
+
+
+# ── COS-138: PK-C-003.6 SBOM & Grype Attestation Gate ──────────────────
+
+@router.post(
+    "/{release_id}/sbom/attach",
+    response_model=ReleaseSbomAttestationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Attach and attest release bundle SBOM + Grype scan",
+)
+async def attach_release_sbom(
+    release_id: str,
+    body: ReleaseSbomAttachRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(
+        require_capability(Action.GATE_DECIDE, domain_binding="identity")
+    ),
+) -> ReleaseSbomAttestationResponse:
+    """COS-138: принять Syft SBOM + Grype-скан, сверить digest и аттестовать.
+
+    critical > 0 → gate_verdict=BLOCK / clearance=DENIED (аттестация всё
+    равно фиксируется в ledger); digest mismatch → 422; неизвестный релиз →
+    404. Supply-chain гейт, поэтому capability — GATE_DECIDE.
+    """
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    try:
+        return await verify_and_attest_release_sbom(db, release_id, body)
+    except SbomGateError as exc:
+        raise HTTPException(exc.status_code, str(exc))
+
+
+@router.get(
+    "/{release_id}/sbom",
+    response_model=ReleaseSbomAttestationResponse,
+    summary="Read latest release SBOM attestation",
+)
+async def get_release_sbom(
+    release_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseSbomAttestationResponse:
+    """COS-138: последняя аттестация SBOM релиза (404, если её не было)."""
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    attestation = await latest_sbom_attestation(db, release_id)
+    if attestation is None:
+        raise HTTPException(404, f"No SBOM attestation for release '{release_id}'")
+    return attestation

@@ -37,6 +37,7 @@ from orchestrator.cosmo.api.routes.deployments import router as deployments_rout
 from orchestrator.cosmo.api.routes.projects import router as projects_router, kits_router
 from orchestrator.cosmo.api.routes.release_batches import router as release_batches_router
 from orchestrator.cosmo.api.routes.webhooks import router as webhooks_router
+from orchestrator.cosmo.api.routes.hub import router as hub_router
 from orchestrator.cosmo.api.startup import lifespan
 
 app = FastAPI(
@@ -93,3 +94,5 @@ app.include_router(projects_router)
 app.include_router(kits_router)
 app.include_router(release_batches_router)
 app.include_router(webhooks_router)
+# COS-136: Contract A — приём вердиктов PrettyK Hub
+app.include_router(hub_router)

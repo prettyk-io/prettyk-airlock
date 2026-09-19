@@ -7473,6 +7473,17 @@ paths:
         schema:
           type: string
           title: Release Id
+      - name: bypass_authorization
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'COS-145: обход авторизации — только system admin в dev-окружении,
+            каждая попытка фиксируется в аудите (BYPASS_ATTEMPT)'
+          default: false
+          title: Bypass Authorization
+        description: 'COS-145: обход авторизации — только system admin в dev-окружении,
+          каждая попытка фиксируется в аудите (BYPASS_ATTEMPT)'
       - name: domain_id_query
         in: query
         required: false
@@ -7573,7 +7584,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Release'
+                anyOf:
+                - $ref: '#/components/schemas/Release'
+                - $ref: '#/components/schemas/TransferReplayResponse'
+                title: Response Transfer Release Api V1 Releases  Release Id  Transfer
+                  Post
         '422':
           description: Validation Error
           content:
@@ -7600,6 +7615,17 @@ paths:
         schema:
           type: string
           title: Release Id
+      - name: bypass_authorization
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'COS-145: обход авторизации — только system admin в dev-окружении,
+            каждая попытка фиксируется в аудите (BYPASS_ATTEMPT)'
+          default: false
+          title: Bypass Authorization
+        description: 'COS-145: обход авторизации — только system admin в dev-окружении,
+          каждая попытка фиксируется в аудите (BYPASS_ATTEMPT)'
       - name: domain_id_query
         in: query
         required: false
@@ -7700,7 +7726,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Release'
+                anyOf:
+                - $ref: '#/components/schemas/Release'
+                - $ref: '#/components/schemas/TransferReplayResponse'
+                title: Response Transfer Release V2 Api V1 Releases  Release Id  Transfer
+                  V2 Post
         '422':
           description: Validation Error
           content:
@@ -7938,6 +7968,241 @@ paths:
                 additionalProperties: true
                 title: Response Get Release Envelope Api V1 Releases  Release Id  Envelope
                   Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/releases/{release_id}/sbom/attach:
+    post:
+      tags:
+      - releases
+      summary: Attach and attest release bundle SBOM + Grype scan
+      description: 'COS-138: принять Syft SBOM + Grype-скан, сверить digest и аттестовать.
+
+
+        critical > 0 → gate_verdict=BLOCK / clearance=DENIED (аттестация всё
+
+        равно фиксируется в ledger); digest mismatch → 422; неизвестный релиз →
+
+        404. Supply-chain гейт, поэтому capability — GATE_DECIDE.'
+      operationId: attach_release_sbom_api_v1_releases__release_id__sbom_attach_post
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Release Id
+      - name: domain_id_query
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Domain Id Query
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseSbomAttachRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseSbomAttestationResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/releases/{release_id}/sbom:
+    get:
+      tags:
+      - releases
+      summary: Read latest release SBOM attestation
+      description: 'COS-138: последняя аттестация SBOM релиза (404, если её не было).'
+      operationId: get_release_sbom_api_v1_releases__release_id__sbom_get
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Release Id
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseSbomAttestationResponse'
         '422':
           description: Validation Error
           content:
@@ -15510,6 +15775,695 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/artifacts/manifest/verify:
+    post:
+      tags:
+      - artifacts
+      summary: Verify Artifact Manifest
+      description: 'COS-142: верифицировать манифест бандла, посчитать digest-pin,
+        зафиксировать.
+
+
+        Расхождение формата (невалидный tag/digest, тег ``latest``) — 422 от
+
+        валидаторов DTO. Семантический вердикт (mismatch ``expected_digest_pin``,
+
+        отсутствующий прогон для якоря) возвращается как ``valid=false`` с
+
+        ``errors`` — это расчёт, а не ошибка запроса.'
+      operationId: verify_artifact_manifest_api_v1_artifacts_manifest_verify_post
+      parameters:
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArtifactBundleManifest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManifestVerificationResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/artifacts/manifest/{bundle_id}:
+    get:
+      tags:
+      - artifacts
+      summary: Read Artifact Manifest
+      description: 'COS-142/COS-152: прочитать подтверждённый манифест из ledger.
+
+
+        Источник истины — ``evidence_ledger`` (latest wins по ``bundle_id``);
+
+        in-memory реестра нет, ответ переживает рестарт cosmo-api. 404, если
+
+        манифест не якорён (non-durable edge: верификация без ``run_id``).'
+      operationId: read_artifact_manifest_api_v1_artifacts_manifest__bundle_id__get
+      parameters:
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactBundleManifest'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/artifacts/attestation/bundle:
+    post:
+      tags:
+      - artifacts
+      summary: Build Attestation Bundle
+      description: 'COS-147: собрать и зафиксировать полный attestation bundle релиза.
+
+
+        Агрегирует манифест бандла (COS-142), аттестацию SBOM (COS-138) и клиренс
+
+        Quality Gate (COS-141), считает канонический root-хэш, валидирует
+
+        непрерывность цепочки свидетельств и пишет конверт в evidence ledger.
+
+        Непрерывность нарушена → ``verified=false`` (вердикт, не ошибка запроса).'
+      operationId: build_attestation_bundle_api_v1_artifacts_attestation_bundle_post
+      parameters:
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttestationBundleRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceAttestationBundle'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/artifacts/attestation/{release_id}:
+    get:
+      tags:
+      - artifacts
+      summary: Read Attestation Bundle
+      description: 'COS-147/COS-152: актуальный attestation bundle релиза из ledger.
+
+
+        Источник истины — ``evidence_ledger`` (latest wins по ``release_id``);
+
+        in-memory реестра нет, ответ переживает рестарт cosmo-api. 404, если
+
+        конверт для релиза не собран.'
+      operationId: read_attestation_bundle_api_v1_artifacts_attestation__release_id__get
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Release Id
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceAttestationBundle'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/artifacts/airgap/verify:
+    post:
+      tags:
+      - artifacts
+      summary: Verify Airgap Bundle
+      description: 'COS-148: автономная офлайн-проверка целостности airgap-пакета.
+
+
+        Сверяет манифест с наблюдаемыми чексуммами архива (missing / corrupted /
+
+        unregistered) и ``package_digest_pin``; сетевых вызовов нет. Вердикт
+
+        фиксируется в evidence ledger при наличии локального релиза пакета.'
+      operationId: verify_airgap_bundle_api_v1_artifacts_airgap_verify_post
+      parameters:
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AirgapVerifyRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AirgapVerifyResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/artifacts/airgap/{package_id}:
+    get:
+      tags:
+      - artifacts
+      summary: Read Airgap Status
+      description: 'COS-148/COS-152: статус проверки airgap-пакета из ledger.
+
+
+        Источник истины — ``evidence_ledger`` (latest wins по ``package_id``);
+
+        in-memory реестра нет, ответ переживает рестарт cosmo-api. 404, если
+
+        пакет не якорён (non-durable edge: у пакета не было локального релиза).'
+      operationId: read_airgap_status_api_v1_artifacts_airgap__package_id__get
+      parameters:
+      - name: package_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Package Id
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AirgapVerifyResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/findings/search:
     get:
       tags:
@@ -18908,6 +19862,648 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/hub/verdicts/ingest:
+    post:
+      tags:
+      - hub
+      summary: Ingest PrettyK Hub quality-gate verdict (Contract A)
+      description: 'Принять вердикт Hub: дедуп → крипто-запись в ledger → статус.'
+      operationId: ingest_hub_verdict_api_v1_hub_verdicts_ingest_post
+      parameters:
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HubVerdictIngestRequest'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HubVerdictIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/hub/evaluations/dispatch:
+    post:
+      tags:
+      - hub
+      summary: Dispatch release evaluation to PrettyK Hub (Contract B)
+      description: Инициировать внешнюю QG-оценку релиза (идемпотентно по evaluation_id).
+      operationId: dispatch_hub_evaluation_api_v1_hub_evaluations_dispatch_post
+      parameters:
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HubEvaluationRequest'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HubEvaluationDispatchResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/hub/evaluations/{evaluation_id}:
+    get:
+      tags:
+      - hub
+      summary: Read dispatched Hub evaluation status (Contract B)
+      description: Durable-статус ранее отправленной оценки (404 — не отправлялась).
+      operationId: get_hub_evaluation_api_v1_hub_evaluations__evaluation_id__get
+      parameters:
+      - name: evaluation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Evaluation Id
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HubEvaluationDispatchResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/hub/clearance/ingest:
+    post:
+      tags:
+      - hub
+      summary: Ingest PrettyK Hub quality-gate clearance (Contract C)
+      description: 'Принять клиренс Quality Gate: дедуп/дрейф → крипто-якорь в ledger.'
+      operationId: ingest_hub_clearance_api_v1_hub_clearance_ingest_post
+      parameters:
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HubClearanceIngestRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HubClearanceIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/hub/clearance/by-evaluation/{evaluation_id}:
+    get:
+      tags:
+      - hub
+      summary: Read clearance by evaluation id (Contract C)
+      description: Актуальный клиренс по ID оценки (404 — клиренса не было).
+      operationId: get_hub_clearance_by_evaluation_api_v1_hub_clearance_by_evaluation__evaluation_id__get
+      parameters:
+      - name: evaluation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Evaluation Id
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HubClearanceIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/hub/clearance/{release_id}:
+    get:
+      tags:
+      - hub
+      summary: Read latest release clearance status (Contract C)
+      description: Актуальный клиренс релиза (404 — клиренса не было).
+      operationId: get_hub_clearance_api_v1_hub_clearance__release_id__get
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Release Id
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      - name: X-Cosmo-Zone
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Zone
+      - name: X-Cosmo-Domain
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Domain
+      - name: X-Cosmo-Principal
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Principal
+      - name: X-Cosmo-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Roles
+      - name: X-User-Id
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Id
+      - name: X-User-Email
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Email
+      - name: X-User-Roles
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Roles
+      - name: X-Cosmo-Scopes
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Cosmo-Scopes
+      - name: session_token
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HubClearanceIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     AddAppToProjectRequest:
@@ -18920,6 +20516,116 @@ components:
       required:
       - app_id
       title: AddAppToProjectRequest
+    AirgapFileChecksum:
+      properties:
+        filename:
+          type: string
+          maxLength: 512
+          minLength: 1
+          title: Filename
+        sha256:
+          type: string
+          maxLength: 71
+          minLength: 64
+          title: Sha256
+        size_bytes:
+          type: integer
+          minimum: 0.0
+          title: Size Bytes
+      additionalProperties: false
+      type: object
+      required:
+      - filename
+      - sha256
+      - size_bytes
+      title: AirgapFileChecksum
+      description: Чексумма одного файла пакета (имя + sha256 + размер).
+    AirgapPackageManifest:
+      properties:
+        package_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Package Id
+        release_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Release Id
+        created_at:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Created At
+        files:
+          items:
+            $ref: '#/components/schemas/AirgapFileChecksum'
+          type: array
+          title: Files
+        package_digest_pin:
+          type: string
+          maxLength: 71
+          minLength: 64
+          title: Package Digest Pin
+      additionalProperties: false
+      type: object
+      required:
+      - package_id
+      - release_id
+      - created_at
+      - package_digest_pin
+      title: AirgapPackageManifest
+      description: 'Манифест airgap-пакета: состав + digest-pin.'
+    AirgapVerifyRequest:
+      properties:
+        manifest:
+          $ref: '#/components/schemas/AirgapPackageManifest'
+        archive_files:
+          items:
+            $ref: '#/components/schemas/AirgapFileChecksum'
+          type: array
+          title: Archive Files
+      additionalProperties: false
+      type: object
+      required:
+      - manifest
+      title: AirgapVerifyRequest
+      description: 'Запрос офлайн-верификации: манифест + фактически наблюдаемые чексуммы.'
+    AirgapVerifyResponse:
+      properties:
+        verified:
+          type: boolean
+          title: Verified
+        package_id:
+          type: string
+          title: Package Id
+        missing_files:
+          items:
+            type: string
+          type: array
+          title: Missing Files
+        corrupted_files:
+          items:
+            type: string
+          type: array
+          title: Corrupted Files
+        unregistered_files:
+          items:
+            type: string
+          type: array
+          title: Unregistered Files
+        errors:
+          items:
+            type: string
+          type: array
+          title: Errors
+      additionalProperties: false
+      type: object
+      required:
+      - verified
+      - package_id
+      title: AirgapVerifyResponse
+      description: Вердикт офлайн-проверки airgap-пакета.
     AppGraph:
       properties:
         domain:
@@ -19008,6 +20714,56 @@ components:
           title: Signature
       type: object
       title: ApprovalRequest
+    ArtifactBundleManifest:
+      properties:
+        bundle_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Bundle Id
+        release_version:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Release Version
+        profile:
+          type: string
+          enum:
+          - ordinary@1
+          - hardened@1
+          - airgap@1
+          title: Profile
+        artifacts:
+          items:
+            $ref: '#/components/schemas/CanonicalArtifactTag'
+          type: array
+          minItems: 1
+          title: Artifacts
+        expected_digest_pin:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expected Digest Pin
+        created_at:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Created At
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+      additionalProperties: false
+      type: object
+      required:
+      - bundle_id
+      - release_version
+      - profile
+      - artifacts
+      - created_at
+      title: ArtifactBundleManifest
+      description: 'Манифест бандла поставки: профиль + артефакты + ожидаемый digest-pin.'
     ArtifactPlane:
       type: string
       enum:
@@ -19019,6 +20775,18 @@ components:
       - sbom
       title: ArtifactPlane
       description: 'Plane передачи: каждый plane — независимый TransferItem.'
+    AttestationBundleRequest:
+      properties:
+        release_id:
+          type: string
+          minLength: 1
+          title: Release Id
+          description: ID релиза
+      type: object
+      required:
+      - release_id
+      title: AttestationBundleRequest
+      description: 'COS-147: запрос сборки attestation bundle релиза.'
     AuditEvent:
       properties:
         id:
@@ -19241,6 +21009,31 @@ components:
       - commit_sha
       title: Build
       description: Первоклассная сущность Build (Сборка).
+    CanonicalArtifactTag:
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Name
+        version:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Version
+        digest:
+          type: string
+          maxLength: 71
+          minLength: 71
+          title: Digest
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      - version
+      - digest
+      title: CanonicalArtifactTag
+      description: 'Канонический tag артефакта: имя + закреплённая версия + digest.'
     CleanupRequest:
       properties:
         run_ids:
@@ -20237,6 +22030,101 @@ components:
       type: object
       title: DomainQuota
       description: 'Квоты домена: лимиты на ресурсы.'
+    EvidenceAttestationBundle:
+      properties:
+        format:
+          type: string
+          const: cosmo-attestation@1
+          title: Format
+          default: cosmo-attestation@1
+        subject:
+          $ref: '#/components/schemas/EvidenceAttestationSubject'
+        predicate:
+          $ref: '#/components/schemas/EvidenceAttestationPredicate'
+        provenance_bundle_hash:
+          type: string
+          title: Provenance Bundle Hash
+        verified:
+          type: boolean
+          title: Verified
+      additionalProperties: false
+      type: object
+      required:
+      - subject
+      - predicate
+      - provenance_bundle_hash
+      - verified
+      title: EvidenceAttestationBundle
+      description: Полный attestation bundle релиза (формат ``cosmo-attestation@1``).
+    EvidenceAttestationPredicate:
+      properties:
+        release_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Release Id
+        bundle_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bundle Id
+        profile:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Profile
+        manifest_digest_pin:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Manifest Digest Pin
+        sbom_digest:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Sbom Digest
+        hub_clearance_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Hub Clearance Status
+        hub_evaluation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Hub Evaluation Id
+        timestamp:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Timestamp
+      additionalProperties: false
+      type: object
+      required:
+      - release_id
+      - profile
+      - timestamp
+      title: EvidenceAttestationPredicate
+      description: 'Предикат аттестации: собранные свидетельства релиза и их digest''ы.'
+    EvidenceAttestationSubject:
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Name
+        digest:
+          type: string
+          maxLength: 71
+          minLength: 1
+          title: Digest
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      - digest
+      title: EvidenceAttestationSubject
+      description: 'Субъект аттестации: артефакт, о котором собран конверт.'
     FindingsIngestRequest:
       properties:
         findings:
@@ -20536,6 +22424,80 @@ components:
       - name
       title: Group
       description: Группа приложений (папка) — может быть вложенной.
+    GrypeFinding:
+      properties:
+        id:
+          type: string
+          minLength: 1
+          title: Id
+        severity:
+          type: string
+          enum:
+          - critical
+          - high
+          - medium
+          - low
+          - negligible
+          title: Severity
+        package_name:
+          type: string
+          minLength: 1
+          title: Package Name
+        installed_version:
+          type: string
+          title: Installed Version
+          default: ''
+        fixed_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fixed Version
+      type: object
+      required:
+      - id
+      - severity
+      - package_name
+      title: GrypeFinding
+      description: Найденная Grype уязвимость.
+    GrypeScanReport:
+      properties:
+        scanner_version:
+          type: string
+          title: Scanner Version
+          default: ''
+        artifact_digest:
+          type: string
+          title: Artifact Digest
+        critical_count:
+          type: integer
+          minimum: 0.0
+          title: Critical Count
+          default: 0
+        high_count:
+          type: integer
+          minimum: 0.0
+          title: High Count
+          default: 0
+        medium_count:
+          type: integer
+          minimum: 0.0
+          title: Medium Count
+          default: 0
+        low_count:
+          type: integer
+          minimum: 0.0
+          title: Low Count
+          default: 0
+        findings:
+          items:
+            $ref: '#/components/schemas/GrypeFinding'
+          type: array
+          title: Findings
+      type: object
+      required:
+      - artifact_digest
+      title: GrypeScanReport
+      description: 'Grype scan: уязвимости пакетов артефакта с разбивкой по severity.'
     HTTPValidationError:
       properties:
         detail:
@@ -20574,6 +22536,371 @@ components:
       - platform
       title: HealthResponse
       description: GET /health — расширенная диагностика без credentials.
+    HubClearanceIngestRequest:
+      properties:
+        contract_version:
+          type: string
+          const: '1.0'
+          title: Contract Version
+          default: '1.0'
+        evaluation_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Evaluation Id
+        release_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Release Id
+        run_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Run Id
+        evaluated_at:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Evaluated At
+        policy_version:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Policy Version
+        security_execution_verdict:
+          type: string
+          enum:
+          - PASS
+          - WARN
+          - FAIL
+          - ERROR
+          title: Security Execution Verdict
+        act_ref:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Act Ref
+        qg_clearance:
+          type: string
+          enum:
+          - PASS_GRANTED
+          - BLOCKED
+          - REJECTED
+          title: Qg Clearance
+        verdict:
+          type: string
+          enum:
+          - PASS
+          - WARN
+          - FAIL
+          - ERROR
+          title: Verdict
+        ready_for_transfer:
+          type: boolean
+          title: Ready For Transfer
+        qualifying_context:
+          type: boolean
+          title: Qualifying Context
+        ok_to_transfer:
+          type: boolean
+          title: Ok To Transfer
+        evidence_refs:
+          items:
+            type: string
+          type: array
+          title: Evidence Refs
+        explanation_ref:
+          type: string
+          title: Explanation Ref
+          default: ''
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+      additionalProperties: false
+      type: object
+      required:
+      - evaluation_id
+      - release_id
+      - run_id
+      - evaluated_at
+      - policy_version
+      - security_execution_verdict
+      - act_ref
+      - qg_clearance
+      - verdict
+      - ready_for_transfer
+      - qualifying_context
+      - ok_to_transfer
+      title: HubClearanceIngestRequest
+      description: Конверт клиренса Quality Gate (Contract C, Hub → Control Plane).
+    HubClearanceIngestResponse:
+      properties:
+        status:
+          type: string
+          enum:
+          - accepted
+          - duplicate
+          - rejected
+          title: Status
+        evaluation_id:
+          type: string
+          title: Evaluation Id
+        release_id:
+          type: string
+          title: Release Id
+        clearance_status:
+          type: string
+          enum:
+          - PASS_GRANTED
+          - BLOCKED
+          - REJECTED
+          title: Clearance Status
+        transfer_allowed:
+          type: boolean
+          title: Transfer Allowed
+        ledger_entry_id:
+          type: string
+          title: Ledger Entry Id
+        timestamp:
+          type: string
+          title: Timestamp
+      additionalProperties: false
+      type: object
+      required:
+      - status
+      - evaluation_id
+      - release_id
+      - clearance_status
+      - transfer_allowed
+      - ledger_entry_id
+      - timestamp
+      title: HubClearanceIngestResponse
+      description: 'Ответ на приём клиренса: итог, статус, авторизация трансфера,
+        якорь.'
+    HubEvaluationDispatchResponse:
+      properties:
+        dispatched:
+          type: boolean
+          title: Dispatched
+        request_id:
+          type: string
+          title: Request Id
+        evaluation_id:
+          type: string
+          title: Evaluation Id
+        status:
+          type: string
+          title: Status
+        dispatched_at:
+          type: string
+          title: Dispatched At
+      additionalProperties: false
+      type: object
+      required:
+      - dispatched
+      - request_id
+      - evaluation_id
+      - status
+      - dispatched_at
+      title: HubEvaluationDispatchResponse
+      description: 'Результат отправки/чтения оценки: факт, статус, время отправки.'
+    HubEvaluationRequest:
+      properties:
+        contract_version:
+          type: string
+          const: '1.0'
+          title: Contract Version
+          default: '1.0'
+        request_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Request Id
+        evaluation_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Evaluation Id
+        project_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Project Id
+        application_ids:
+          items:
+            type: string
+          type: array
+          minItems: 1
+          title: Application Ids
+        release_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Release Id
+        run_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Run Id
+        build_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Build Id
+        artifact_digest:
+          type: string
+          minLength: 1
+          title: Artifact Digest
+        release_profile:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Release Profile
+        target_zone:
+          type: string
+          enum:
+          - zr
+          - zt
+          - zpe
+          title: Target Zone
+        qualifying_context:
+          type: boolean
+          title: Qualifying Context
+        security_execution:
+          $ref: '#/components/schemas/HubSecurityExecution'
+      additionalProperties: false
+      type: object
+      required:
+      - request_id
+      - evaluation_id
+      - project_id
+      - application_ids
+      - release_id
+      - run_id
+      - build_id
+      - artifact_digest
+      - release_profile
+      - target_zone
+      - qualifying_context
+      - security_execution
+      title: HubEvaluationRequest
+      description: Конверт запроса оценки релиза (Contract B, Control Plane → Hub).
+    HubSecurityExecution:
+      properties:
+        studio_run_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Studio Run Id
+        verdict:
+          type: string
+          enum:
+          - PASS
+          - WARN
+          - BLOCK
+          title: Verdict
+        act_ref:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Act Ref
+        evidence_refs:
+          items:
+            type: string
+          type: array
+          minItems: 1
+          title: Evidence Refs
+      additionalProperties: false
+      type: object
+      required:
+      - studio_run_id
+      - verdict
+      - act_ref
+      - evidence_refs
+      title: HubSecurityExecution
+      description: 'Факт security-исполнения (Studio), приложенный к оценке.
+
+
+        ``act_ref`` и ``evidence_refs`` — immutable object references
+
+        (``artifact://...``), не inline-блобы и не сырые секреты.'
+    HubVerdictIngestRequest:
+      properties:
+        run_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Run Id
+        box_verdict:
+          type: string
+          maxLength: 16
+          minLength: 1
+          title: Box Verdict
+        hub_verdict:
+          type: string
+          enum:
+          - PASS
+          - WARN
+          - BLOCK
+          title: Hub Verdict
+        finding_ids:
+          items:
+            type: string
+          type: array
+          title: Finding Ids
+        evidence_hashes:
+          items:
+            type: string
+          type: array
+          title: Evidence Hashes
+        provenance_metadata:
+          additionalProperties: true
+          type: object
+          title: Provenance Metadata
+        idempotency_key:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Idempotency Key
+      additionalProperties: false
+      type: object
+      required:
+      - run_id
+      - box_verdict
+      - hub_verdict
+      - idempotency_key
+      title: HubVerdictIngestRequest
+      description: 'Входной конверт вердикта Hub (Contract A).
+
+
+        ``run_id`` адресует прогон в Cosmoport; ``box_verdict`` — вердикт
+
+        сканера Pure Box, ``hub_verdict`` — итоговый вердикт Gatekeeper.'
+    HubVerdictIngestResponse:
+      properties:
+        accepted:
+          type: boolean
+          title: Accepted
+        ledger_entry_id:
+          type: string
+          title: Ledger Entry Id
+        run_id:
+          type: string
+          title: Run Id
+        status:
+          type: string
+          title: Status
+      additionalProperties: false
+      type: object
+      required:
+      - accepted
+      - ledger_entry_id
+      - run_id
+      - status
+      title: HubVerdictIngestResponse
+      description: 'Ответ на приём вердикта: принят, id записи ledger, статус.'
     InboxItem:
       properties:
         id:
@@ -20828,6 +23155,39 @@ components:
       type: object
       title: LiveResponse
       description: GET /live — минимальный ответ. Всегда 200 если процесс жив.
+    ManifestVerificationResult:
+      properties:
+        valid:
+          type: boolean
+          title: Valid
+        bundle_id:
+          type: string
+          title: Bundle Id
+        digest_pin:
+          type: string
+          title: Digest Pin
+        artifacts_count:
+          type: integer
+          title: Artifacts Count
+        errors:
+          items:
+            type: string
+          type: array
+          title: Errors
+        ledger_entry_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ledger Entry Id
+      additionalProperties: false
+      type: object
+      required:
+      - valid
+      - bundle_id
+      - digest_pin
+      - artifacts_count
+      title: ManifestVerificationResult
+      description: 'Вердикт верификации манифеста (не исключение: расчёт + фиксация).'
     OutboxStatus:
       properties:
         event_id:
@@ -21505,6 +23865,66 @@ components:
       - name
       title: ReleaseBatch
       description: Пакетный запуск релизного ЖЦ.
+    ReleaseSbomAttachRequest:
+      properties:
+        sbom:
+          $ref: '#/components/schemas/SbomReport'
+        vulnerabilities:
+          $ref: '#/components/schemas/GrypeScanReport'
+        artifact_digest:
+          type: string
+          title: Artifact Digest
+      type: object
+      required:
+      - sbom
+      - vulnerabilities
+      - artifact_digest
+      title: ReleaseSbomAttachRequest
+      description: 'Конверт привязки SBOM + Grype к релизному бандлу.
+
+
+        ``artifact_digest`` — digest артефакта, под который аттестуется релиз;
+
+        он обязан совпасть с digest''ами обоих отчётов (и, если релиз фиксирует
+
+        digest своих артефактов, — с ним).'
+    ReleaseSbomAttestationResponse:
+      properties:
+        accepted:
+          type: boolean
+          title: Accepted
+        release_id:
+          type: string
+          title: Release Id
+        artifact_digest:
+          type: string
+          title: Artifact Digest
+        sbom_digest:
+          type: string
+          title: Sbom Digest
+        clearance:
+          type: string
+          enum:
+          - CLEARED
+          - DENIED
+          title: Clearance
+        gate_verdict:
+          type: string
+          enum:
+          - PASS
+          - BLOCK
+          title: Gate Verdict
+      additionalProperties: false
+      type: object
+      required:
+      - accepted
+      - release_id
+      - artifact_digest
+      - sbom_digest
+      - clearance
+      - gate_verdict
+      title: ReleaseSbomAttestationResponse
+      description: Результат аттестации SBOM релиза (ответ attach/read).
     ReleaseType:
       properties:
         id:
@@ -21786,6 +24206,66 @@ components:
       - domain_id
       title: Run
       description: Один запуск пайплайна.
+    SbomPackage:
+      properties:
+        name:
+          type: string
+          minLength: 1
+          title: Name
+        version:
+          type: string
+          title: Version
+          default: ''
+        type:
+          type: string
+          title: Type
+          default: ''
+        purl:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Purl
+        license:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: License
+      type: object
+      required:
+      - name
+      title: SbomPackage
+      description: Пакет из SBOM Syft.
+    SbomReport:
+      properties:
+        format:
+          type: string
+          enum:
+          - spdx-json
+          - cyclonedx-json
+          title: Format
+        syft_version:
+          type: string
+          title: Syft Version
+          default: ''
+        artifact_digest:
+          type: string
+          title: Artifact Digest
+        packages_count:
+          type: integer
+          minimum: 0.0
+          title: Packages Count
+          default: 0
+        packages:
+          items:
+            $ref: '#/components/schemas/SbomPackage'
+          type: array
+          title: Packages
+      type: object
+      required:
+      - format
+      - artifact_digest
+      title: SbomReport
+      description: 'Syft SBOM: инвентарь пакетов артефакта.'
     StatusAlert:
       properties:
         name:
@@ -22306,6 +24786,12 @@ components:
           - type: 'null'
           title: Transfer Notes
           description: Заметки к трансферу
+        expected_current_zone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expected Current Zone
+          description: Ожидаемая текущая зона (CAS); расхождение → 409 Conflict
       type: object
       required:
       - target_zone
@@ -22313,6 +24799,38 @@ components:
       - sign_signature
       title: TransferReleaseRequest
       description: 'SAN-009: расширенный DTO трансфера с цифровой подписью и 2FA.'
+    TransferReplayResponse:
+      properties:
+        status:
+          type: string
+          const: duplicate_success
+          title: Status
+          default: duplicate_success
+        release_id:
+          type: string
+          minLength: 1
+          title: Release Id
+        current_zone:
+          type: string
+          minLength: 1
+          title: Current Zone
+        transfer_history_count:
+          type: integer
+          minimum: 0.0
+          title: Transfer History Count
+      additionalProperties: false
+      type: object
+      required:
+      - release_id
+      - current_zone
+      - transfer_history_count
+      title: TransferReplayResponse
+      description: 'COS-146: идемпотентный ответ на повтор уже выполненного перехода.
+
+
+        Возвращается вместо повторной записи в ``transfer_history``: переход
+
+        уже зафиксирован, дублей в истории нет, уведомления не переэмитятся.'
     TransferRequest:
       properties:
         initiated_by:
@@ -22331,6 +24849,12 @@ components:
           - type: 'null'
           title: Target Zone
           description: 'Целевая зона: zt или zpe'
+        expected_current_zone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expected Current Zone
+          description: Ожидаемая текущая зона (CAS); расхождение → 409 Conflict
       type: object
       required:
       - initiated_by

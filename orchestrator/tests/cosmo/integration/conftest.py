@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 import _testpg
 from _testpg import TEST_PG_URL
+from _wipe_order import CIRCULAR_NULLIFY, DELETE_ORDER
 
 from orchestrator.cosmo.api.deps import get_current_principal
 from orchestrator.cosmo.api.main import app
@@ -52,17 +53,10 @@ _SKIP_REASON = (
     "docker compose -f services/docker-compose.test-pg.yml up -d"
 )
 
-# Порядок wipe: evidence_ledger ДО runs/batches (FK), notification_* — первыми
-# (нет FK на доменные таблицы); circular FK (apps↔plans, runs↔batches) — nullify.
-_WIPE_ORDER = [
-    "notification_inbox", "notification_events",
-    "notification_subscriptions", "notification_channel_configs",
-    "evidence_ledger", "plan_bricks", "batches", "gates", "runs", "releases",
-    "pipeline_plans", "pipeline_bricks",
-    "repo_bindings", "apps", "groups", "domains",
-]
-if _GateTrailBase is not None:
-    _WIPE_ORDER.insert(0, "gate_decision_trail")
+# COS-151: единый топологический порядок очистки (см. _wipe_order) — тот же,
+# что в родительском conftest.py. integration создаёт только CosmoBase +
+# (опц.) GateTrailBase, поэтому в wipe() таблицы Transfer*/Execution*,
+# отсутствующие на чистой БД, пропускаются по to_regclass.
 
 
 def _admin_principal() -> PrincipalContext:
@@ -121,10 +115,18 @@ class SteelThreadHarness:
                 text("SELECT pg_advisory_xact_lock(:k)"), {"k": _ADVISORY_LOCK_KEY},
             )
             # circular FK: nullify до DELETE
-            await s.execute(text("UPDATE apps SET pipeline_plan_id = NULL"))
-            await s.execute(text("UPDATE runs SET batch_id = NULL"))
-            for tbl in _WIPE_ORDER:
-                await s.execute(text(f'DELETE FROM "{tbl}"'))
+            for stmt in CIRCULAR_NULLIFY:
+                await s.execute(text(stmt))
+            # Наличие таблиц: integration Base = Cosmo + GateTrail; таблицы
+            # Transfer/Execution могут отсутствовать на чистой БД.
+            present = set(
+                (await s.execute(text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                ))).scalars()
+            )
+            for tbl in DELETE_ORDER:
+                if tbl in present:
+                    await s.execute(text(f'DELETE FROM "{tbl}"'))
             await s.commit()
 
     async def sync_exec(self, sql: str, **params) -> None:
