@@ -604,6 +604,14 @@ legacy transfer bridge
 
 МЗП исключён из новой архитектуры.
 
+**Failover = Phase 3, not Phase 1 (PK-C-003.2, канон COS-136).** Пока
+базовый контур нестабилен (рестарты, race, edge-деградации), ни одна
+карточка failover/HA не входит в фазы 1-2. Порядок обязателен:
+restart-first (COS-063) и durability (COS-077/081/082/088) — раньше
+failover. Failover/HA планируется только после зелёного стабильного
+baseline, доказанного suite gate + runtime acceptance. HA replica
+внутри зоны — Phase 3, не Phase 1.
+
 СОД не диктует внутренний stack PureK. Внутренние Kafka/MQ-механизмы СОД, если
 они подтвердятся, остаются внутри СОД bridge.
 

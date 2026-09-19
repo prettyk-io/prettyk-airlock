@@ -1,7 +1,7 @@
 ---
 description: Plan — планирование: исследование, декомпозиция, архитектурные решения. Read-only код, write docs.
 mode: primary
-model: openrouter/deepseek/deepseek-v4-pro
+model: openrouter/deepseek/deepseek-v4.1-flash
 permission:
   task: deny
   edit:

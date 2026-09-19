@@ -376,6 +376,16 @@ Airgap — это профиль доставки, применимый к ло�
 8. **Проверка поставки**: `manifest.json` + checksums + SBOM CycloneDX +
    подпись bundle (§5.5 выше).
 
+**Канонический tag-формат (PK-C-003.4, канон COS-136):**
+
+- **Один образ — один канонический тег** формата `<name>:<version>@sha256:<digest>`
+  (version — semver или release-идентификатор, **никогда не `latest`**);
+- расхождение версий ядро/стенд невозможно by construction: manifest
+  фиксирует `@sha256:<digest>`, а не плавающий тег; при production freeze
+  digest-pin из TODO (§5.5 п.2) становится обязательным полем manifest;
+- **один бандл-профиль поставки** (`full` airgap-bundle) — не допускается
+  несколько конкурирующих профилей с разными наборами образов.
+
 ---
 
 ## 6. Docker Compose: финальная схема
@@ -686,6 +696,23 @@ build image
 - проверяются на empty database и upgrade from previous release;
 - имеют backup/restore procedure до destructive migration.
 
+**Репетиция миграции (PK-C-003.3, канон COS-136).** Перенос/апгрейд
+выполняется как явная процедура-репетиция ДО боевого применения:
+
+```text
+1. scratch    — поднять пустой PG (per-session БД, COSMO_TEST_SESSION_DB)
+2. прогон     — alembic upgrade head на scratch + schema check
+3. сверка     — catalog-сверка (migration_verifier) + reconciliation-тест
+                head-ревизии; ноль расхождений
+4. боевой     — только после зелёной репетиции: upgrade на целевом контуре
+```
+
+Ни один миграционный тест не зависит от состояния dev-БД: тесты работают
+на изолированном test-PG (:5433) и per-session БД; scratch-based
+verification и catalog-race isolation (COS-076) — несущее ядро этой
+процедуры. Скрипты: `services/scripts/suite_gate.ps1`,
+`services/scripts/cleanup_scratch_pg.py`.
+
 ### 10.3. Recovery
 
 При полном сбросе Valkey:
@@ -863,6 +890,19 @@ domain/run, с rotation и audit.
 теперь → 503.
 
 `/health` не должен раскрывать credentials, tokens или внутренние stack traces.
+
+**Ownership тестового контура и suite gate (PK-C-003.1, канон COS-136).**
+
+- У тестового стенда есть **именованный владелец контура** — инженер,
+  отвечающий за его здоровье; при деградации `/health`/`/ready` он чинит
+  первым (не «кто-нибудь из команды»).
+- **Единственная команда здоровья** контура —
+  `services/scripts/suite_gate.ps1`: она поднимает зависимости, гоняет
+  бэкенд- и фронт-сьюты и печатает итог. Любая локальная вариация прогона
+  не считается приёмкой.
+- `/ready` — day-one контракт: честный компонент-мап (503 при down
+  hard-dep, 200+`degraded` при soft) до того, как через edge уходит
+  пользовательский трафик (COS-090).
 
 ### 13.2. Наблюдаемость
 

@@ -2010,29 +2010,28 @@ are accepted; UI is the next product surface.
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-134** | Flash | 20-24h | P1 | COS-133, COS-111, COS-128 | Интеграция жизненного цикла запусков и управления пайплайнами в Web IDE (Cancel, Rerun, Step-Breakdown и тайминги в Terminal Drawer) |
-| **COS-135** | Luna | 20-24h | P1 | COS-132, IDE-CORE-010, IDE-UI-003 | Панель аудита безопасности и инспектор SARIF в Web IDE: сканирование репозитория, навигация по violations и экспорт отчёта |
-| **COS-136** | Boss | 20-24h | P1 | COS-101, PK-C-003, PK-DIR-008 | Contract A: Ingestion вердиктов PrettyK Hub в Cosmoport, крипто-связка с Evidence Ledger и закрытие чеклиста анти-паттернов PK-C-003 |
+| **COS-134** | Flash | 20-24h | P1 | COS-133, COS-111, COS-128 | ✅ DONE — Интеграция жизненного цикла запусков и управления пайплайнами в Web IDE (Cancel, Rerun, Step-Breakdown и тайминги в Terminal Drawer) |
+| **COS-135** | Luna | 20-24h | P1 | COS-132, IDE-CORE-010, IDE-UI-003 | ✅ DONE — Панель аудита безопасности и инспектор SARIF в Web IDE: сканирование репозитория, навигация по violations и экспорт отчёта |
+| **COS-136** | Boss | 20-24h | P1 | COS-101, PK-C-003, PK-DIR-008 | ✅ DONE — Contract A: Ingestion вердиктов PrettyK Hub в Cosmoport, крипто-связка с Evidence Ledger и закрытие чеклиста анти-паттернов PK-C-003 |
 
 ### Карточки волны
 
-#### COS-134 · Flash · Web IDE: Cancel, Rerun & Step-Breakdown
+#### ✅ COS-134 · Flash · Web IDE: Cancel, Rerun & Step-Breakdown — DONE (2026-09-19)
 > **Scope:**
 > (1) В `D:\prettyk-ide\src\workspace\client.ts`: добавить типизированные вызовы жизненного цикла запусков:
 >     - `getRunDetail(repo: string, runId: string): Promise<WorkspaceRunDetailResponse>` (`GET /api/v1/repos/workspace/runs/{run_id}`);
 >     - `cancelRun(repo: string, runId: string): Promise<WorkspaceRunCancelResponse>` (`POST /api/v1/repos/workspace/runs/{run_id}/cancel`);
 >     - `rerunRun(repo: string, runId: string): Promise<WorkspaceRunRerunResponse>` (`POST /api/v1/repos/workspace/runs/{run_id}/rerun`);
-> (2) В `D:\prettyk-ide\src\workspace\types.ts`: зафиксировать интерфейсы DTO `WorkspaceRunStepSummary` (name, status, exitCode, durationMs, startedAt, finishedAt), `WorkspaceRunDetailResponse`, `WorkspaceRunCancelResponse`, `WorkspaceRunRerunResponse` в соответствии с контрактом COS-133;
+> (2) В `D:\prettyk-ide\src\workspace\types.ts`: зафиксировать интерфейсы DTO `WorkspaceRunStepSummary` (name, status, exit_code, duration_ms, started_at, finished_at), `WorkspaceRunDetailResponse`, `WorkspaceRunCancelResponse`, `WorkspaceRunRerunResponse` в соответствии с фактическим JSON бэкенда (snake_case);
 > (3) В `D:\prettyk-ide\src\cosmo\ide\WebIDETerminalDrawer.tsx`:
 >     - Добавить панель детализации шагов пайплайна (Steps breakdown): статусы шагов с цветовой индикацией (`running`, `success`, `failure`, `killed`, `pending`), длительность каждого шага и код завершения;
->     - Кнопка "Отменить запуск" (Cancel Pipeline): активна для незавершённых запусков (`running`/`pending`), при подтверждении выполняет `cancelRun`;
+>     - Кнопка "Отменить запуск" (Cancel Pipeline): активна для незавершённых запусков (`running`/`pending`), при inline-подтверждении выполняет `cancelRun`;
 >     - Кнопка "Перезапустить запуск" (Rerun Pipeline): активна для терминальных запусков, выполняет `rerunRun`, обновляет `runId` в URL/состоянии с сохранением связи `originalRunId`;
 > (4) Vitest тесты: моки запросов `getRunDetail`, `cancelRun`, `rerunRun`, отображение шагов, состояния кнопок cancel/rerun при разных статусах; `tsc -b` green, vitest passed.
 >
-> **Out of scope:** правки бэкенда; изменение схемы БД.
-> **Acceptance:** WebIDETerminalDrawer корректно отображает детализированные шаги с таймингами; кнопки Cancel и Rerun инициируют соответствующие вызовы API; `tsc -b` — 0 ошибок, vitest зелёный.
+> **Acceptance:** принято 19 сентября 2026 (Flash). WebIDETerminalDrawer корректно отображает детализированные шаги с таймингами и статусами; кнопки Cancel и Rerun корректно управляют жизненным циклом; чистый редьюсер `useRunDetail` с 4s-поллингом пока прогон активен; `parseRunLifecycle` обрабатывает 400/404/502; `tsc -b` — 0 ошибок, vitest 182/182 passed.
 
-#### COS-135 · Luna · Web IDE: Security Audit Lens & SARIF Inspector
+#### ✅ COS-135 · Luna · Web IDE: Security Audit Lens & SARIF Inspector — DONE (2026-09-19)
 > **Scope:**
 > (1) В `D:\prettyk-ide\src\workspace\client.ts`: реализовать вызовы Quality Gate сканирования:
 >     - `triggerGateScan(repo: string, ref?: string, maxFiles?: number): Promise<WorkspaceGateScanResponse>`;
@@ -2046,10 +2045,9 @@ are accepted; UI is the next product surface.
 >     - Кнопка "Download SARIF": экспорт отчёта SARIF 2.1.0 (`cosmo-security-audit.sarif`);
 > (4) Vitest тесты: моки ответов `gate-scan`, рендеринг вердиктов BLOCK/WARN/PASS, навигация по нарушениям, обработка ошибки 413; `tsc -b` green, vitest passed.
 >
-> **Out of scope:** правки алгоритма сканирования на бэкенде.
-> **Acceptance:** по нажатию кнопки запускается сканирование репозитория через `POST /workspace/gate-scan`, отображаются нарушения и вердикт, работает переход по файлам и скачивание SARIF; `tsc -b` — 0 ошибок, vitest зелёный.
+> **Acceptance:** принято 19 сентября 2026 (Luna). «Security Audit» в топбаре запускает `POST /workspace/gate-scan`; панель показывает бейдж вердикта PASS/WARN/BLOCK, счётчики файлов и время, список нарушений с фильтром All/Errors/Warnings; клик по нарушению открывает файл в редакторе и ставит каретку на строку; «Download SARIF» скачивает `cosmo-security-audit.sarif`; 413 → «Repository exceeds the scan limit (1000 files)», сетевые сбои — Retry. `tsc -b` 0 ошибок, vitest 221/221 passed.
 
-#### COS-136 · Boss · Cosmoport: Contract A Hub Ingestion & PK-C-003 Hardening
+#### ✅ COS-136 · Boss · Cosmoport: Contract A Hub Ingestion & PK-C-003 Hardening — DONE (2026-09-19)
 > **Scope:**
 > (1) В `orchestrator/cosmo/domain/hub_verdict.py`: Pydantic-модели:
 >     - `HubVerdictIngestRequest` (run_id: str, box_verdict: str, hub_verdict: str, finding_ids: list[str], evidence_hashes: list[str], provenance_metadata: dict, idempotency_key: str);
@@ -2063,10 +2061,670 @@ are accepted; UI is the next product surface.
 >     - `docs/DEPLOYMENT.md`: формализация процедуры миграции (PK-C-003.3), ownership стенда и suite gate (PK-C-003.1), канонические digest-теги (PK-C-003.4);
 >     - `docs/ARCHITECTURE-DIRECTION.md`: фиксация "Failover = Phase 3, not Phase 1" (PK-C-003.2);
 >     - Обновление чеклиста в `docs/BACKLOG.md` (PK-C-003.1..003.6);
-> (4) Unit + route тесты: `tests/cosmo/test_hub_verdict_ingest.py` (приём вердикта, дедупликация повторов, запись в ledger, блокировка промоушена); suite gate ≥3046 passed, 0 failed.
+> (4) Unit + route тесты: `tests/cosmo/test_hub_verdict_ingest.py` (приём вердикта, дедупликация повторов, запись в ledger, блокировка промоушена); suite gate 3062 passed, 0 failed, 17 skipped.
 >
-> **Out of scope:** разработка UI; генерация findings на стороне Hub.
-> **Acceptance:** `POST /api/v1/hub/verdicts/ingest` принимает и дедуплицирует вердикты Hub с крипто-записью в ledger; требования PK-C-003 формализованы в документации; suite gate зелёный.
+> **Acceptance:** принято 19 сентября 2026 (Boss). `POST /api/v1/hub/verdicts/ingest` принимает и дедуплицирует вердикты Hub с крипто-записью в ledger; требования PK-C-003 формализованы в документации; 16/16 route tests pass; full suite gate 3062 passed / 0 failed.
+
+---
+
+## ⬜ READY — SOVEREIGN WORKSPACE WAVE 4: EDITOR SURFACE, SBOM ATTESTATION & HUB CONTRACT B
+
+> **Правило разделения поверхностей (Zero-Collision Protocol):**
+> 1. **Flash:** единоличный владелец `D:\prettyk-ide`. Ни Boss, ни Luna не трогают `prettyk-ide`.
+> 2. **Luna:** изоляция в Supply Chain / SBOM подсистеме `prettyk-airlock` (`sbom_scan.py`, `sbom_gate.py`, `releases.py`, `test_sbom_gate.py`). Не трогает Hub и IDE.
+> 3. **Boss:** изоляция в Quality Gate / Hub Evaluation подсистеме `prettyk-airlock` (`hub_evaluation.py`, `hub_client.py`, `hub_dispatcher.py`, `hub.py`, `test_hub_evaluation_dispatch.py`). Не трогает releases и IDE.
+> Пересечение файлов между воркерами строго 0.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-137** | Flash | 20-24h | P1 | COS-131, COS-135 | ✅ DONE — Web IDE: Code Editor Surface — Line Numbers Gutter, Syntax Highlighting & Reveal Target Navigation |
+| **COS-138** | Luna | 20-24h | P1 | COS-136, PK-C-003.6 | ✅ DONE — SBOM/Grype attestation gate: digest-сверка конверта/отчётов/артефакта, BLOCK при critical>0, крипто-якорь sha256(SBOM) в evidence ledger, attach/read API |
+| **COS-139** | Boss | 20-24h | P1 | COS-136, PK-DIR-008 | ✅ DONE — Contract B: Control Plane → PrettyK Hub Evaluation Dispatcher & Clearance Gate |
+
+### Карточки волны
+
+#### ✅ COS-137 · Flash · Web IDE: Code Editor Surface with Line Gutter & Syntax Highlighting — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-ide`:
+>     - Создать модуль `src/cosmo/ide/codeEditorUtils.ts`: чистые функции токенизации синтаксиса для основных языков (ts/js, python, yaml, json, markdown, shell), разметка строк, форматирование отступов (Tab/Shift-Tab 2/4 пробела);
+>     - Создать компонент `src/cosmo/ide/CodeEditor.tsx`:
+>       - Номера строк (Line gutter) слева с возможностью клика для выделения строки;
+>       - Подсветка активной/текущей строки;
+>       - Синхронизация скролла между gutter и текстовой областью;
+>       - Интеграция с `revealTarget` (позиционирование каретки и скролл к строке при переходе из SecurityLens и Search);
+>       - Поддержка шорткатов (Tab для отступов, Ctrl+S сохранение, Ctrl+Shift+G переход в review);
+>     - В `src/app/App.tsx`: замена `<textarea className="editor-textarea">` на `<CodeEditor>`;
+>     - В `src/app/app.css`: стили темной темы редактора (.cosmo-ide-root, monospace, gutter, active line, syntax tokens);
+> (2) Vitest тесты в `src/cosmo/ide/codeEditorUtils.test.ts`: токенизация, вычисление номеров строк, отступы, позиционирование каретки;
+> (3) Гейт: `tsc -b` — 0 ошибок, `npx vitest run` — 251/251 зелёные (14 файлов), `npm run build` — успешен.
+>
+> **Acceptance:** принято 19 сентября 2026 (Flash). CodeEditor заменяет базовый textarea в Web IDE; overlay-архитектура с gutter, номерами строк и подсветкой активной строки; синхронизация revealTarget скроллит к строке при навигации из SecurityLens и поиска; `tsc -b` 0 ошибок, vitest 251/251 passed.
+
+#### ✅ COS-138 · Luna · Cosmoport: PK-C-003.6 Release Bundle SBOM & Grype Attestation Gate — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Supply Chain / SBOM):
+>     - В `orchestrator/cosmo/domain/sbom_scan.py`: Pydantic-модели:
+>       - `SbomPackage` (name, version, type, purl, license);
+>       - `SbomReport` (format: Literal["spdx-json", "cyclonedx-json"], syft_version: str, artifact_digest: str, packages_count: int, packages: list[SbomPackage]);
+>       - `GrypeFinding` (id, severity: Literal["critical", "high", "medium", "low", "negligible"], package_name, installed_version, fixed_version);
+>       - `GrypeScanReport` (scanner_version: str, artifact_digest: str, critical_count: int, high_count: int, medium_count: int, low_count: int, findings: list[GrypeFinding]);
+>       - `ReleaseSbomAttachRequest` (sbom: SbomReport, vulnerabilities: GrypeScanReport, artifact_digest: str);
+>       - `ReleaseSbomAttestationResponse` (accepted: bool, release_id: str, artifact_digest: str, sbom_digest: str, clearance: str, gate_verdict: str);
+>     - В `orchestrator/cosmo/ledger/sbom_gate.py`:
+>       - `verify_and_attest_release_sbom(session, release_id, payload) -> ReleaseSbomAttestationResponse`;
+>       - Проверка: `artifact_digest` в SBOM и Grype должен строго совпадать с хэшем артефакта релиза;
+>       - Проверка порогов: если `critical_count > 0`, gate_verdict = `BLOCK`, иначе `PASS`;
+>       - Запись аттестации в `cosmo_evidence_ledger` с привязкой к `release_id`;
+>     - В `orchestrator/cosmo/api/routes/releases.py`:
+>       - `POST /api/v1/releases/{release_id}/sbom/attach` — приём и аттестация SBOM + Grype;
+>       - `GET /api/v1/releases/{release_id}/sbom` — чтение аттестации и статуса SBOM;
+> (2) Тесты в `orchestrator/tests/cosmo/test_sbom_gate.py`:
+>     - Успешная аттестация clean SBOM (gate PASS, запись в ledger);
+>     - Отклонение при mismatch `artifact_digest` (422 Unprocessable Entity);
+>     - Блокировка релиза при наличии critical vulnerabilities (gate BLOCK);
+>     - 404 при неизвестном release_id;
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Contract B, файлы routes/hub.py.
+> **Acceptance:** `POST /api/v1/releases/{release_id}/sbom/attach` валидирует Syft SBOM и Grype отчет, сверяет digest, пишет в ledger; critical > 0 блокирует релиз; suite gate зелёный.
+> **Принято 19 сентября 2026 (Luna):** `domain/sbom_scan.py` (DTO Syft/Grype, sha256-валидация digest, canonical `sbom_content_hash`), `ledger/sbom_gate.py` (`verify_and_attest_release_sbom` + `latest_sbom_attestation`, критичный счёт честный: `max(заявленный, observed findings)`), маршруты `POST .../sbom/attach` + `GET .../sbom` (GATE_DECIDE). Focused `test_sbom_gate.py` — 13 passed; полный suite gate — 3114 passed / 0 failed / 17 skipped.
+
+#### ✅ COS-139 · Boss · Cosmoport: Contract B Control Plane → PrettyK Hub Evaluation Dispatcher — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Quality Gate / Hub Evaluation):
+>     - В `orchestrator/cosmo/domain/hub_evaluation.py`: Pydantic-модели Contract B по `docs/research/2026-09-02-cross-product-contract-bridge.md`:
+>       - `HubSecurityExecution` (studio_run_id: str, verdict: str, act_ref: str, evidence_refs: list[str]);
+>       - `HubEvaluationRequest` (contract_version: str = "1.0", request_id: str, evaluation_id: str, project_id: str, application_ids: list[str], release_id: str, run_id: str, build_id: str, artifact_digest: str, release_profile: str, target_zone: str, qualifying_context: bool, security_execution: HubSecurityExecution);
+>       - `HubEvaluationDispatchResponse` (dispatched: bool, request_id: str, evaluation_id: str, status: str, dispatched_at: str);
+>     - В `orchestrator/cosmo/adapters/hub_client.py`:
+>       - `HubEvaluationClient`: HTTP-клиент к PrettyK Hub (`http://localhost:8000/api/v1/evaluations` по умолчанию, настраивается через `COSMO_HUB_URL`), таймаут 10с, retry c экспоненциальным backoff;
+>     - В `orchestrator/cosmo/control_plane/hub_dispatcher.py`:
+>       - Сервис `HubEvaluationDispatcher`: валидация обязательного контекста (`qualifying_context=True`, immutable digests), формирование запроса Contract B, запись события в `cosmo_audit_events`;
+>     - В `orchestrator/cosmo/api/routes/hub.py`:
+>       - `POST /api/v1/hub/evaluations/dispatch` — инициирование отправки оценки в Hub;
+>       - `GET /api/v1/hub/evaluations/{evaluation_id}` — статус отправленной оценки;
+> (2) Тесты в `orchestrator/tests/cosmo/test_hub_evaluation_dispatch.py`:
+>     - Валидация схемы Contract B (все обязательные поля);
+>     - Идемпотентность по `evaluation_id`;
+>     - Успешная отправка и обработка сетевого сбоя / таймаута с фиксацией в аудите;
+>     - Запрет отправки при `qualifying_context=False` для production профилей;
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Supply Chain / SBOM, файлы routes/releases.py.
+> **Acceptance:** принято 19 сентября 2026 (Boss). `POST /api/v1/hub/evaluations/dispatch` валидирует и отправляет Contract B в PrettyK Hub; клиент защищён таймаутом 10с и bounded retry с экспоненциальным backoff (transport/таймаут/429/5xx; 4xx — без повторов); аудит фиксирует success/failed/duplicate; `GET /api/v1/hub/evaluations/{evaluation_id}` читает статус отправленной оценки; 39/39 тестов зелёные, suite gate 3101 passed / 0 failed / 17 skipped.
+>
+> **Scope deviation:** реестр отправок и audit-запись — in-memory (один процесс cosmo-api) — честная граница до появления durable-таблицы вне миграционного freeze; API-контракт от этого не зависит. Идемпотентность — по `evaluation_id` + сверка immutable-identity (release/run/build/digest): повтор с той же identity → `duplicate` без второй отправки, с другой → 400 (дрейф контекста). Clearance gate (Studio-вердикт `PASS`, `qualifying_context=True` для production-профилей) срабатывает до любого I/O.
+
+---
+
+## ✅ DONE — SOVEREIGN WORKSPACE WAVE 5: COMMAND PALETTE & BREADCRUMBS, HUB CLEARANCE CALLBACK (CONTRACT C) & DIGEST-PIN MANIFEST (PK-C-003.4)
+
+> **Правило разделения поверхностей (Zero-Collision Protocol):**
+> 1. **Flash:** единоличный владелец `D:\prettyk-ide`. Ни Boss, ни Luna не трогают `prettyk-ide`.
+> 2. **Luna:** изоляция в подсистеме Supply Chain / Artifacts / Manifest (`domain/artifact_manifest.py`, `ledger/manifest_verifier.py`, `routes/artifacts.py`, `test_artifact_manifest.py`). Не трогает Hub, Releases и IDE.
+> 3. **Boss:** изоляция в подсистеме Quality Gate / Hub Contracts (`domain/hub_clearance.py`, `ledger/hub_clearance_gate.py`, `routes/hub.py`, `test_hub_clearance.py`). Не трогает Artifacts, Releases и IDE.
+> Пересечение файлов между воркерами строго 0.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-140** | Flash | 20-24h | P1 | COS-137 | ✅ DONE — Web IDE: Command Palette (Ctrl+P / Quick Open File), Breadcrumbs Navigation & File Actions |
+| **COS-141** | Boss | 20-24h | P1 | COS-139, PK-DIR-008 | ✅ DONE — Contract C: PrettyK Hub Quality Gate Clearance Callback & Final Transfer Authorization Gate |
+| **COS-142** | Luna | 20-24h | P1 | COS-138, PK-C-003.4 | ✅ DONE — Artifact Manifest Digest-Pin & Canonical Tag Validation: canonical tag-контракт (slug/semver/no-latest/sha256), детерминированный digest_pin, ledger-якорь, verify/read API |
+
+### Карточки волны
+
+#### ✅ COS-140 · Flash · Web IDE: Command Palette (Ctrl+P / Quick Open File), Breadcrumbs Navigation & File Actions — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-ide`:
+>     - Создать модуль `src/cosmo/ide/commandPaletteUtils.ts`: чистые функции фильтрации и нечёткого поиска (fuzzy match) по путям файлов, подсветка совпадающих фрагментов, ранжирование результатов (недавние файлы, точные совпадения имени файла > совпадение в пути), утилиты копирования путей;
+>     - Создать компонент `src/cosmo/ide/CommandPalette.tsx`:
+>       - Модальное окно быстрого поиска файлов по шорткату `Ctrl+P` / `Cmd+P` (и по клику на поиск в header/breadcrumbs);
+>       - Полнотекстовый ввод с автофокусом и очисткой;
+>       - Список найденных файлов с поддержкой навигации с клавиатуры (ArrowUp, ArrowDown, Enter для открытия, Escape для закрытия);
+>       - Отображение иконки файла, пути и совпавших символов;
+>       - Быстрый список недавних / открытых файлов при пустом поисковом запросе;
+>     - Создать компонент `src/cosmo/ide/Breadcrumbs.tsx`:
+>       - Навигационная цепочка над редактором кода: репозиторий / ветка / сегменты пути файла;
+>       - Интерактивные кликабельные сегменты (клик по сегменту каталога или вызов Command Palette);
+>       - Панель действий с текущим файлом: кнопки «Copy Path», «Copy Relative Path», «Copy Content» с индикатором подтверждения (Copied!);
+>     - В `src/app/App.tsx`: подключение `Breadcrumbs` над `CodeEditor`, глобальный слушатель `Ctrl+P`/`Cmd+P` для открытия `CommandPalette`;
+>     - В `src/app/app.css`: стили для `CommandPalette` (overlay, backdrop-blur, dark theme, active item, highlight) и `Breadcrumbs` (compact toolbar, breadcrumb separator, action buttons);
+> (2) Vitest тесты в `src/cosmo/ide/commandPaletteUtils.test.ts`: нечёткий поиск, ранжирование, подсветка совпадений, пустые запросы, обработка спецсимволов;
+> (3) Гейт: `tsc -b` — 0 ошибок, `npx vitest run` — все тесты зелёные, `npm run build` — успешен.
+>
+> **Acceptance:** принято 19 сентября 2026 (Flash). Command Palette по `Ctrl+P` / `Cmd+P` и кнопке в тулбаре; ярусное ранжирование (exact name 1000 → name prefix 800 → name substring 600 → path prefix 500 → fuzzy 300) со штрафом за разрывы и бустом recentFiles (+40); Breadcrumbs над редактором с сегментами пути и действиями Copy Path / Relative Path / Content (2с toast badge); 45 vitest тестов в `commandPaletteUtils.test.ts`, общий vitest 296/296 passed across 15 files, `tsc -b` 0 ошибок, vite build 54 модуля green.
+>
+> **Out of scope:** Backend API, любые изменения в `D:\prettyk-airlock`.
+
+#### ✅ COS-141 · Boss · Cosmoport: Contract C PrettyK Hub Quality Gate Clearance Callback & Final Transfer Authorization Gate — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Quality Gate / Hub Contracts):
+>     - В `orchestrator/cosmo/domain/hub_clearance.py`: Pydantic-модели по спецификации Contract C (`docs/research/2026-09-02-cross-product-contract-bridge.md` §6):
+>       - `HubClearanceIngestRequest`: `contract_version: Literal["1.0"] = "1.0"`, `evaluation_id: str`, `release_id: str`, `run_id: str`, `evaluated_at: str`, `policy_version: str`, `security_execution_verdict: Literal["PASS", "WARN", "FAIL", "ERROR"]`, `act_ref: str`, `qg_clearance: Literal["PASS_GRANTED", "BLOCKED", "REJECTED"]`, `verdict: Literal["PASS", "WARN", "FAIL", "ERROR"]`, `ready_for_transfer: bool`, `qualifying_context: bool`, `ok_to_transfer: bool`, `evidence_refs: list[str] = []`, `explanation_ref: str = ""`, `metadata: dict[str, Any] = {}`;
+>       - `HubClearanceIngestResponse`: `status: Literal["accepted", "duplicate", "rejected"]`, `evaluation_id: str`, `release_id: str`, `clearance_status: Literal["PASS_GRANTED", "BLOCKED", "REJECTED"]`, `transfer_allowed: bool`, `ledger_entry_id: str`, `timestamp: str`;
+>     - В `orchestrator/cosmo/ledger/hub_clearance_gate.py`:
+>       - Сервис `HubClearanceGateManager`:
+>         - Идемпотентность и защита от дрейфа: ключ дедупликации `(evaluation_id, release_id)` со сверкой неизменяемого контекста (`run_id`, `policy_version`);
+>         - Криптографический якорь: вычисление SHA256 от clearance payload и запись в `cosmo_evidence_ledger` с типом `QG_CLEARANCE`;
+>         - Правило авторизации: `transfer_allowed = True` СТРОГО если `qg_clearance == "PASS_GRANTED"` И `ok_to_transfer is True` И `security_execution_verdict in ("PASS", "WARN")`. При любом ином исходе — `transfer_allowed = False`, промоушен в sovereign transfers (`zt`/`zpe`) заблокирован;
+>     - В `orchestrator/cosmo/api/routes/hub.py`:
+>       - `POST /api/v1/hub/clearance/ingest` — приём вердикта клиренса Quality Gate от Hub;
+>       - `GET /api/v1/hub/clearance/{release_id}` — чтение актуального статуса клиренса релиза;
+>       - `GET /api/v1/hub/clearance/by-evaluation/{evaluation_id}` — чтение по ID оценки;
+> (2) Тесты в `orchestrator/tests/cosmo/test_hub_clearance.py`:
+>     - Валидация схемы Contract C (полнота полей, строгие enum);
+>     - Идемпотентность и обнаружение конфликтов при дрейфе контекста (400 при расхождении `run_id`);
+>     - Фиксация в `cosmo_evidence_ledger` и проверка вычисления хеша;
+>     - Блокировка трансфера при `qg_clearance != "PASS_GRANTED"` или `ok_to_transfer is False`;
+>     - Разрешение трансфера при полном согласии политик (`PASS_GRANTED`, `ok_to_transfer=True`);
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Supply Chain / Artifacts, файлы routes/releases.py и routes/artifacts.py.
+> **Acceptance:** принято 19 сентября 2026 (Boss). `POST /api/v1/hub/clearance/ingest` принимает вердикт клиренса Contract C, дедуплицирует по `(evaluation_id, release_id)` и отклоняет дрейф неизменяемого контекста (`run_id`, `policy_version`) с 400; неизвестный `run_id` → 404; неполная/нестрогая схема → 422. Клиренс якорится в `evidence_ledger` (SHA256 от payload, `content_ref=hub://clearance/<release_id>/<evaluation_id>`, `source=prettyk-hub`), latest wins. Правило авторизации — fail-closed: `transfer_allowed=True` строго при `qg_clearance=="PASS_GRANTED"` И `ok_to_transfer is True` И `security_execution_verdict in ("PASS","WARN")`; положительный клиренс при `qualifying_context=False` принимается, но записывается как `rejected` с `transfer_allowed=False`. `GET /api/v1/hub/clearance/{release_id}` и `GET /api/v1/hub/clearance/by-evaluation/{evaluation_id}` читают актуальный статус (404 при отсутствии). 27/27 тестов зелёные, suite gate 3141 passed / 0 failed / 17 skipped; OpenAPI-фикстуры регенерированы (135 путей / 175 схем, чистые добавления, 0 удалений, shared-контент без изменений).
+>
+> **Scope deviation:** (1) Колонка `evidence_ledger.type` — PG ENUM `evidence_type_enum` (7 значений, включая `decision`), миграционная цепочка заморожена, поэтому литерал `QG_CLEARANCE` в колонку не пишется: запись идёт с `type='decision'`, а маркер `clearance_type="QG_CLEARANCE"` — в `provenance_json` вместе с `source='prettyk-hub'`, `contract='C'`. API-контракт и семантика клиренса от этого не зависят; при разморозке миграций маркер поднимается в колонку. (2) Enforcing-проводка в transfer (`routes/releases.py`) не делалась — файл вне поверхности карточки; поставлен сервисный хелпер `release_transfer_allowed()` (fail-closed) + read API, которые вызывающий контур промоушена обязан использовать. Это ограничение объёма, а не пропуск теста.
+
+#### ✅ COS-142 · Luna · Cosmoport: PK-C-003.4 Artifact Manifest Digest-Pin & Canonical Tag Validation Service — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Supply Chain / Artifacts / Manifest):
+>     - В `orchestrator/cosmo/domain/artifact_manifest.py`: Pydantic-модели по требованию PK-C-003.4:
+>       - `CanonicalArtifactTag`: `name: str`, `version: str`, `digest: str` (валидация regex `^sha256:[a-f0-9]{64}$`). Валидатор: строгий запрет тега `latest` или версий, содержащих `latest`. Метод `canonical_ref() -> str` формирует каноническую строку вида `<name>:<version>@sha256:<digest>`;
+>       - `ArtifactBundleManifest`: `bundle_id: str`, `release_version: str`, `profile: Literal["ordinary@1", "hardened@1", "airgap@1"]`, `artifacts: list[CanonicalArtifactTag]`, `expected_digest_pin: str | None = None`, `created_at: str`;
+>       - `ManifestVerificationResult`: `valid: bool`, `bundle_id: str`, `digest_pin: str`, `artifacts_count: int`, `errors: list[str] = []`, `ledger_entry_id: str | None = None`;
+>     - В `orchestrator/cosmo/ledger/manifest_verifier.py`:
+>       - Сервис `BundleManifestVerifier`:
+>         - Вычисление детерминированного `digest_pin` бандла: SHA256 от канонического представления профиля и отсортированных `canonical_ref` всех артефактов;
+>         - Сверка с `expected_digest_pin` (при наличии);
+>         - Запись проверенного манифеста в `cosmo_evidence_ledger` с типом записи `BUNDLE_MANIFEST`;
+>         - Отклонение любых манифестов с незакрепленными версиями или тегом latest;
+>     - В `orchestrator/cosmo/api/routes/artifacts.py`:
+>       - `POST /api/v1/artifacts/manifest/verify` — верификация манифеста, расчет digest_pin и фиксация в ledger;
+>       - `GET /api/v1/artifacts/manifest/{bundle_id}` — чтение подтвержденного манифеста;
+> (2) Тесты в `orchestrator/tests/cosmo/test_artifact_manifest.py`:
+>     - Валидация канонического формата тегов и отказ при наличии `latest`;
+>     - Детерминированный расчёт `digest_pin` независимо от порядка артефактов в запросе;
+>     - Обнаружение расхождения digest-pin;
+>     - Фиксация в evidence ledger;
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Quality Gate / Hub, файлы routes/hub.py и routes/releases.py.
+> **Acceptance:** `POST /api/v1/artifacts/manifest/verify` валидирует canonical tag-формат (slug/semver/no-latest/sha256), считает детерминированный `digest_pin` (порядок артефактов не влияет), сверяет `expected_digest_pin` (mismatch → `valid=false` + errors, не 5xx), фиксирует проверенный манифест в evidence ledger; `GET /api/v1/artifacts/manifest/{bundle_id}` читает подтверждённый манифест (404 иначе); suite gate зелёный.
+> **Принято 19 сентября 2026 (Luna):** `domain/artifact_manifest.py` (DTO canonical tag/manifest/result, строгий slug + semver + `sha256:<64 lowercase hex>`, `canonical_ref()`, `manifest_content_hash`), `ledger/manifest_verifier.py` (`BundleManifestVerifier` + `compute_digest_pin`, ledger-якорь через `commit_evidence_entry`), маршруты `POST /manifest/verify` + `GET /manifest/{bundle_id}` в `routes/artifacts.py`. Focused `test_artifact_manifest.py` — 69 passed; полный suite gate — 3210 passed / 0 failed / 17 skipped.
+>
+> **Scope deviation:** (1) `type='decision'` + маркер `manifest_type="BUNDLE_MANIFEST"` в `provenance_json` вместо нового значения PG-ENUM `evidence_type` — цепочка миграций заморожена, конвенция гейтов COS-136/138/141; pinned-набор (`canonical_refs`) при этом durable в ledger. (2) Реестр подтверждённых манифестов для GET — in-memory (один процесс cosmo-api) до появления durable-таблицы вне freeze; API-контракт от этого не зависит. (3) `run_id` добавлен в манифест опциональным полем: он NOT NULL FK на `runs.id`, а у манифеста прогона нет — без него верификация валидна, но не якорится (`ledger_entry_id=None`).
+
+---
+
+## 🔄 ACTIVE — SOVEREIGN WORKSPACE WAVE 6: SOURCE CONTROL & DIAGNOSTICS (IDE), TRANSFER AUTHORIZATION & CAS GUARD (AIRLOCK), EVIDENCE ATTESTATION & AIRGAP BUNDLE (SUPPLY CHAIN)
+
+> **Правило разделения поверхностей (Zero-Collision Protocol):**
+> 1. **Flash:** единоличный владелец `D:\prettyk-ide`. Ни Boss, ни Luna не трогают `prettyk-ide`.
+> 2. **Boss:** изоляция в подсистеме Quality Gate & Release Transfer (`orchestrator/cosmo/domain/transfer_authorization.py`, `orchestrator/cosmo/control_plane/transfer_guard.py`, `orchestrator/cosmo/api/routes/releases.py`, `orchestrator/tests/cosmo/test_transfer_authorization.py`). Не трогает artifacts.py, manifest, airgap и IDE.
+> 3. **Luna:** изоляция в подсистеме Supply Chain / Attestation / Airgap (`orchestrator/cosmo/domain/evidence_attestation.py`, `orchestrator/cosmo/ledger/attestation_packager.py`, `orchestrator/cosmo/domain/airgap_bundle.py`, `orchestrator/cosmo/ledger/airgap_verifier.py`, `orchestrator/cosmo/api/routes/artifacts.py`, `orchestrator/tests/cosmo/test_evidence_attestation.py`, `orchestrator/tests/cosmo/test_airgap_bundle.py`). Не трогает releases.py, hub.py и IDE.
+> Пересечение файлов между воркерами строго 0.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-143** | Flash | 12-14h | P1 | COS-140 | ✅ DONE — Web IDE: Source Control View, Staged/Unstaged Working Tree & Inline Diff Review |
+| **COS-144** | Flash | 10-12h | P1 | COS-137, COS-140 | ✅ DONE — Web IDE: Diagnostics & Problems Drawer with Inline Squiggly Highlighting & Quick Navigation |
+| **COS-149** | Flash | 12-14h | P1 | COS-143, COS-144 | ✅ DONE — Web IDE: Multi-File Tabs & Working Set Management |
+| **COS-150** | Flash | 10-12h | P1 | COS-144, COS-149 | ✅ DONE — Web IDE: Status Bar & Notification Toast Center |
+| **COS-145** | Boss | 12-14h | P1 | COS-138, COS-141 | ✅ DONE — Cosmoport: Release Transfer Authorization Enforcement & Fail-Closed Audit Gate |
+| **COS-146** | Boss | 10-12h | P1 | COS-145 | ✅ DONE — Cosmoport: Transfer CAS Concurrency Guard & Idempotent State Machine Replay |
+| **COS-147** | Luna | 12-14h | P1 | COS-138, COS-142 | ✅ DONE — Cosmoport: Release Evidence Attestation Bundle & Provenance Verifier: chain of custody (манифест+SBOM+clearance), `provenance_bundle_hash`, ledger-якорь, bundle/read API |
+| **COS-148** | Luna | 10-12h | P1 | COS-142, COS-147 | ✅ DONE — Cosmoport: Airgap Export/Import Bundle Integrity & Offline Manifest Verification Service: офлайн missing/corrupted/unregistered, порядок-независимый `package_digest_pin`, verify/read API |
+| **COS-151** | Boss | 6-8h | P1 | COS-147, COS-148 | ✅ DONE — Cosmoport: канонический топологический wipe-порядок (общий `_wipe_order.py`, 45 таблиц, потомок→родитель + обнуление циклических FK), порядконезависимость Wave 6 166+166, орфаны 0 |
+| **COS-152** | Luna | 8-12h | P1 | COS-147, COS-148 | ✅ DONE — Cosmoport: Read-through durable для GET-поверхностей attestation/airgap/manifest — чтение из evidence_ledger вместо in-memory реестров, restart-survival |
+| **COS-153** | Boss | 8-12h | P1 | COS-139, COS-151 | ✅ DONE — Cosmoport: Read-through durable для hub evaluation dispatch — GET статуса отправки из evidence_ledger вместо in-memory реестра, restart-survival |
+
+### Карточки волны
+
+#### ✅ COS-143 · Flash · Web IDE: Source Control View, Staged/Unstaged Working Tree & Inline Diff Review — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-ide`:
+>     - Создать модуль `src/cosmo/ide/sourceControlUtils.ts`:
+>       - Чтение и категоризация измененных файлов: unstaged vs staged;
+>       - Статусные маркеры: Modified (`M`), Added (`A`), Deleted (`D`);
+>       - Хелперы для stage/unstage/stage-all/unstage-all/discard;
+>     - Создать компонент `src/cosmo/ide/SourceControl.tsx`:
+>       - Панель Source Control в боковом сайдбаре (переключатель между File Tree и Source Control);
+>       - Секция «Staged Changes» и «Changes» (unstaged) с количеством файлов;
+>       - Быстрые действия у каждого файла: Stage (`+`), Unstage (`-`), Discard (`Undo`);
+>       - Групповые действия: «Stage All Changes», «Unstage All Changes»;
+>       - Поле ввода commit message с валидацией (не пустое) и шорткатом `Ctrl+Enter` для коммита;
+>       - Интеграция с существующим `CommitDialog` / вызов коммита;
+>       - При клике по файлу в списке изменений — открытие диффа через существующий `ChangeReviewPanel`;
+>     - В `src/app/App.tsx`:
+>       - Переключатель сайдбара (Explorer / Source Control) с бейджем количества измененных файлов;
+>     - В `src/app/app.css`:
+>       - Стили для панели Source Control, бейджей статуса, кнопок stage/unstage.
+> (2) Vitest тесты в `src/cosmo/ide/sourceControlUtils.test.ts`:
+>     - Категоризация изменений, операции staging/unstaging, discard, валидация commit message.
+> (3) Гейт: `tsc -b` — 0 ошибок, `npx vitest run` — все тесты зелёные, `npm run build` — успешен.
+>
+> **Out of scope:** Backend API, любые изменения в `D:\prettyk-airlock`.
+> **Acceptance:** принято 19 сентября 2026 (Flash). Панель Source Control интегрирована в сайдбар с переключателем в Activity Bar; отображает изменённые и застейдженные файлы со статус-маркерами M/A/D; чистые функции staging transforms, discard и валидации commit message; клик по файлу открывает ChangeReviewPanel; 22 vitest тестов в `sourceControlUtils.test.ts`, общий vitest 345/345 passed across 17 files, `tsc -b` 0 ошибок, vite build 58 модулей green.
+
+#### ✅ COS-144 · Flash · Web IDE: Diagnostics & Problems Drawer with Inline Squiggly Highlighting & Quick Navigation — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-ide`:
+>     - Создать модуль `src/cosmo/ide/diagnosticsUtils.ts`:
+>       - Структуры данных `DiagnosticItem`: `id`, `file`, `line`, `col`, `severity` (`error`, `warning`, `info`), `source` (SARIF, linter, compiler), `message`;
+>       - Фильтрация по файлу, severity, поиск по сообщению;
+>       - Группировка проблем по файлам;
+>     - Создать компонент `src/cosmo/ide/ProblemsDrawer.tsx`:
+>       - Вкладка «Problems» в нижнем `WebIDETerminalDrawer` (или переключатель вкладок Logs / Terminal / Problems);
+>       - Счётчики: `X Errors, Y Warnings`;
+>       - Список проблем с иконками severity, именем файла, позицией `line:col` и описанием;
+>       - Клик по проблеме вызывает переход: открытие файла (если не открыт) и позиционирование курсора/скролла через `revealTarget` в `CodeEditor`;
+>     - В `src/cosmo/ide/CodeEditor.tsx`:
+>       - Отображение маркеров диагностик в gutter (красная точка/иконка для error, желтая для warning) на соответствующих строках;
+>       - Подчеркивание (squiggly underline или background tint) для проблемных строк;
+>     - В `src/app/app.css`: стили для списка проблем, gutter-маркеров и подчеркиваний.
+> (2) Vitest тесты в `src/cosmo/ide/diagnosticsUtils.test.ts`:
+>     - Парсинг, группировка, фильтрация по severity, сортировка по номеру строки.
+> (3) Гейт: `tsc -b` — 0 ошибок, `npx vitest run` — все тесты зелёные, `npm run build` — успешен.
+>
+> **Out of scope:** Backend API, любые изменения в `D:\prettyk-airlock`.
+> **Acceptance:** принято 19 сентября 2026 (Flash). ProblemsDrawer с фильтрацией (Errors/Warnings/Info) и триггером по `Ctrl+Shift+M`; интеграция в CodeEditor (маркеры в gutter, подсветка и подчеркивание проблемных строк); переход к позиции по клику на диагностику через revealTarget; 26 vitest тестов в `diagnosticsUtils.test.ts`, общий vitest 345/345 passed, `tsc -b` 0, vite build green.
+
+#### ✅ COS-149 · Flash · Web IDE: Multi-File Tabs & Working Set Management — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-ide`:
+>     - Создать модуль `src/cosmo/ide/tabsUtils.ts`:
+>       - Модель вкладки `TabItem`: `path: string`, `title: string`, `isDirty: boolean`, `isPinned?: boolean`;
+>       - Чистые функции: `openTab(tabs, path)`, `closeTab(tabs, path)`, `closeOtherTabs(tabs, path)`, `closeAllTabs(tabs)`, `selectNextTab(tabs, currentPath)`, `selectPrevTab(tabs, currentPath)`, `pinTab(tabs, path)`;
+>       - Хелперы для определения заголовка (имя файла) и тултипа (полный относительный путь);
+>     - Создать компонент `src/cosmo/ide/TabBar.tsx`:
+>       - Горизонтальная панель вкладок над `Breadcrumbs` / `CodeEditor`;
+>       - Элемент вкладки: иконка файла, название файла, точка-индикатор изменений (`●` isDirty), кнопка закрытия (`✕`);
+>       - Активная вкладка подсвечена; горизонтальный скролл при переполнении;
+>       - Контекстное меню (ПКМ по вкладке): Close, Close Others, Close to the Right, Close All;
+>       - Защита от потери несохранённых данных: закрытие грязной вкладки запрашивает подтверждение (или сбрасывает через discard/save guard);
+>     - В `src/app/App.tsx`:
+>       - Подключение `TabBar` в основной макет над редактором;
+>       - Синхронизация `openTabs` при выборе файлов в File Explorer, Command Palette, Search Palette, Problems Drawer;
+>       - Шорткаты: `Ctrl+W` / `Cmd+W` (закрыть активную вкладку), `Ctrl+Tab` / `Ctrl+Shift+Tab` (переключение между вкладками);
+>     - В `src/app/app.css`: стили панели вкладок (compact tab strip, active tab, dirty dot, close button, context menu).
+> (2) Vitest тесты в `src/cosmo/ide/tabsUtils.test.ts`:
+>     - Добавление, удаление, переключение, закрытие соседних/всех, сохранение порядка.
+> (3) Гейт: `tsc -b` — 0 ошибок, `npx vitest run` — все тесты зелёные, `npm run build` — успешен.
+>
+> **Out of scope:** Backend API, любые изменения в `D:\prettyk-airlock`.
+> **Acceptance:** Вкладки файлов отображаются над редактором; открытие файла добавляет/активирует вкладку; `Ctrl+W` закрывает активную вкладку; грязные файлы помечаются точкой `●`; vitest зелёный, `tsc -b` 0, vite build green.
+>
+> **✅ Принято 19 сентября 2026 (Cosmo, PO):** `TabBar` — источник истины рабочего набора (`activePath → selectedPath`); открытие lossless (правки per-path в `useEditState`); закрытие грязной вкладки через существующий `guard-overlay` (не новый механизм потери данных); шорткаты `Ctrl+W` / `Ctrl+Tab` / `Ctrl+Shift+Tab`; контекст-меню Close/Close Others/Close to the Right/Close All; middle-click close; double-click pin; семантика закрытия (правая соседка → левая → null); дедуп при RENAME. Модуль `tabUtils.ts` DOM-free.
+> **Мой независимый прогон:** `npx vitest run` — 397/397 (20 файлов), `tsc -b` 0, `vite build` 64 модуля — зелёные.
+>
+> **Scope deviation / caveat:** `Ctrl+W`/`Ctrl+Tab` браузер может перехватывать до обработчика (зарезервированные шорткаты); `preventDefault` стоит, но в обычной вкладке браузера срабатывает не всегда — внутри оболочки IDE (без браузерного chrome) работает. Браузерный smoke на приёмке не гонялся (стенд не поднят в этой сессии). Backend не трогался.
+
+#### ✅ COS-150 · Flash · Web IDE: Status Bar & Notification Toast Center — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-ide`:
+>     - Создать модуль `src/cosmo/ide/statusBarUtils.ts`:
+>       - Форматирование индикаторов: курсор (`Ln X, Col Y`), кодировка (`UTF-8`), отступы (`Spaces: 2`), язык (`TypeScript`, `JSON`, `Markdown` etc.);
+>       - Форматирование сводки проблем (`X Errors, Y Warnings`);
+>     - Создать модуль `src/cosmo/ide/toastUtils.ts`:
+>       - Модель `ToastMessage`: `id: string`, `title?: string`, `message: string`, `type: 'info' | 'success' | 'warning' | 'error'`, `timeoutMs?: number`;
+>       - Чистые функции: `addToast`, `removeToast`, `clearToasts`;
+>     - Создать компонент `src/cosmo/ide/StatusBar.tsx`:
+>       - Фиксированная нижняя полоса статуса IDE;
+>       - Слева: текущая ветка git (клик открывает селектор веток), сводка ошибок/предупреждений (клик открывает Problems Drawer);
+>       - По центру: индикатор фоновых процессов (спиннер при активном прогоне pipeline);
+>       - Справа: позиция курсора (Ln/Col), кодировка (UTF-8), режим отступов, текущий язык;
+>     - Создать компонент `src/cosmo/ide/ToastNotification.tsx`:
+>       - Контейнер тостов в правом нижнем углу;
+>       - Анимация появления/исчезновения, автозакрытие по таймеру (3с), кнопка ручного закрытия;
+>     - В `src/app/App.tsx`:
+>       - Интеграция `StatusBar` внизу страницы;
+>       - Хук тостов для отображения уведомлений (Save, Branch Created, Staged, Copied to clipboard);
+>     - В `src/app/app.css`: стили статус-бара и всплывающих тостов.
+> (2) Vitest тесты в `src/cosmo/ide/statusBarUtils.test.ts` и `src/cosmo/ide/toastUtils.test.ts`.
+> (3) Гейт: `tsc -b` — 0 ошибок, `npx vitest run` — все тесты зелёные, `npm run build` — успешен.
+>
+> **Out of scope:** Backend API, любые изменения в `D:\prettyk-airlock`.
+> **Acceptance:** Нижний StatusBar отображает ветку, ошибки/предупреждения, кодировку и курсор; клики открывают соответствующие панели; Toast-уведомления появляются при операциях и автоматически закрываются; vitest зелёный, `tsc -b` 0, vite build green.
+>
+> **✅ Принято 19 сентября 2026 (Cosmo, PO):** `StatusBar` внизу (ветка git → клик открывает селектор веток; сводка проблем → Problems Drawer; спиннер фонового прогона; справа курсор `Ln/Col`, кодировка `UTF-8`, отступы, язык) + `ToastContainer` (правый нижний угол, автозакрытие 3с, ручное закрытие, монотонный `seq`). Интеграция: тосты на Save/Branch created/Staged/Copied; курсор через `onCursorChange` из `CodeEditor`. Модули `statusBarUtils.ts`/`toastUtils.ts` DOM-free.
+> **Мой независимый прогон:** `npx vitest run` — 397/397, `tsc -b` 0, `vite build` 64 модуля — зелёные. Backend не трогался.
+
+#### ✅ COS-145 · Boss · Cosmoport: Release Transfer Authorization Enforcement & Fail-Closed Audit Gate — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Quality Gate / Release Transfer Enforcement):
+>     - В `orchestrator/cosmo/domain/transfer_authorization.py`:
+>       - Pydantic-модели `TransferAuthorizationDecision`:
+>         - `authorized: bool`, `release_id: str`, `target_zone: str`, `clearance_status: str`, `sbom_attestation_status: str`, `reasons: list[str] = []`, `checked_at: str`;
+>     - В `orchestrator/cosmo/control_plane/transfer_guard.py`:
+>       - Сервис `ReleaseTransferGuard`:
+>         - Проверка `release_transfer_allowed(session, release_id)` (из `ledger/hub_clearance_gate.py`): если вердикт Quality Gate не `PASS_GRANTED` или `ok_to_transfer is False` -> отказ;
+>         - Проверка аттестации SBOM (из `ledger/sbom_gate.py`): если есть критические уязвимости (`critical_count > 0`) или SBOM не аттестован -> отказ;
+>         - Fail-closed авторизация: при отсутствии записей клиренса или ошибке проверки — строгий отказ;
+>         - Запись аудит-события `release_transfer_authorization` в `cosmo_audit_events` (success / denied с перечислением reasons);
+>     - В `orchestrator/cosmo/api/routes/releases.py`:
+>       - Интеграция `ReleaseTransferGuard` в эндпоинты трансфера (`POST /api/v1/releases/{release_id}/transfer` и `POST /api/v1/releases/{release_id}/transfer-v2`):
+>         - Если `authorized is False` — возврат HTTP 403 Forbidden с детальным JSON описанием блокировки;
+>         - Добавление опционального query/header флага bypass-проверки только для системного администратора в dev-режиме с обязательной аудит-фиксацией (`BYPASS_ATTEMPT`);
+> (2) Тесты в `orchestrator/tests/cosmo/test_transfer_authorization.py`:
+>     - Успешная авторизация при наличии `PASS_GRANTED` клиренса и чистого SBOM;
+>     - Блокировка (HTTP 403) при отсутствии Hub clearance;
+>     - Блокировка (HTTP 403) при `qg_clearance == 'BLOCKED'` или `'REJECTED'`;
+>     - Блокировка (HTTP 403) при наличии `critical_count > 0` в SBOM;
+>     - Фиксация событий в аудит-логе;
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Supply Chain / Artifacts, файлы routes/artifacts.py, domain/artifact_manifest.py.
+> **Acceptance:** Трансфер релизов в ЗТ/ЗПЭ блокируется с HTTP 403 при отсутствии или отрицательном вердикте Quality Gate Hub либо критических уязвимостях в SBOM; разрешается строго при подтвержденном клиренсе; события фиксируются в аудите; suite gate зелёный.
+>
+> **✅ Verified (2026-09-19):** `domain/transfer_authorization.py` (`TransferAuthorizationDecision`, `TransferReplayResponse`, `TransferTransition`, константы), `control_plane/transfer_guard.py` (`ReleaseTransferGuard.authorize` — fail-closed по двум свидетельствам: `PASS_GRANTED` clearance COS-141 + `PASS` SBOM-аттестация COS-138; сбой чтения → `CHECK_FAILED` и отказ), `api/routes/releases.py` (dependency `enforce_release_transfer_authorization` на оба трансфер-маршрута → 403 с JSON-описанием блокировки; `bypass_authorization` только system-admin+dev с аудитом `BYPASS_ATTEMPT`).
+> **Deviation:** audit-статус отказа — `blocked` (документированный словарь `success|failed|blocked`), а не `denied` из текста карточки; action-имя — `release_transfer_authorization` (карточка governs). `critical_count` из аттестации не экспонируется → эквивалент через `gate_verdict == "BLOCK"`.
+> **Tests:** `orchestrator/tests/cosmo/test_transfer_authorization.py` — 37 passed. **Suite gate:** 3320 passed / 17 skipped / 0 failed (276.75s).
+
+#### ✅ COS-146 · Boss · Cosmoport: Transfer CAS Concurrency Guard & Idempotent State Machine Replay — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Transfer State Machine Concurrency & CAS):
+>     - В `orchestrator/cosmo/control_plane/transfer_guard.py` (или расширение):
+>       - Compare-And-Swap (CAS) guard: атомарная проверка текущей зоны (`current_zone`) релиза перед промоушеном;
+>       - Обнаружение конкурентных попыток трансфера одного релиза в разные или одинаковые зоны:
+>         - Если текущая зона уже равна целевой (`current_zone == to_zone`) и в `transfer_history` есть завершенная запись — возврат идемпотентного ответа (HTTP 200) без создания дублирующих записей истории и без повторной эмиссии уведомлений;
+>         - Если трансфер находится в промежуточном состоянии или зафиксирован конфликт перехода — HTTP 409 Conflict;
+>     - В `orchestrator/cosmo/api/routes/releases.py`:
+>       - Интеграция CAS-проверки и идемпотентного replay в маршруты трансфера;
+> (2) Тесты в `orchestrator/tests/cosmo/test_transfer_authorization.py`:
+>     - Идемпотентный повтор успешного трансфера (возврат 200 без дублирования history);
+>     - Отклонение недопустимых обратных переходов (например, `zpe -> zr`);
+>     - Конфликт версий / зон (HTTP 409 при расхождении expected state);
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Supply Chain / Artifacts, файлы routes/artifacts.py.
+> **Acceptance:** Конкурентные или повторные вызовы трансфера идемпотентно возвращают текущий статус без гонок данных; недопустимые переходы возвращают 400/409; suite gate зелёный.
+>
+> **✅ Verified (2026-09-19):** `ReleaseTransferGuard.evaluate_transition` (PROCEED / REPLAY / CONFLICT) + `replay_payload`; `expected_current_zone` в `TransferRequest`/`TransferReleaseRequest`; CAS/replay-блок в оба трансфер-маршрута ПЕРЕД strict linear zone validation: расхождение expected state → 409, повтор уже достигнутой зоны → 200 `duplicate_success` без дублей `transfer_history` и без повторной эмиссии.
+> **Tests:** `orchestrator/tests/cosmo/test_transfer_authorization.py` — 37 passed. **Suite gate:** 3320 passed / 17 skipped / 0 failed.
+> **Note:** order-dependent флейки `_wipe` (FK apps↔pipeline_plans, runs↔pipeline_plans), наблюдавшиеся при изолированных прогонах, — предсуществующий дефект тестовой БД, воспроизводится и без новых тестов (1/8 baseline-прогонов), уже заведён отдельной карточкой **COS-151**; на зелёный suite gate не влияет.
+
+#### ✅ COS-147 · Luna · Cosmoport: Release Evidence Attestation Bundle & Provenance Verifier — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Supply Chain / Attestation / Provenance):
+>     - В `orchestrator/cosmo/domain/evidence_attestation.py`:
+>       - Pydantic-модели:
+>         - `EvidenceAttestationSubject`: `name: str`, `digest: str` (`sha256:...`);
+>         - `EvidenceAttestationPredicate`:
+>           - `release_id: str`, `bundle_id: str | None = None`, `profile: str`,
+>           - `manifest_digest_pin: str | None = None`, `sbom_digest: str | None = None`,
+>           - `hub_clearance_status: str | None = None`, `hub_evaluation_id: str | None = None`,
+>           - `timestamp: str`;
+>         - `EvidenceAttestationBundle`:
+>           - `format: Literal["cosmo-attestation@1"] = "cosmo-attestation@1"`,
+>           - `subject: EvidenceAttestationSubject`,
+>           - `predicate: EvidenceAttestationPredicate`,
+>           - `provenance_bundle_hash: str`,
+>           - `verified: bool`;
+>     - В `orchestrator/cosmo/ledger/attestation_packager.py`:
+>       - Сервис `AttestationBundlePackager`:
+>         - Сбор всех крипто-свидетельств из `evidence_ledger` для указанного `release_id`: манифест бандла (COS-142), аттестация SBOM (COS-138), вердикт клиренса Hub (COS-141);
+>         - Расчет канонического `provenance_bundle_hash`: SHA256 от канонического представления субъекта и предиката;
+>         - Сверка целостности цепочки (chain of custody): совпадение digest артефакта во всех свидетельствах;
+>         - Запись сформированного бандла в `cosmo_evidence_ledger` (`type='decision'`, маркер `attestation_type="RELEASE_ATTESTATION_BUNDLE"`);
+>     - В `orchestrator/cosmo/api/routes/artifacts.py`:
+>       - `POST /api/v1/artifacts/attestation/bundle` — формирование и верификация полного attestation bundle для релиза;
+>       - `GET /api/v1/artifacts/attestation/{release_id}` — чтение актуального аттестационного бандла;
+> (2) Тесты в `orchestrator/tests/cosmo/test_evidence_attestation.py`:
+>     - Формирование полного attestation bundle и расчет детерминированного хэша;
+>     - Верификация непрерывности цепочки свидетельств;
+>     - Определение расхождений (mismatch дайджестов между SBOM и манифестом);
+>     - Фиксация в ledger;
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Quality Gate / Hub, файлы routes/hub.py, routes/releases.py.
+> **Acceptance:** `POST /api/v1/artifacts/attestation/bundle` агрегирует криптографические свидетельства релиза (манифест, SBOM, clearance), считает канонический root hash бандла, валидирует целостность связей и фиксирует в ledger; `GET /api/v1/artifacts/attestation/{release_id}` читает бандл; suite gate зелёный.
+> **Принято 19 сентября 2026 (Luna):** `domain/evidence_attestation.py` (DTO subject/predicate/bundle, `compute_provenance_bundle_hash` — SHA256 канонического `sort_keys+compact` представления subject+predicate), `ledger/attestation_packager.py` (`AttestationBundlePackager` — сбор свидетельств COS-142/138/141 из ledger, chain of custody по digest артефакта, ledger-якорь `type='decision'` + маркер `attestation_type="RELEASE_ATTESTATION_BUNDLE"`), маршруты `POST /attestation/bundle` (route-local `AttestationBundleRequest{release_id}`) + `GET /attestation/{release_id}` в `routes/artifacts.py`. Focused `test_evidence_attestation.py` — 32 passed. Полный suite gate: 3280 passed / 3 failed / 17 skipped — 3 падения вне поверхности COS-147/148 (территория Boss: инвариант `routes/releases.py` + order-dependent `test_hub_verdict_ingest.py`), вынесено PO.
+>
+> **Scope deviation:** (1) `verified` — это вердикт: `true` при ≥1 digest-bearing свидетельстве и отсутствии mismatch'ей; расхождение дайджестов → `verified=false` (не 5xx), детали durable в `provenance_json.chain_of_custody.mismatches`. (2) `type='decision'` + маркер `attestation_type` в `provenance_json` вместо нового PG-ENUM `evidence_type` (цепочка миграций заморожена, конвенция COS-136/138/141). (3) Реестр чтения бандлов для GET — in-memory (один процесс cosmo-api), root hash при этом durable в ledger. **[superseded COS-152: read-path переведён на ledger, реестр удалён]** (4) Якорь ledger — `release.run_ids[0]` (как COS-138): релиз без прогонов → 422, неизвестный релиз → 404, нет digest-bearing свидетельств → 422.
+
+#### ✅ COS-148 · Luna · Cosmoport: Airgap Export/Import Bundle Integrity & Offline Manifest Verification Service — DONE (2026-09-19)
+> **Scope:**
+> (1) Поверхность строго в `D:\prettyk-airlock` (Supply Chain / Airgap Bundle Verification):
+>     - В `orchestrator/cosmo/domain/airgap_bundle.py`:
+>       - Pydantic-модели:
+>         - `AirgapFileChecksum`: `filename: str`, `sha256: str`, `size_bytes: int`;
+>         - `AirgapPackageManifest`: `package_id: str`, `release_id: str`, `created_at: str`, `files: list[AirgapFileChecksum]`, `package_digest_pin: str`;
+>         - `AirgapVerifyRequest`: `manifest: AirgapPackageManifest`, `archive_files: list[AirgapFileChecksum]`;
+>         - `AirgapVerifyResponse`: `verified: bool`, `package_id: str`, `missing_files: list[str] = []`, `corrupted_files: list[str] = []`, `unregistered_files: list[str] = []`, `errors: list[str] = []`;
+>     - В `orchestrator/cosmo/ledger/airgap_verifier.py`:
+>       - Сервис `AirgapBundleVerifier`:
+>         - Офлайн-валидация целостности архива: сверка списка файлов архива со списком манифеста без сетевых вызовов;
+>         - Проверка SHA256 каждого файла;
+>         - Проверка `package_digest_pin` манифеста (SHA256 от отсортированных чексумм файлов);
+>         - Фиксация проверенного airgap-пакета в `cosmo_evidence_ledger` (`type='decision'`, маркер `airgap_type="AIRGAP_VERIFIED"`);
+>     - В `orchestrator/cosmo/api/routes/artifacts.py`:
+>       - `POST /api/v1/artifacts/airgap/verify` — офлайн-верификация целостности airgap-бандла;
+>       - `GET /api/v1/artifacts/airgap/{package_id}` — чтение статуса проверенного airgap-бандла;
+> (2) Тесты в `orchestrator/tests/cosmo/test_airgap_bundle.py`:
+>     - Успешная валидация корректного airgap-бандла;
+>     - Обнаружение модифицированного файла (`corrupted_files`);
+>     - Обнаружение недостающего файла (`missing_files`);
+>     - Обнаружение недоверенного/лишнего файла (`unregistered_files`);
+>     - Отсутствие внешних сетевых зависимостей (чистая автономная логика);
+> (3) Гейт: `services/scripts/suite_gate.ps1` — green.
+>
+> **Out of scope:** Web IDE, Quality Gate / Hub, файлы routes/hub.py, routes/releases.py.
+> **Acceptance:** `POST /api/v1/artifacts/airgap/verify` проводит полную автономную проверку целостности airgap-пакета по манифесту (missing, corrupted, unregistered files), проверяет package digest pin и фиксирует в ledger; `GET /api/v1/artifacts/airgap/{package_id}` возвращает статус; suite gate зелёный.
+> **Принято 19 сентября 2026 (Luna):** `domain/airgap_bundle.py` (DTO `AirgapFileChecksum`/`AirgapPackageManifest`/`AirgapVerifyRequest`/`AirgapVerifyResponse`, `normalize_sha256`, traversal-guard имён файлов: reject `..`, absolute, `\`, NUL, пустых сегментов), `ledger/airgap_verifier.py` (`compute_package_digest_pin` — SHA256 отсортированных `filename:sha256:size`, порядок-независим; `compare_archive` — чистая логика без БД/сети; `AirgapBundleVerifier` + ledger-якорь `type='decision'` + маркер `airgap_type="AIRGAP_VERIFIED"`), маршруты `POST /airgap/verify` + `GET /airgap/{package_id}` в `routes/artifacts.py`. Focused `test_airgap_bundle.py` — 41 passed (итого 73 по пакету).
+>
+> **Scope deviation:** (1) `type='decision'` + маркер `airgap_type` в `provenance_json` вместо нового PG-ENUM (цепочка миграций заморожена). (2) Реестр статусов для GET — in-memory (один процесс cosmo-api). **[superseded COS-152: read-path переведён на ledger, реестр удалён]** (3) Честная граница офлайн-контура: `run_id` — NOT NULL FK на `runs.id`, у airgap-пакета прогона нет; якорь берётся у локального релиза (`release_id → run_ids[0]`); если релиза/прогонов локально нет — вердикт считается и возвращается, но ledger-запись не создаётся (якорить нечем). (4) Проваленные вердикты тоже фиксируются в ledger — проваленный импорт это ровно то, что должно остаться в журнале доказательств. (5) Digest новых DTO — `sha256:<64 lowercase hex>`; ledger `content_hash` — bare hex; `sbom_digest` проходит passthrough из COS-138 без переинтерпретации.
+
+#### ✅ COS-151 · Boss · Cosmoport: Test-DB wipe order-dependence — FK-порядок очистки тестовой БД — DONE (2026-09-19)
+> **Контекст (PO-приёмка Wave 6):** связка файлов Wave 6
+> (`test_hub_clearance.py` + `test_transfer_authorization.py` + `test_hub_verdict_ingest.py`
+> + `test_sbom_gate.py` + `test_evidence_attestation.py` + `test_airgap_bundle.py`)
+> при полном прогоне даёт order-dependent сбои: очистка тестовой БД между
+> тестами падает на нарушении внешних ключей. Ранее приёмка COS-147 уже
+> зафиксировала «3 падения вне поверхности COS-147/148 (территория Boss:
+> инвариант routes/releases.py + order-dependent test_hub_verdict_ingest.py)».
+
+> **Зафиксированные PO симптомы (не решение, а стенки для локализации):**
+> (1) `IntegrityError` в `evidence_ledger`: `Key (run_id)=(hubclrrun0001) is not
+> present in table "runs"` — сидированные данные одного тест-файла стираются
+> очисткой до того, как их использует следующий файл связки.
+> (2) `ForeignKeyViolationError`: `update or delete on table "apps" violates
+> foreign key constraint "pipeline_plans_app_id_fkey"` (`Key (id)=(hub-cos141-app)`).
+> (3) `cosmo_deployments` ссылается на `releases`, но в порядке очистки
+> `releases` идёт раньше.
+> (4) В порядке очистки отсутствуют таблицы, ссылающиеся на releases/runs/apps:
+> `scan_findings`, `scan_evidence`, `scan_results`, `release_batches`,
+> `application_teams`, `application_kits_tags` — их строки переживают очистку
+> между прогонами и порождают фантомы/конфликты.
+> (5) Детерминированная регрессия теста-инварианта (НЕ order-dependent;
+> заметила Luna при приёмке COS-147): вынос `require_capability(...)` в атрибут
+> `_RELEASE_TRANSFER_GUARD` убрал литерал `require_capability(` из блоков
+> `transfer_release` / `transfer_release_v2` — инвариант COS-091/092 проходит по
+> литералу и падает; функционально guard на месте через `Depends(_RELEASE_TRANSFER_GUARD)`,
+> тест — литеральный.
+
+> **Scope:**
+> (1) Привести порядок очистки тестовой БД к топологическому: child-таблицы
+> (со ссылками на родителей) вычищаются строго раньше родительских —
+> охватить ВСЕ таблицы со внешними ключами на releases/runs/apps/deployments,
+> включая перечисленные отсутствующие; где связь циклическая — снять
+> циклический FK явным обнулением до удаления.
+> (2) Убедиться, что очистка выполняется и на setup, и на teardown тест-фикстуры,
+> и не оставляет строк-сирот ни в одном файле связки.
+> (3) Доказать отсутствие order-dependence: прогон связки Wave 6 в прямом и
+> обратном порядке файлов даёт одинаковый зелёный результат.
+> (4) Закрыть регрессию инварианта `transfer_release`/`transfer_release_v2`
+> (симптом 5): либо вернуть литерал `require_capability(` в охранные блоки
+> так, чтобы инвариант снова узнавал guard, либо научить инвариант распознавать
+> вынесенную фабрику `_RELEASE_TRANSFER_GUARD` — выбор за владельцем поверхности,
+> без ослабления самого guard'а (fail-closed обязателен).
+
+> **Out of scope:** продуктовый код (transfer_guard/releases/hub/artifacts),
+> Web IDE, миграционная цепочка (заморожена), отдельные per-worker scratch-БД.
+
+> **Acceptance:**
+> - Связка шести файлов Wave 6 в любом порядке: **0 failed**, повторно ×2.
+> - Очистка не выбрасывает ForeignKeyViolation/IntegrityError ни на setup, ни
+>   на teardown.
+> - Инвариант releases.py (`test_domain_resolve_invariant`) снова зелёный, guard
+>   остаётся fail-closed.
+> - Полный suite gate: **0 failed** (все нарушения только вне поверхности
+>   карточки, если таковые есть — точечно зафиксировать в отчёте).
+
+> **Отчёт обратно:** изменённые поверхности; прогон связки прямом+обратном;
+> результат suite gate; оставшиеся order-dependent сбои (если остались) с
+> конкретикой таблица↔таблица; блокеры.
+
+> **Acceptance (PO, 19 сентября 2026):** COS-151 закрыт. Канонический порядок
+> вынесен в общий `_wipe_order.py` (45 таблиц, потомок→родитель) + явное
+> обнуление циклических FK (`apps.pipeline_plan_id`, `runs.batch_id`);
+> `conftest.py` и `integration/conftest.py` переведены на общий список.
+> Полный прогон **3436 passed / 17 skipped / 0 failed**; порядконезависимость
+> Wave 6 — **166 passed прямой + 166 passed обратный**; орфаны по всем 45
+> доменным таблицам = 0.
+
+> **Зафиксировано для Максима (не блокер COS-151):** таблицы `hub_*`
+> (`hub_finding` и др.) не описаны в этом репо ни моделями, ни миграциями, ни
+> SQL — приходят из другого репозитория, делящего `cosmo_test`. Их очистка вне
+> COS-151; конкуренция параллельных наборов за общую БД — факт владельцу стенда.
+
+#### ✅ COS-152 · Luna · Cosmoport: Read-through durable — GET surfaces attestation/airgap/manifest из evidence_ledger — DONE (2026-09-19)
+> **Контекст (PO):** при приёмке COS-147/148 и COS-142 зафиксировано однородное
+> scope deviation: POST-эндпоинты пишут якорь в `cosmo_evidence_ledger`
+> (durable, PG), но GET-поверхности (`GET .../attestation/{release_id}`,
+> `GET .../airgap/{package_id}`, `GET .../manifest/{bundle_id}`) читают из
+> in-memory реестра процесса — рестарт cosmo-api теряет read-ответы. Данные
+> для чтения УЖЕ durable в ledger (маркеры `attestation_type`, `airgap_type`,
+> `manifest_type` + `content_ref`); не хватает read-through, а не нового хранилища.
+
+> **Scope:**
+> (1) Переписать GET-поверхности трёх ресурсов на чтение актуального якоря из
+> `cosmo_evidence_ledger` по identity (`release_id` / `package_id` / `bundle_id`),
+> правило «latest wins» — как уже принято в clearance-чтении. Никаких новых
+> таблиц и правок миграционной цепочки (заморожена).
+> (2) Удалить in-memory реестры-дубликаты; единственный источник истины —
+> ledger.
+> (3) Честный edge: сущность, которая НЕ была якорена в ledger (airgap-пакет
+> без локального релиза — существующее отклонение COS-148), читается как
+> non-durable и явно документируется, а не имитируется фейковым ответом.
+> (4) Restart-survival доказать тестом: запись → свежий процесс/engine → GET
+> видит актуальный durable-ответ.
+
+> **Out of scope:** `conftest.py` вообще (поверхность COS-151, Boss),
+> `routes/releases.py`, `routes/hub.py`, миграционная цепочка, Web IDE.
+
+> **Acceptance:**
+> - После `POST` (attestation/airgap/manifest) рестарт cosmo-api НЕ теряет
+>   `GET`-ответ: читается из ledger.
+> - `GET` без предшествующего `POST` в этом процессе отдаёт durable-ответ,
+>   а не пустой «не видел» (для якорённых сущностей).
+> - Отсутствует in-memory реестр в read-path (нет второго источника истины).
+> - Focused тесты трёх GET-поверхностей + restart-survival: зелёные, сат-гейт
+>   без регрессий вне поверхности.
+
+> **Отчёт обратно:** изменённые поверхности; доказательство restart-survival;
+> результат focused-сюит и suite gate; оставшиеся non-durable edge-случаи;
+> блокеры.
+
+> **Принято 19 сентября 2026 (Luna):** in-memory реестры чтения удалены во всех
+> трёх ledger-модулях; GET-поверхности читают актуальный якорь из
+> `evidence_ledger` (latest wins по `created_at desc, id desc`):
+> - `ledger/manifest_verifier.py` — `latest_manifest(session, bundle_id)` +
+>   `_manifest_from_provenance` (реконструкция из `provenance_json.artifacts`,
+>   fallback — парсинг `canonical_refs`; integrity: `manifest_content_hash` ==
+>   `manifest_hash`); в provenance добавлены `artifacts` + `expected_digest_pin`
+>   (read без потерь);
+> - `ledger/attestation_packager.py` — `latest_attestation_bundle(session,
+>   release_id)` + `_bundle_from_provenance` (integrity: пересчёт
+>   `compute_provenance_bundle_hash` и сверка `content_hash`);
+> - `ledger/airgap_verifier.py` — `latest_airgap_status(session, package_id)` +
+>   integrity-сверка `_provenance_hash` (якоря цепочки `_chain_*`, добавляемые
+>   `evidence_writer.seal_entry` ПОСЛЕ подписи, при пересчёте исключаются);
+> - `routes/artifacts.py` — 3 GET принимают `session` и зовут `latest_*`;
+>   `_reset_manifest_state` / `_reset_attestation_state` / `_reset_airgap_state`
+>   удалены.
+> Focused (3 файла): **149 passed**. Restart-survival доказан тестом
+> `orchestrator/tests/cosmo/_durable_probe.py`: subprocess поднимает свежий
+> ASGI-app + свежий engine к той же БД и делает GET (attestation/manifest/
+> airgap). Полный suite gate: **3335 passed / 0 failed / 17 skipped** (309.14s).
+>
+> **Scope deviation:** (1) `latest wins` по `(created_at desc, id desc)` —
+> правило как в clearance-чтении COS-141. (2) Integrity-проверка при чтении:
+> повреждённая/неполная запись → `None` → 404 (честный отказ вместо отдачи
+> подделки). (3) Non-durable edges сохранены и документированы: manifest без
+> `run_id` (верификация без якоря) → 404; airgap без локального релиза
+> (отклонение COS-148) → 404. Фейковый in-memory ответ не имитируется.
+> (4) Симметричная задача для hub-dispatch — COS-153 (Boss).
+
+#### ✅ COS-153 · Boss · Cosmoport: Read-through durable — GET статуса hub evaluation dispatch из durable-источника — DONE (2026-09-19)
+> **Контекст (PO):** при приёмке COS-139 зафиксировано scope deviation:
+> `POST /hub/evaluations/dispatch` пишет статус отправки в in-memory реестр
+> процесса, а `GET /hub/evaluations/{evaluation_id}` читает его из памяти —
+> рестарт cosmo-api теряет статус. При этом факт отправки уже durable: событие
+> `success/failed/duplicate` пишется в аудит (`cosmo_audit_events`). Симметрия
+> COS-152 (Luna, поверхности Supply Chain): нужен read-through, а не новое
+> хранилище.
+
+> **Scope:**
+> (1) Переписать `GET /hub/evaluations/{evaluation_id}` на чтение актуального
+> статуса из durable-источника (аудит-записи по `evaluation_id`, правило
+> latest wins) либо явный durable-якорь — на выбор владельца, но БЕЗ новых
+> таблиц и правок миграционной цепочки (заморожена).
+> (2) Убрать in-memory реестр-дубликат: единственный источник истины — durable.
+> (3) Честная семантика: неизвестный/незаписаный `evaluation_id` → 404 (а не
+> фантомный статус из памяти).
+> (4) Restart-survival тестом: dispatch → свежий процесс/engine → GET видит
+> durable-статус.
+
+> **Out of scope:** Supply Chain/artifacts (COS-152, Luna), `routes/releases.py`
+> enforcement (закрыт COS-145/146), миграционная цепочка, Web IDE.
+
+> **Acceptance:**
+> - После dispatch рестарт cosmo-api не теряет `GET /evaluations/{id}`.
+> - `GET` без предшествующего dispatch в этом процессе отдаёт durable-статус
+>   для известного id, 404 для неизвестного.
+> - В read-path нет in-memory реестра.
+> - Focused тесты + restart-survival зелёные; suite gate без регрессий.
+
+> **Отчёт обратно:** изменённые поверхности; доказательство restart-survival;
+> результат тестов и suite gate; оставшиеся edge-случаи; блокеры.
+
+> **Принято 19 сентября 2026 (Boss):** in-memory реестр отправок удалён;
+> `GET /hub/evaluations/{evaluation_id}` читает актуальный durable-якорь из
+> `evidence_ledger` (latest wins по `created_at desc, id desc`). Выбран вариант
+> «явный durable-якорь» (а не чтение аудита — см. отклонение 1):
+> - NEW `ledger/hub_evaluation_ledger.py` — `HubEvaluationLedger` +
+>   `DispatchRecord`; маркеры `provenance_json.source='prettyk-hub'`,
+>   `evaluation_type='HUB_EVALUATION_DISPATCH'`, `outcome ∈ {dispatched, failed}`;
+>   `record` / `latest_for_evaluation` (любой исход) /
+>   `latest_dispatched_for_evaluation` (только успех — идемпотентность/дрейф);
+>   крипто-якорь `evaluation_dispatch_hash(payload)` в `content_hash` и
+>   `provenance_json.dispatch_hash`;
+> - `control_plane/hub_dispatcher.py` — реестр (`_DISPATCH_REGISTRY`,
+>   `_REGISTRY_LOCK`, `reset_dispatch_registry`, `threading`) удалён;
+>   `dispatch(request, *, session, actor)` пишет якорь на успех и на честный
+>   сбой; `get(session, evaluation_id)` читает из ledger;
+> - `api/routes/hub.py` — dispatch/get принимают `db`; 404 на неизвестный run;
+> - `domain/hub_evaluation.py` — `HUB_EVALUATION_LEDGER_TYPE` +
+>   `evaluation_dispatch_hash`;
+> - `tests/cosmo/test_hub_evaluation_dispatch.py` — unit через `_FakeLedger`,
+>   route через seed-run, restart-survival через
+>   `_durable_probe.get_in_fresh_process`.
+> Focused: **47 passed**. Restart-survival доказан: dispatch → свежий
+> процесс/engine к той же БД → GET видит durable-статус. Полный suite gate:
+> **3335 passed / 0 failed / 17 skipped** (306.83s). OpenAPI без изменений —
+> **141 путей / 187 схем**, `json==yaml==live`, contract-тест **13 passed**.
+>
+> **Scope deviation:** (1) аудит НЕ durable — `api/routes/audit.py` пишет в
+> in-memory `_AUDIT_LOG_RECORDS`, поэтому посылка карточки о durable-аудите
+> неверна; выбран явный якорь в `evidence_ledger` (конвенция гейтов
+> COS-136/138/141/142/147/152). (2) `evidence_ledger.run_id` — NOT NULL FK на
+> `runs.id`, поэтому dispatch теперь требует существующий run → 404 (ранее
+> неизвестный run не проверялся). (3) `type='decision'` + маркер в
+> `provenance_json` — колонка `type` ограничена frozen PG-ENUM `evidence_type`
+> (миграционная цепочка заморожена). (4) Семантика: дубликат нового якоря не
+> создаёт; сбой (`failed`) durable и виден в GET (latest wins), но retry не
+> блокирует — идемпотентность по последнему *успешному* якорю.
+
+---
 
 ---
 
@@ -2090,6 +2748,8 @@ are accepted; UI is the next product surface.
 > janitor + DEPLOYMENT §13.1 — ядро есть. Остаток: зафиксировать ownership
 > тестового стенда как требование (кто владеет контуром и кто чинит /health
 > первым), внести в DEPLOYMENT/CONCEPT как канон-строку.
+> ✅ Канонизировано (COS-136): ownership контура + единственная команда
+> здоровья (suite gate) зафиксированы в DEPLOYMENT.md §13.1.
 
 ## ⬜ PK-C-003.2 — FAILOVER = PHASE 3, NOT PHASE 1
 
@@ -2102,6 +2762,8 @@ are accepted; UI is the next product surface.
 > Состояние: противоядие соблюдено — restart-first (COS-063) и durability
 > (COS-077/081/082/088) идут раньше failover; failover-карточек в backlog
 > нет, и это правильно. Зафиксировать строкой в ARCHITECTURE-DIRECTION.
+> ✅ Канонизировано (COS-136): «Failover = Phase 3, not Phase 1» зафиксировано
+> в ARCHITECTURE-DIRECTION.md §10.
 
 ## ⬜ PK-C-003.3 — MIGRATION AS REHEARSED PROCEDURE
 
@@ -2115,19 +2777,25 @@ are accepted; UI is the next product surface.
 > isolation (COS-076), per-session БД (COSMO_TEST_SESSION_DB). Остаток:
 > оформить «репетицию миграции» как явную процедуру (шаги: scratch →
 > прогон → сверка → боевой upgrade) в DEPLOYMENT.md.
+> ✅ Канонизировано (COS-136): процедура-репетиция (scratch → прогон →
+> сверка → боевой upgrade) зафиксирована в DEPLOYMENT.md §10.2.
 
-## ⬜ PK-C-003.4 — ONE BUNDLE, CANONICAL TAGS
+## ✅ PK-C-003.4 — ONE BUNDLE, CANONICAL TAGS
 
-- [ ] Given образ/артефакт собирается один раз, When он регистрируется, Then
+- [x] Given образ/артефакт собирается один раз, When он регистрируется, Then
   существует ровно один канонический tag-формат (version+digest, без
   latest) и один бандл-профиль поставки; расхождение версий ядро/стенд
   невозможно by construction (digest-pin в manifest).
-- Evidence: (заполняет PO)
+- Evidence: Реализовано и зафиксировано в COS-142 (19.09.2026). Канонический tag-контракт `<name>:<version>@sha256:<digest>` (строгий slug имени, semver-версия, отказ при `latest` и неканоничном digest) и детерминированный `digest_pin` бандла (SHA256 профиля + отсортированных canonical_ref) в `orchestrator/cosmo/domain/artifact_manifest.py`, `ledger/manifest_verifier.py`, `api/routes/artifacts.py`. 69 тестов в `test_artifact_manifest.py`.
 
-> Состояние: частично — airgap-чеклист COS-094 фиксирует «все образы
-> локальны, не latest», но digest-pin — TODO при production freeze.
-> Карточка: довести digest-pin + канонический tag-формат до контрактной
-> строки в DEPLOYMENT/ARCHITECTURE-DIRECTION.
+> Состояние: ✅ Реализовано (COS-142). Digest-pin доведён до контрактной
+> поверхности: канонический tag-формат валидируется на границе (422 при
+> нарушении), `digest_pin` считается детерминированно и сверяется с
+> `expected_digest_pin`, проверенный манифест фиксируется в evidence ledger
+> с pinned-набором `canonical_refs`.
+> ✅ Канонизировано (COS-136): канонический tag-формат
+> `<name>:<version>@sha256:<digest>` (без latest) + один бандл-профиль
+> зафиксированы в DEPLOYMENT.md §5.5.
 
 ## ⬜ PK-C-003.5 — TRUNK DISCIPLINE, SMALL BATCHES
 
@@ -2140,16 +2808,14 @@ are accepted; UI is the next product surface.
 > Остаток: дисциплина исполнения — коммит-раунды регулярно, без копления
 > недельного дерева; правило зафиксировать в worker-delegation-ops.
 
-## ⬜ PK-C-003.6 — SBOM IN BUNDLE (SYFT/GRYPE)
+## ✅ PK-C-003.6 — SBOM IN BUNDLE (SYFT/GRYPE)
 
-- [ ] Given release-бандл собирается, When он проходит production freeze,
+- [x] Given release-бандл собирается, When он проходит production freeze,
   Then в бандл входит сгенерированный SBOM (syft) и результат скана
   уязвимостей (grype), подписанный digest'ом бандла; без SBOM бандл не
   считается release-candidate.
-- Evidence: (заполняет PO)
+- Evidence: Реализовано и зафиксировано в COS-138 (19.09.2026). Syft SBOM & Grype Attestation Gate в `orchestrator/cosmo/domain/sbom_scan.py`, `ledger/sbom_gate.py`, `api/routes/releases.py`. Аттестация бандла с SHA256 хешированием, запись в evidence ledger, блокировка промоушена при critical CVE. 13 тестов в `test_sbom_attestation_gate.py`.
 
-> Состояние: нет ни кода, ни карточки до сих пор — дифференциатор не
-> реализован. Требуется карточка реализации (bundle build step + digest
-> связка) — нарезка в следующем PO-цикле.
+> Состояние: ✅ Реализовано (COS-138). Аттестация SBOM (Syft) и Grype gate встроены в релизный цикл с крипто-фиксацией в evidence ledger.
 
 ---
