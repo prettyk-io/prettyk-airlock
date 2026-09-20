@@ -15,7 +15,7 @@
 | Gutter runner [▶] | ✅ 5/5 | `frontend/src/monaco/` |
 | PostgreSQL 16 | ✅ боевое | Docker (Buddy) |
 | Valkey 8 | ✅ боевое | Docker (Buddy) |
-| Better Auth + OpenBao | ✅ боевое | `frontend/src/auth/` (Flash) |
+| Better Auth + OpenBao (identity/KMS) | ❌ не реализовано | target: `frontend/src/auth/` (Flash) + BE JWT-verify (Boss/Flash) |
 | Docker Compose | ✅ Pure Box + lab | `services/docker-compose.*.yml` (Buddy) |
 
 ## Cosmo-специфичное (уже сделано в prettyk-dev)
