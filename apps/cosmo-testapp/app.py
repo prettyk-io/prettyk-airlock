@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -270,7 +270,4 @@ def update_note(note_id: str, body: NoteIn, sub: str = Depends(_principal)) -> d
 def delete_note(note_id: str, sub: str = Depends(_principal)):
     if not store.delete(sub, note_id):
         raise HTTPException(404, "note not found")
-    from fastapi import Response
     return Response(status_code=204)
-    if not store.delete(sub, note_id):
-        raise HTTPException(404, "note not found")
