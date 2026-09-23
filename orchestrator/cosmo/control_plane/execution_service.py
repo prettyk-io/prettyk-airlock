@@ -489,10 +489,73 @@ class ExecutionService:
                 refs = list(batch.evidence_refs or [])
                 refs.append(entry.id)
                 batch.evidence_refs = refs
+                # COS-164: runtime-hook — захват digest docker_build в durable
+                # ArtifactRecord (не ручной, из реальных логов прогона).
+                await self._capture_artifact_records(s, run_id, batch, logs)
                 await s.commit()
         logger.info("COS-097 evidence sealed: run=%s batch=%s digest=%s",
                     run_id, batch_id, digest[:16])
         return entry_hash
+
+    async def _capture_artifact_records(
+        self,
+        s: Any,
+        run_id: str,
+        batch: Any,
+        logs: dict[str, list[str]],
+    ) -> None:
+        """COS-164: durable-захват digest docker_build (runtime-hook).
+
+        no-op для batch'ей без docker_build-шага. Для docker_build-шага без
+        канонического digest-маркера — честный alert-след (не выдуманный
+        digest), прогон не откатывается: свидетельство собрано, артефакт
+        просто не зафиксирован.
+        """
+        bricks = batch.bricks_refs or []
+        if not bricks:
+            return
+        from orchestrator.cosmo.control_plane.artifact_capture import (
+            MissingDockerBuildDigestError,
+            capture_artifact_records,
+        )
+        try:
+            entry_ids = await capture_artifact_records(
+                s, run_id=run_id, batch_id=batch.id, bricks=bricks, logs=logs,
+            )
+        except MissingDockerBuildDigestError as exc:
+            logger.error("COS-164 digest missing: %s", exc)
+            await self._write_missing_digest_alert(
+                s, run_id=run_id, batch_id=batch.id, reason=str(exc),
+            )
+            return
+        if entry_ids:
+            logger.info(
+                "COS-164 artifact record(s) sealed: run=%s batch=%s entries=%s",
+                run_id, batch.id, entry_ids,
+            )
+
+    async def _write_missing_digest_alert(
+        self, s: Any, *, run_id: str, batch_id: str, reason: str,
+    ) -> None:
+        """COS-164: честный alert о docker_build без digest-маркера."""
+        from orchestrator.cosmo.ledger.evidence_writer import commit_evidence_entry
+        payload = json.dumps(
+            {"degraded": False, "reason": reason, "source": "cosmo-artifact-record-missing"},
+            sort_keys=True, ensure_ascii=False,
+        ).encode("utf-8")
+        alert = EvidenceLedgerEntry(
+            run_id=run_id,
+            batch_id=batch_id,
+            type="alert",
+            content_ref="woodpecker://docker-build-missing-digest",
+            content_hash=hashlib.sha256(payload).hexdigest(),
+            provenance_json={
+                "source": "cosmo-artifact-record-missing",
+                "reason": reason,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        await commit_evidence_entry(s, alert)
 
     async def write_degraded_evidence(self, run_id: str, reason: str,
                                       meta: dict) -> str:

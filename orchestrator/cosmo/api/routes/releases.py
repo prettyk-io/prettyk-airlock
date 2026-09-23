@@ -12,7 +12,9 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -52,9 +54,40 @@ from orchestrator.cosmo.control_plane.transfer_guard import (
     bypass_permitted,
     get_transfer_guard,
 )
+from orchestrator.cosmo.control_plane.deploy_runtime import get_deploy_runtime
+from orchestrator.cosmo.adapters.runtime_docker import DockerDeployError
+from orchestrator.cosmo.ledger.artifact_record import artifact_records_for_run_ids
+from orchestrator.cosmo.domain.artifact_scan import (
+    TrivyGateAttachRequest,
+    TrivyGateAttestationResponse,
+)
+from orchestrator.cosmo.ledger.artifact_scan_gate import (
+    TrivyGateError,
+    latest_trivy_gate,
+    trivy_blocker_for_records,
+    verify_and_attest_trivy_gate,
+)
+from orchestrator.cosmo.ledger.release_deploy import (
+    record_release_deployed,
+    record_release_deploy_failed,
+)
 from orchestrator.cosmo.domain.transfer_authorization import (
     TransferReplayResponse,
     TransferTransition,
+)
+from orchestrator.cosmo.domain.promotion import (
+    PromotionLandRequest,
+    PromotionLandResponse,
+    PromotionPackage,
+)
+from orchestrator.cosmo.ledger.promotion_ledger import (
+    PromotionError,
+    PromotionMismatchError,
+    PromotionNotFoundError,
+    land_release_promotion,
+    latest_promotion_landing,
+    latest_promotion_package,
+    pack_release_promotion,
 )
 
 try:
@@ -75,6 +108,8 @@ except ImportError:
     )
 
 router = APIRouter(prefix="/api/v1/releases", tags=["releases"])
+
+logger = logging.getLogger("cosmo.releases")
 
 
 # ── Schemas ────────────────────────────────────────────────────────────
@@ -458,10 +493,106 @@ async def deploy_release(
         )
     if rel.status != "approved":
         raise HTTPException(400, f"Release must be approved before deploy (current: {rel.status})")
+
+    # COS-165: образ резолвится по durable ArtifactRecord прогонов релиза
+    # (digest реально собран/запушен runtime-hook'ом COS-164, а не «последний»).
+    records = await artifact_records_for_run_ids(db, list(rel.run_ids or []))
+    if not records:
+        raise HTTPException(
+            409,
+            f"No durable artifact record for release '{release_id}' runs — "
+            f"a docker_build digest must be captured before deploy",
+        )
+
+    # COS-168: DOCKER_AUDIT trivy gate — deploy materialize ТОЛЬКО при PASS
+    # (critical=0) каждого durable-образа релиза. BLOCK/отсутствие вердикта → 409.
+    blocker = await trivy_blocker_for_records(db, release_id, records)
+    if blocker:
+        raise HTTPException(409, blocker)
+
     rel.status = "deploying"
     await db.commit()
     await db.refresh(rel)
+
+    runtime = get_deploy_runtime()
+    refs: list[str] = []
+    containers: list[str] = []
+    try:
+        for record in records:
+            image_ref = f"{record.qualified_image()}@{record.digest}"
+            container_name = _deploy_container_name(record.name, record.version)
+            await asyncio.to_thread(
+                runtime.deploy,
+                image_ref,
+                container_name,
+                labels={
+                    "cosmoport.zone": "zr",
+                    "cosmoport.release": release_id,
+                    "cosmoport.digest": record.digest,
+                },
+            )
+            refs.append(record.canonical_ref())
+            containers.append(container_name)
+    except DockerDeployError as exc:
+        # COS-165: не healthy → честный rollback + durable alert (не фейковый deployed).
+        rel.status = "rollback"
+        await db.commit()
+        await db.refresh(rel)
+        await _record_deploy_outcome(
+            db, rel, refs=refs, containers=containers,
+            healthy=False, reason=str(exc),
+        )
+        raise HTTPException(502, f"Release '{release_id}' deploy failed: {exc}")
+
+    # COS-165: статус deployed — ТОЛЬКО после фактического healthy контейнеров.
+    rel.status = "deployed"
+    artifacts = list(rel.artifacts or [])
+    for ref in refs:
+        if ref not in artifacts:
+            artifacts.append(ref)
+    rel.artifacts = artifacts
+    await db.commit()
+    await db.refresh(rel)
+    await _record_deploy_outcome(
+        db, rel, refs=refs, containers=containers, healthy=True, reason=None,
+    )
     return _to_release_schema(rel)
+
+
+def _deploy_container_name(image_name: str, version: str) -> str:
+    """Безопасное имя контейнера из ``<name>-<version>`` (docker naming)."""
+    safe = "".join(c if c.isalnum() or c in "_.-" else "-" for c in version)
+    return f"{image_name}-{safe}"
+
+
+async def _record_deploy_outcome(
+    db: AsyncSession,
+    rel: ReleaseModel,
+    *,
+    refs: list[str],
+    containers: list[str],
+    healthy: bool,
+    reason: str | None,
+) -> None:
+    """Durable-след deploy: decision (healthy) / alert (rollback)."""
+    run_ids = list(rel.run_ids or [])
+    if not run_ids:
+        return
+    try:
+        if healthy:
+            await record_release_deployed(
+                db, run_id=run_ids[0], release_id=rel.id,
+                canonical_refs=refs, container_names=containers,
+            )
+        else:
+            await record_release_deploy_failed(
+                db, run_id=run_ids[0], release_id=rel.id,
+                reason=reason or "deploy did not become healthy",
+            )
+    except Exception as exc:  # noqa: BLE001 — улика не должна ломать статус
+        logger.warning(
+            "deploy evidence write failed for release %s: %s", rel.id, exc,
+        )
 
 
 @router.delete("/{release_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -925,3 +1056,205 @@ async def get_release_sbom(
     if attestation is None:
         raise HTTPException(404, f"No SBOM attestation for release '{release_id}'")
     return attestation
+
+
+# ── COS-168: PK-C-003.6 / DOCKER_AUDIT Trivy Container Scan Gate ───────
+
+@router.post(
+    "/{release_id}/trivy/attach",
+    response_model=TrivyGateAttestationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Attach and attest release image Trivy container scan",
+)
+async def attach_release_trivy(
+    release_id: str,
+    body: TrivyGateAttachRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(
+        require_capability(Action.GATE_DECIDE, domain_binding="identity")
+    ),
+) -> TrivyGateAttestationResponse:
+    """COS-168: принять trivy-отчёт, сверить digest и аттестовать образ.
+
+    critical > 0 → gate_verdict=BLOCK / clearance=DENIED (вердикт фиксируется
+    durable в Evidence Ledger); digest mismatch конверта/отчёта/образа → 422;
+    неизвестный релиз → 404. Container-scan гейт → capability GATE_DECIDE.
+    """
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    try:
+        return await verify_and_attest_trivy_gate(db, release_id, body)
+    except TrivyGateError as exc:
+        raise HTTPException(exc.status_code, str(exc))
+
+
+@router.get(
+    "/{release_id}/trivy",
+    response_model=TrivyGateAttestationResponse,
+    summary="Read latest release Trivy gate decision",
+)
+async def get_release_trivy(
+    release_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> TrivyGateAttestationResponse:
+    """COS-168: последнее trivy gate-решение релиза (404, если его не было)."""
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    attestation = await latest_trivy_gate(db, release_id)
+    if attestation is None:
+        raise HTTPException(404, f"No trivy gate decision for release '{release_id}'")
+    return attestation
+
+
+# ── COS-169/170: Promotion packing + landing (ЗР→ЗТ→ЗПЭ) ─────────────
+
+@router.post(
+    "/{release_id}/promote",
+    response_model=PromotionPackage,
+    summary="Pack release into an idempotent promotion package (next zone)",
+)
+async def promote_release(
+    release_id: str,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    # COS-169: promotion — та же поверхность, что и межзонный трансфер
+    principal: PrincipalContext = Depends(_RELEASE_TRANSFER_GUARD),  # require_capability(Action.RELEASE_TRANSFER)
+) -> PromotionPackage:
+    """COS-169: упаковать deployed-релиз в transfer-пакет для следующей зоны.
+
+    Пакет (digest-pin + SBOM + trivy gate + evidence) idempotent; gate обязателен
+    (BLOCK/отсутствие trivy или отсутствие SBOM → 409).
+    """
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    if rel.status != "deployed":
+        raise HTTPException(400, f"Release must be deployed before promotion (current: {rel.status})")
+
+    target_zone = next_zone(rel.current_zone or "zr")  # type: ignore[arg-type]
+    if target_zone is None:
+        raise HTTPException(
+            400, f"Release already in final zone '{rel.current_zone}'. No further promotion possible.")
+
+    try:
+        return await pack_release_promotion(db, rel, target_zone)
+    except PromotionError as exc:
+        raise HTTPException(exc.status_code, str(exc))
+
+
+@router.post(
+    "/{release_id}/promote/land",
+    response_model=PromotionLandResponse,
+    summary="Land a packed promotion package in the target zone (digest-matching)",
+)
+async def land_release_promotion_route(
+    release_id: str,
+    body: PromotionLandRequest,
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    db: AsyncSession = Depends(get_db),
+    principal: PrincipalContext = Depends(_RELEASE_TRANSFER_GUARD),  # require_capability(Action.RELEASE_TRANSFER)
+) -> PromotionLandResponse:
+    """COS-169/170: принять пакет в целевой зоне и перевести релиз (promoted).
+
+    digest-matching (incoming manifest == пакетный) + повторная сверка SBOM +
+    trivy gate. mismatch → 422, blocked/missing → 409, нелинейный переход → 409.
+    """
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    if rel.status != "deployed":
+        raise HTTPException(400, f"Release must be deployed before landing (current: {rel.status})")
+
+    try:
+        return await land_release_promotion(db, rel, body, actor=principal.user_id)
+    except PromotionNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except PromotionMismatchError as exc:
+        raise HTTPException(422, exc.report if exc.report else str(exc))
+    except PromotionError as exc:
+        raise HTTPException(exc.status_code, exc.report if exc.report else str(exc))
+
+
+@router.get(
+    "/{release_id}/promotion",
+    response_model=PromotionPackage,
+    summary="Read latest promotion package for a zone",
+)
+async def get_release_promotion(
+    release_id: str,
+    target_zone: str = Query(..., description="Целевая зона пакета: zt или zpe"),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> PromotionPackage:
+    """COS-169: актуальный промо-пакет релиза (latest wins, restart-survival)."""
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    package = await latest_promotion_package(db, release_id, target_zone)
+    if package is None:
+        raise HTTPException(404, f"No promotion package for release '{release_id}' → '{target_zone}'")
+    return package
+
+
+@router.get(
+    "/{release_id}/promotion/land",
+    response_model=PromotionLandResponse,
+    summary="Read latest promotion landing report for a zone",
+)
+async def get_release_promotion_landing(
+    release_id: str,
+    target_zone: str = Query(..., description="Целевая зона landing: zt или zpe"),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
+    principal: PrincipalContext = Depends(get_current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> PromotionLandResponse:
+    """COS-169/170: актуальный landing-отчёт релиза (latest wins, durable)."""
+    rel = await db.get(ReleaseModel, release_id)
+    if rel is None:
+        raise HTTPException(404, f"Release '{release_id}' not found")
+    if not principal.is_system_admin:
+        verify_ownership(
+            rel.domain_id,
+            resolve_caller_domain(principal, caller_domain),
+            f"Release '{release_id}'",
+        )
+    landing = await latest_promotion_landing(db, release_id, target_zone)
+    if landing is None:
+        raise HTTPException(404, f"No promotion landing for release '{release_id}' → '{target_zone}'")
+    return landing

@@ -96,6 +96,11 @@ class OciRegistry(ArtifactRegistry):
 
     async def push_artifact(self, name: str, tag: str, source_ref: str,
                             metadata: Optional[Dict[str, Any]] = None) -> PushResult:
+        # COS-163: GAP-режим — push во внешний registry запрещён честной ошибкой.
+        from orchestrator.cosmo.adapters.registry_gap import enforce_gap_push
+        enforce_gap_push(
+            self.config.provider.value, self.config.endpoint, operation_type="push"
+        )
         client = await self._get_client()
         headers = await self._auth_headers()
         try:

@@ -7,6 +7,8 @@ COS-147/148 (PK-C-003.4): + attestation bundle релиза (provenance-конв
 COS-152: read-поверхности (manifest / attestation / airgap) читают актуальный
 якорь из ``evidence_ledger`` (latest wins) — единственный источник истины,
 рестарт cosmo-api не теряет GET-ответы.
+COS-155 (PK-C-003.6): SBOM-инвентарь cosmo-api (syft/grype vs python-inventory)
+— ``POST /sbom`` (якорь ``run_id``) и ``GET /sbom/{bundle_id}`` (durable read).
 """
 from __future__ import annotations
 
@@ -31,6 +33,10 @@ from orchestrator.cosmo.domain.evidence_attestation import (
     EvidenceAttestationBundle,
 )
 from orchestrator.cosmo.domain.rbac import PrincipalContext
+from orchestrator.cosmo.domain.sbom_inventory import (
+    SbomInventoryDocument,
+    SbomInventoryRequest,
+)
 from orchestrator.cosmo.ledger.airgap_verifier import (
     AirgapBundleVerifier,
     latest_airgap_status,
@@ -46,6 +52,21 @@ from orchestrator.cosmo.ledger.manifest_verifier import (
     latest_manifest,
 )
 from orchestrator.cosmo.ledger.retention import ArtifactRetentionManager, RetentionPolicy
+from orchestrator.cosmo.ledger.sbom_inventory import (
+    SbomInventoryStoreError,
+    generate_sbom_inventory,
+    latest_sbom_inventory,
+    store_sbom_inventory,
+)
+from orchestrator.cosmo.domain.artifact_sbom import (
+    ArtifactSbomRequest,
+    ArtifactSbomResponse,
+)
+from orchestrator.cosmo.ledger.artifact_sbom import (
+    ArtifactSbomError,
+    anchor_artifact_sbom,
+    latest_artifact_sbom,
+)
 
 router = APIRouter(prefix="/api/v1/artifacts", tags=["artifacts"])
 
@@ -259,6 +280,91 @@ async def read_airgap_status(
             detail=f"airgap package '{package_id}' has not been verified",
         )
     return result
+
+
+# ── COS-155: SBOM-инвентарь cosmo-api (PK-C-003.6) ─────────────────────
+
+@router.post("/sbom", response_model=SbomInventoryDocument)
+async def generate_sbom(
+    body: SbomInventoryRequest,
+    principal: PrincipalContext = Depends(require_principal()),
+    session: AsyncSession = Depends(get_db),
+):
+    """COS-155: снять и зафиксировать SBOM-инвентарь cosmo-api в evidence ledger.
+
+    syft (CycloneDX 1.5) если доступен, иначе честный ``python-inventory``;
+    grype-визор (offline) — при отсутствии ``vuln_summary.available=false``.
+    Запись якорится на ``run_id`` (NOT NULL FK): его отсутствие/невалидность —
+    422. Возвращает запечатанный документ.
+    """
+    document, warnings = generate_sbom_inventory(body)
+    try:
+        await store_sbom_inventory(session, body.bundle_id, document, body.run_id)
+    except SbomInventoryStoreError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return document
+
+
+@router.get("/sbom/{bundle_id}", response_model=SbomInventoryDocument)
+async def read_sbom(
+    bundle_id: str,
+    principal: PrincipalContext = Depends(require_principal()),
+    session: AsyncSession = Depends(get_db),
+):
+    """COS-155/COS-152: актуальный SBOM-инвентарь бандла из ledger (latest wins).
+
+    Источник истины — ``evidence_ledger``; in-memory реестра нет, ответ
+    переживает рестарт cosmo-api. 404, если инвентарь не якорён.
+    """
+    document = await latest_sbom_inventory(session, bundle_id)
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"sbom inventory for bundle '{bundle_id}' not found",
+        )
+    return document
+
+
+# ── COS-167: SBOM поверх образа (DOCKER_AUDIT: sbom) ───────────────────
+
+@router.post("/sbom/image", response_model=ArtifactSbomResponse)
+async def generate_image_sbom(
+    body: ArtifactSbomRequest,
+    principal: PrincipalContext = Depends(require_principal()),
+    session: AsyncSession = Depends(get_db),
+):
+    """COS-167: снять + заякорить SBOM поверх собранного образа.
+
+    Образ резолвится по актуальному ``ArtifactRecord`` (name, version); syft →
+    CycloneDX 1.5, иначе честный ``python-inventory``; SBOM запечатывается
+    durable, ``ArtifactRecord.sbom_ref`` проставляется (latest wins). Нет
+    durable-записи артефакта → 404.
+    """
+    try:
+        return await anchor_artifact_sbom(session, body.name, body.version)
+    except ArtifactSbomError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/sbom/image/{name}/{version}", response_model=SbomInventoryDocument)
+async def read_image_sbom(
+    name: str,
+    version: str,
+    principal: PrincipalContext = Depends(require_principal()),
+    session: AsyncSession = Depends(get_db),
+):
+    """COS-167/COS-152: актуальный SBOM образа из ledger (latest wins).
+
+    Источник истины — ``evidence_ledger``; in-memory реестра нет, ответ
+    переживает рестарт cosmo-api. 404, если SBOM не якорён.
+    """
+    document = await latest_artifact_sbom(session, name, version)
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"sbom for artifact '{name}:{version}' not found",
+        )
+    return document
 
 
 # ── Helpers ────────────────────────────────────────────────────────────

@@ -183,6 +183,11 @@ class WoodpeckerAdapter(ExecutionAdapter):
 
         Пайплайн кладётся в repo (COS-096 source); эта генерация —
         канонический вид ожидаемой конфигурации для аудита/сверки.
+
+        COS-162: шаг типа ``docker_build`` (``definition.type == "docker_build"``)
+        разворачивается в канонический ``docker build`` (под qualified-тегом)
+        + ``docker push`` по тегу (no-``latest``); manifest-digest снимается
+        с ответа push → маркер ``<name>:<version>@sha256:<digest>``.
         """
         bricks = batch.get("bricks", [])
         pipeline: dict[str, Any] = {"when": {"event": ["manual"]}, "steps": {}}
@@ -190,6 +195,10 @@ class WoodpeckerAdapter(ExecutionAdapter):
         for i, brick in enumerate(bricks):
             step_name = brick.get("name", f"step-{i}")
             definition = brick.get("definition", {})
+            step_type = definition.get("type")
+            if step_type == "docker_build":
+                pipeline["steps"][step_name] = self._docker_build_step(definition)
+                continue
             image = definition.get("image", "alpine:latest")
             step_config: dict[str, Any] = {
                 "image": image,
@@ -204,6 +213,36 @@ class WoodpeckerAdapter(ExecutionAdapter):
             pipeline["steps"][step_name] = step_config
 
         return yaml.dump(pipeline, default_flow_style=False, allow_unicode=True)
+
+    def _docker_build_step(self, definition: dict) -> dict[str, Any]:
+        """COS-162: woodpecker-шаг docker_build (build + push digest-tag).
+
+        Docker-доступ внутри executor'а — через mounted ``docker.sock``
+        (woodpecker-agent монтирует ``/var/run/docker.sock``); kaniko/podman
+        НЕ выдумываются. Образ пушится в registry зоны по тегу (no-``latest``);
+        manifest-digest снимается с ответа push и печатается каноническим
+        маркером COS-142.
+        """
+        from orchestrator.cosmo.domain.docker_build import (
+            DockerBuildSpec,
+            render_docker_build_commands,
+        )
+        from orchestrator.cosmo.adapters.registry_gap import enforce_gap_push
+
+        spec = DockerBuildSpec(**definition)
+        # COS-163: docker_build — push в registry зоны. В GAP-режиме внешний
+        # registry (docker.io/ghcr.io/quay.io) → честная ошибка на генерации,
+        # а не молчаливый пайплайн, падающий в никуда при исполнении.
+        enforce_gap_push(
+            "local-oci", spec.registry, operation_type="push"
+        )
+        digest_file = ".woodpecker-image-digest"
+        commands = render_docker_build_commands(spec, digest_file)
+        return {
+            "image": "docker:24-cli",
+            "volumes": ["/var/run/docker.sock:/var/run/docker.sock"],
+            "commands": commands,
+        }
 
     def submit_run(self, repo_owner: str, repo_name: str, branch: str = "main",
                    config_file: str | None = None) -> dict:
