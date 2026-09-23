@@ -358,15 +358,16 @@ async def test_http_opaque_cookie_is_401(pg_client: AsyncClient):
     assert res.status_code == 401, res.text
 
 
-async def test_http_jwt_bearer_still_authenticates(pg_client: AsyncClient):
-    """Позитив: валидный JWT (ey.<payload>.<sig>) проходит реальный auth и
-    попадает на guarded-роут (list_projects, scoping не-админа → 200)."""
-    import base64 as _b64
-    import json as _json
+async def test_http_jwt_bearer_still_authenticates(pg_client: AsyncClient, monkeypatch):
+    """Позитив: валидный подписанный RS256 JWT проходит реальный auth и
+    попадает на guarded-роут (list_projects, scoping не-админа → 200).
 
-    claims = {"sub": "cos085-user", "roles": ["user"]}
-    payload = _b64.urlsafe_b64encode(_json.dumps(claims).encode()).decode().rstrip("=")
-    token = f"eyJhbGciOiJIUzI1NiJ9.{payload}.sig"
+    COS-156: подпись конфигурируется dev-ключом (COSMO_ENV=test из conftest).
+    """
+    from _jwt_testkey import TEST_PUBLIC_KEY_PEM, mint_rs256
+
+    monkeypatch.setenv("COSMO_JWT_DEV_PUBLIC_KEY", TEST_PUBLIC_KEY_PEM)
+    token = mint_rs256({"sub": "cos085-user", "roles": ["user"]})
     _anon()
     res = await pg_client.get(
         "/api/v1/projects",

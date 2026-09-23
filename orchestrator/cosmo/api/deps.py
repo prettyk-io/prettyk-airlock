@@ -4,8 +4,6 @@ SAN-006 [COS-031]: Честный PrincipalContext и авторизационн
 """
 from __future__ import annotations
 
-import base64
-import json
 from collections.abc import AsyncGenerator
 from typing import Any, List, Optional
 from fastapi import Cookie, Depends, Header, HTTPException, Query, status
@@ -20,6 +18,10 @@ from orchestrator.cosmo.domain.rbac import (
     PrincipalContext,
     Role,
     ZoneType,
+)
+from orchestrator.cosmo.security.jwt_verifier import (
+    JwtVerificationError,
+    verify_jwt,
 )
 
 
@@ -82,105 +84,69 @@ def _parse_role(role_raw: str) -> Role | CBRRole | str:
     return r_clean
 
 
+def _extract_bearer_token(
+    authorization: Optional[str], cookie_token: Optional[str]
+) -> Optional[str]:
+    """Извлечь JWT из Authorization: Bearer (приоритет) или cookie session_token."""
+    auth_str = _clean_str(authorization)
+    if auth_str:
+        parts = auth_str.split()
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1]
+        if len(parts) == 1 and parts[0].lower() != "bearer":
+            return parts[0]
+        return None
+    return _clean_str(cookie_token)
+
+
 async def get_current_principal(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     cookie_token: Optional[str] = Cookie(None, alias="session_token"),
     x_cosmo_zone: Optional[str] = Header(None, alias="X-Cosmo-Zone"),
     x_cosmo_domain: Optional[str] = Header(None, alias="X-Cosmo-Domain"),
-    x_cosmo_principal: Optional[str] = Header(None, alias="X-Cosmo-Principal"),
-    x_cosmo_roles: Optional[str] = Header(None, alias="X-Cosmo-Roles"),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-    x_user_email: Optional[str] = Header(None, alias="X-User-Email"),
-    x_user_roles: Optional[str] = Header(None, alias="X-User-Roles"),
-    x_cosmo_scopes: Optional[str] = Header(None, alias="X-Cosmo-Scopes"),
 ) -> PrincipalContext:
-    """SAN-006 [COS-031]: Честная зависимость извлечения и валидации PrincipalContext.
+    """SAN-006 [COS-031] + COS-156: крипто-верифицированный PrincipalContext.
 
     1. Читает заголовок Authorization: Bearer <token> или cookie session_token.
-    2. Если авторизация отсутствует или токен невалиден -> HTTP 401.
-    3. COS-085: legacy opaque-bearer контракт ЗАКРЫТ — принимаются только
-       JWT-формат токены (ey... с payload-сегментом). Ранее любой opaque
-       токен (`garbage.sig.x`) аутентифицировался как Role.USER, а `:`-формат
-       (`sub:roles:email`) и keyword-формат (`*admin*` в строке токена)
-       позволяли подделать роли вплоть до system admin — всё это теперь 401.
-       Проверка подписи/сессии (Better Auth wiring) — отдельный шаг интеграции.
-    4. Извлекает пользователя, email, роли (включая 12 ролей ЦБ из CBRRole),
-       зону (X-Cosmo-Zone) и team scopes.
+    2. Отсутствие/невалидность учётных данных -> HTTP 401.
+    3. COS-085: opaque-bearer legacy контракт закрыт. COS-156: формат ``ey…``
+       больше НЕ достаточен — токен обязан пройти **верификацию подписи**
+       (RS256/ES256 через ``security.jwt_verifier``, fail-closed). Подделанная
+       подпись / истёкший ``exp`` / неверный ``iss`` / ``alg=none`` → 401.
+    4. Identity (sub/email/roles/scopes/is_admin) читается ТОЛЬКО из
+       верифицированных claims. Заголовки-инъекции идентичности
+       (X-User-Id/Roles, X-Cosmo-Principal/Roles/Scopes) больше не являются
+       источником identity — это был spoof-вектор ролей вплоть до system admin.
+       Зона/домен (X-Cosmo-Zone/X-Cosmo-Domain) остаются контекстом, не identity.
     """
-    auth_str = _clean_str(authorization)
-    cookie_str = _clean_str(cookie_token)
-    user_id_hdr = _clean_str(x_user_id) or _clean_str(x_cosmo_principal)
-    email_hdr = _clean_str(x_user_email)
-    roles_hdr = _clean_str(x_user_roles) or _clean_str(x_cosmo_roles)
-    zone_hdr = _clean_str(x_cosmo_zone) or "zr"
-    domain_hdr = _clean_str(x_cosmo_domain) or "default"
-    scopes_hdr = _clean_str(x_cosmo_scopes)
+    raw_token: Optional[str] = _extract_bearer_token(authorization, cookie_token)
 
-    raw_token: Optional[str] = None
-
-    if auth_str:
-        parts = auth_str.split()
-        if len(parts) == 2 and parts[0].lower() == "bearer":
-            raw_token = parts[1]
-        elif len(parts) == 1 and parts[0].lower() != "bearer":
-            raw_token = parts[0]
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="401_UNAUTHORIZED: Missing or invalid credentials",
-            )
-    elif cookie_str:
-        raw_token = cookie_str
-
-    if not raw_token or raw_token.lower() == "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="401_UNAUTHORIZED: Missing or invalid credentials",
-        )
-
-    # COS-085: opaque-bearer legacy контракт закрыт. Единственный легитимный
-    # формат — JWT (ey... с payload-сегментом). Бывший keyword-blacklist
-    # ("invalid"/"expired"/.../"0000") поглощён этим правилом; он же давал
-    # ложные 401 на валидные JWT, чей base64-payload содержал подстроку
-    # вроде "0000".
-    if not (raw_token.startswith("ey") and raw_token.count(".") >= 1):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="401_UNAUTHORIZED: opaque bearer tokens are not accepted",
-        )
-
-    # Дефолтные значения
-    user_id = user_id_hdr or "user_authenticated"
-    email = email_hdr or f"{user_id}@kits.bank.corp"
-    roles: List[Role | CBRRole | str] = []
-    scopes: List[str] = []
-    is_admin = False
-    auth_claims: dict[str, Any] = {}
-
-    # COS-031/COS-085: единственный путь аутентификации — JWT claims.
-    # Подпись на этом слое не проверяется (контракт COS-031; проверка
-    # сессии — зона будущего Better Auth wiring). Невалидный payload → 401.
+    # COS-156: единственный путь аутентификации — крипто-подпись JWT.
+    # Fail-closed: не сконфигурированы ключи → 401 (не дефолтный success).
     try:
-        payload_b64 = raw_token.split(".")[1]
-        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-        user_id = claims.get("sub") or claims.get("user_id") or user_id
-        email = claims.get("email") or email
-        if "roles" in claims:
-            roles = [_parse_role(r) for r in claims["roles"]]
-        if "scopes" in claims:
-            scopes = list(claims["scopes"])
-        is_admin = bool(claims.get("is_admin", False))
-        auth_claims = claims
-    except Exception:
+        claims = verify_jwt(raw_token)
+    except JwtVerificationError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="401_UNAUTHORIZED: Missing or invalid credentials",
         )
 
-    # Если роли переданы в явном заголовке
-    if roles_hdr:
-        roles = [_parse_role(r) for r in roles_hdr.split(",") if r.strip()]
+    # Identity claims — только из верифицированного token.
+    user_id = _clean_str(claims.get("sub")) or _clean_str(claims.get("user_id"))
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="401_UNAUTHORIZED: token has no subject (sub)",
+        )
+    email = _clean_str(claims.get("email")) or f"{user_id}@kits.bank.corp"
+    roles: List[Role | CBRRole | str] = []
+    if isinstance(claims.get("roles"), list):
+        roles = [_parse_role(r) for r in claims["roles"] if isinstance(r, str)]
+    scopes: List[str] = (
+        [s for s in claims.get("scopes", []) if isinstance(s, str)]
+        if isinstance(claims.get("scopes"), list) else []
+    )
+    is_admin = bool(claims.get("is_admin", False))
 
     if not roles:
         roles.append(Role.USER)
@@ -190,14 +156,11 @@ async def get_current_principal(
         for r in roles
     )
 
-    if scopes_hdr:
-        scopes.extend([s.strip() for s in scopes_hdr.split(",") if s.strip()])
-
-    zone_val = zone_hdr.lower()
+    zone_val = (_clean_str(x_cosmo_zone) or "zr").lower()
     if zone_val not in ("zr", "zt", "zpe"):
         zone_val = "zr"
 
-    domain_val = domain_hdr
+    domain_val = _clean_str(x_cosmo_domain) or "default"
 
     return PrincipalContext(
         user_id=user_id,
@@ -207,7 +170,7 @@ async def get_current_principal(
         zone=zone_val,  # type: ignore
         team_scopes=scopes,
         is_authenticated=True,
-        auth_claims=auth_claims,
+        auth_claims=claims,
         is_system_admin=is_system_admin,
     )
 

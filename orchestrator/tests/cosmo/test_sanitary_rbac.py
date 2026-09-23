@@ -12,6 +12,8 @@ import json
 import pytest
 from fastapi import HTTPException, status
 
+from _jwt_testkey import TEST_PUBLIC_KEY_PEM, mint_rs256
+
 from cosmo.api.deps import get_current_principal
 from cosmo.domain.rbac import (
     Action,
@@ -51,21 +53,23 @@ async def test_get_current_principal_invalid_token_raises_401():
 
 
 @pytest.mark.asyncio
-async def test_get_current_principal_valid_bearer_token():
-    """Валидный Bearer JWT + header-инжектированная идентичность → PrincipalContext.
+async def test_get_current_principal_valid_bearer_token(monkeypatch):
+    """Валидный подписанный RS256 JWT → PrincipalContext из verified claims.
 
-    COS-085: opaque-токены (бывший `valid_officer_token`, аутентифицировавший
-    через keyword-ветку как admin) больше не легальны — только JWT (ey...).
-    Идентичность/роли приходят из trusted-заголовков (контракт COS-031)."""
-    empty_claims = base64.urlsafe_b64encode(b"{}").decode().rstrip("=")
-    token = f"eyJhbGciOiJIUzI1NiJ9.{empty_claims}.sig"
+    COS-156: идентичность/роли приходят ТОЛЬКО из крипто-верифицированных
+    claims. Header-инъекция (X-User-Id/Roles, X-Cosmo-Roles/Scopes) больше
+    не является источником identity — подпись единственный источник истины."""
+    monkeypatch.setenv("COSMO_JWT_DEV_PUBLIC_KEY", TEST_PUBLIC_KEY_PEM)
+    claims = {
+        "sub": "officer_ivanov",
+        "email": "ivanov@cbr.bank.corp",
+        "roles": ["security_officer", "admin_sec"],
+        "scopes": ["team_core", "audit_all"],
+    }
+    token = mint_rs256(claims)
     principal = await get_current_principal(
         authorization=f"Bearer {token}",
-        x_user_id="officer_ivanov",
-        x_user_email="ivanov@cbr.bank.corp",
-        x_user_roles="security_officer,admin_sec",
         x_cosmo_zone="zt",
-        x_cosmo_scopes="team_core,audit_all",
     )
 
     assert principal.is_authenticated is True
@@ -79,8 +83,9 @@ async def test_get_current_principal_valid_bearer_token():
 
 
 @pytest.mark.asyncio
-async def test_get_current_principal_jwt_token_claims():
-    """JWT токен декодирует claims (sub, email, roles, scopes, is_admin)."""
+async def test_get_current_principal_jwt_token_claims(monkeypatch):
+    """Подписанный RS256 JWT декодирует claims (sub, email, roles, scopes, is_admin)."""
+    monkeypatch.setenv("COSMO_JWT_DEV_PUBLIC_KEY", TEST_PUBLIC_KEY_PEM)
     claims = {
         "sub": "sec_analyst_elena",
         "email": "elena@secops.corp",
@@ -88,11 +93,10 @@ async def test_get_current_principal_jwt_token_claims():
         "scopes": ["appsec_scan"],
         "is_admin": False,
     }
-    jwt_payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
-    fake_jwt = f"eyJhbGciOiJIUzI1NiJ9.{jwt_payload}.signature"
+    token = mint_rs256(claims)
 
     principal = await get_current_principal(
-        authorization=f"Bearer {fake_jwt}",
+        authorization=f"Bearer {token}",
         x_cosmo_zone="zr",
     )
 
@@ -102,6 +106,22 @@ async def test_get_current_principal_jwt_token_claims():
     assert Role.SEC_EXPERT in principal.roles
     assert "appsec_scan" in principal.team_scopes
     assert principal.is_system_admin is False
+
+
+@pytest.mark.asyncio
+async def test_get_current_principal_header_identity_is_ignored(monkeypatch):
+    """COS-156: header-инъекция ролей/is_admin игнорируется — подпись источник.
+
+    Даже если заголовки X-Cosmo-Roles/X-User-Roles несут admin_sec, а подпись
+    только user — principal не получает admin-роль."""
+    monkeypatch.setenv("COSMO_JWT_DEV_PUBLIC_KEY", TEST_PUBLIC_KEY_PEM)
+    token = mint_rs256({"sub": "plain_user", "roles": ["user"], "is_admin": False})
+
+    principal = await get_current_principal(authorization=f"Bearer {token}")
+
+    assert principal.user_id == "plain_user"
+    assert principal.is_system_admin is False
+    assert not principal.has_role(Role.ADMIN_SEC)
 
 
 # ═══════════════════════════════════════════════════════════════════════

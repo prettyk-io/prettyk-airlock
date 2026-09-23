@@ -12,22 +12,27 @@ commit-and-run сохраняет COS-067/068 контракт: SCAN_START capab
 identity binding (не-админ триггерит только в своём домене, 403 на
 чужой body.domain_id) + реальный Run в PG.
 
-TODO(COS-0xx): commit/commit-and-run пишут через ForgeAdapter при
-подключении write-side API (сейчас push-сторона Web IDE идёт через
-ForgeAdapter в COS-105/Boss OpenBao-контур); file-write сохранение
-временно in-memory — write-path не входит в COS-103 scope (чтение —
-да), валидация путей — на WRITE-роутах при переходе на forge.
+COS-154: legacy write-surface пишет честно через build_adapter().commit_changes
+(тот же bulk Contents API, что /workspace/commits COS-124). CommitFileItem
+= {path, content} без action → маппинг в create/update через CAS-состояние:
+файл существует на ветке (read_file дал blob sha) → update, отсутствует →
+create. commit_hash — реальный 40-hex sha, не c-{uuid}. Ошибки forge →
+forge_http_error (503 not configured / 502 unreachable); конфликт/ref уехал →
+409. Никакого fallback на фейковый sha.
 """
 from __future__ import annotations
 
 import datetime
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.cosmo.api.deps import get_db, require_capability, require_principal
+from orchestrator.cosmo.api.forge_client import forge_http_error
+from orchestrator.cosmo.adapters.forge_gitea import GiteaConflictError
+from orchestrator.cosmo.api.routes.workspace import _binding_for_repo
 from orchestrator.cosmo.domain.rbac import Action, CBRRole, PrincipalContext, Role
 from orchestrator.cosmo.db.models import Run as RunModel
 from orchestrator.cosmo.domain.run_model import Run
@@ -90,17 +95,78 @@ class CommitResponse(BaseModel):
 # ── Endpoints ──────────────────────────────────────────────────────────
 
 
+def _current_blob_sha(adapter, owner: str, repo: str, path: str, ref: str) -> str | None:
+    """Текущий SHA blob'а на ref. None — файла нет (create)."""
+    try:
+        _content, sha = adapter.read_file(owner, repo, path, ref=ref)
+        return sha
+    except LookupError:
+        return None
+
+
+def _commit_files(owner: str, name: str, branch: str, message: str,
+                  files: list[CommitFileItem]) -> str:
+    """Честный forge-write: {path, content} → create/update через CAS-состояние.
+
+    Возвращает реальный 40-hex sha. Ошибки → HTTPException (400/404/409/502/503).
+    Никакого fallback на фейковый sha.
+    """
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="no file changes to commit (empty files)",
+        )
+
+    from orchestrator.cosmo.api.forge_client import build_adapter
+    try:
+        adapter = build_adapter()
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"commit to {owner}/{name}@{branch}") from exc
+
+    operations: list[dict] = []
+    for f in files:
+        try:
+            current = _current_blob_sha(adapter, owner, name, f.path, ref=branch)
+        except Exception as exc:  # noqa: BLE001
+            raise forge_http_error(exc, f"{f.path} in {owner}/{name}") from exc
+        if current:
+            operations.append({
+                "path": f.path, "content": f.content,
+                "action": "update", "sha": current,
+            })
+        else:
+            operations.append({
+                "path": f.path, "content": f.content, "action": "create",
+            })
+
+    try:
+        result = adapter.commit_changes(owner, name, branch, message, operations)
+    except GiteaConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"commit conflict on {owner}/{name}@{branch}: {exc}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise forge_http_error(exc, f"commit to {owner}/{name}@{branch}") from exc
+
+    return result.get("sha", "")
+
+
 @router.post("/commit", response_model=CommitResponse)
 async def commit_and_push(
     body: CommitAndPushRequest,
+    db: AsyncSession = Depends(get_db),
     principal: PrincipalContext = Depends(require_principal()),
+    caller_domain: str | None = Header(None, alias="X-Cosmo-Domain"),
 ) -> CommitResponse:
     """Commit modified files and push to remote forge branch.
 
-    COS-068: authentication required. TODO(COS-0xx): ownership-чек при
-    переходе на реальные forge-репозитории.
+    COS-068: authentication required. COS-154: честный write-path — CAS-состояние
+    файла (create/update) + bulk Contents API → реальный 40-hex sha.
     """
-    commit_hash = f"c-{uuid.uuid4().hex[:12]}"
+    await _binding_for_repo(db, body.repo, principal, caller_domain)
+    owner, _, name = body.repo.partition("/")
+    commit_hash = _commit_files(owner, name, body.branch, body.message, body.files)
     return CommitResponse(
         ok=True,
         commit_hash=commit_hash,
@@ -123,6 +189,10 @@ async def commit_and_run(
     COS-068: creates a Run — same contract as POST /runs (COS-067):
     SCAN_START capability + identity binding (не-админ триггерит только
     в своём домене, 403 на чужой body.domain_id).
+
+    COS-154: identity binding первым (403 на чужой домен — без forge-запросов),
+    затем честный commit (реальный sha), затем Run в PG. Commit упал → Run НЕ
+    создаётся (ложная атомарность убрана).
     """
     # COS-068: domain binding — не-админ создаёт Run только в своём домене
     if not principal.is_system_admin and (body.domain_id or "") != (principal.domain_id or ""):
@@ -131,7 +201,9 @@ async def commit_and_run(
             detail=f"domain_id '{body.domain_id}' does not match authenticated principal domain",
         )
 
-    commit_hash = f"c-{uuid.uuid4().hex[:12]}"
+    # COS-154: честный commit первым; Run только после успешного коммита.
+    owner, _, name = body.repo.partition("/")
+    commit_hash = _commit_files(owner, name, body.branch, body.message, body.files)
 
     # Trigger Run in database
     run_id = f"run-{uuid.uuid4().hex[:8]}"

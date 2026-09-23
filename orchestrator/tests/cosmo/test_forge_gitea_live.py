@@ -11,14 +11,11 @@
      test-delivery → last-push в ПУ показывает пуш (HMAC подписан Gitea).
   4. compile-from-source от живого дерева (.cosmo/pipeline.yaml).
 
-Auth: opaque bearer закрыт COS-085 — минтим JWT-форму (ey...payload...sig).
+Auth: opaque bearer закрыт COS-085; live-контур минтит подписанный RS256
+(COS-160, через `_jwt_testkey.mint_rs256`) — ПУ требует крипто-верификацию.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac as hmac_mod
-import json
 import os
 import sys
 import time
@@ -66,14 +63,11 @@ def _gitea(method: str, path: str, **kw):
 
 
 def _mint_jwt(sub: str = "gate-agent", roles: list | None = None) -> str:
-    """JWT-подобный токен (COS-085): deps парсит payload-сегмент."""
+    """Подписанный RS256 JWT (COS-160): live ПУ требует крипто-верификацию."""
+    from _jwt_testkey import mint_rs256
+
     roles = roles or ["admin_sec"]
-    header = base64.urlsafe_b64encode(json.dumps(
-        {"alg": "none", "typ": "JWT"}).encode()).rstrip(b"=").decode()
-    payload = base64.urlsafe_b64encode(json.dumps(
-        {"sub": sub, "roles": roles, "is_admin": True}).encode()
-    ).rstrip(b"=").decode()
-    return f"ey{header}.{payload}.sig"
+    return mint_rs256({"sub": sub, "roles": roles, "is_admin": True})
 
 
 @pytest.fixture(scope="module")

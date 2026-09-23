@@ -6,7 +6,6 @@ Live:     $env:COSMO_LIVE_COMMIT = "1"; pytest .../test_workspace_commit.py -v
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 import sys
@@ -305,13 +304,10 @@ class TestLiveCommit:
     def live_setup(self):
         import requests
 
-        # jwt mint (COS-085 pattern)
-        h = base64.urlsafe_b64encode(
-            json.dumps({"alg": "none", "typ": "JWT"}).encode()).rstrip(b"=").decode()
-        p = base64.urlsafe_b64encode(
-            json.dumps({"sub": "gate-agent", "roles": ["admin_sec"], "is_admin": True}).encode()
-        ).rstrip(b"=").decode()
-        jwt = f"ey{h}.{p}.sig"
+        from _jwt_testkey import mint_rs256
+
+        # COS-160: подписанный RS256 (не unsigned) — live ПУ требует верификацию.
+        jwt = mint_rs256({"sub": "gate-agent", "roles": ["admin_sec"], "is_admin": True})
 
         # repo
         r = self._gitea("POST", "/orgs", json={"username": self.ORG})
