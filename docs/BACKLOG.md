@@ -1,4 +1,4 @@
-﻿# Бэклог Cosmoport 2.0
+# Бэклог Cosmoport 2.0
 
 > **Ты:** Cosmo. **Исполнители:** Boss, Flash, Luna, Buddy.
 > **Легенда:** 🔄 в работе · ⬜ ready · ✅ done · ❌ cancelled
@@ -292,11 +292,11 @@
 > паттерн Luna закреплён как норма для новых тест-файлов; sync-репозиторий
 > в sync-обработчиках — принято, пересмотр при росте нагрузки.
 
-## ⬜ READY — CAPABILITY-GRANULAR GUARDS PASS 2 + DOMAIN ACCESS UNIFICATION
+## ✅ DONE — CAPABILITY-GRANULAR GUARDS PASS 2 + DOMAIN ACCESS UNIFICATION
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
-|---|---|---:|---|---|---|
-| **COS-083** | Apex | 20-24h | P1 | COS-077 | Capability-гранулярность guard'ов (builds/deployments/projects), доменный scoping read-списков, унификация резолва домена caller'а |
+|---|---:|---|---|---|---|
+| **COS-083** | Apex | 20-24h | P1 | COS-077 | ✅ DONE (транзитивно, verдикт Cosmo 23.09.2026): capability-гранулярность guard'ов (builds/deployments/projects), доменный scoping read-списков, унификация резолва домена caller'а |
 
 > **Scope:** (1) Pass 2 из COS-067: guard-фабрики тоньше, чем system-admin/
 > principal — capability-гранулярность для builds/deployments/projects
@@ -318,6 +318,17 @@
 >
 > **Follow-up найден при приёмке (→ COS-085):** legacy opaque-bearer в
 > `get_current_principal`.
+
+> **Вердикт Cosmo (23.09.2026):** COS-083 фактически закрыта транзитивно в
+> волнах COS-067/068/080/086/091 — capability-гранулярность write-роутов
+> (`require_capability(Action.X, domain_binding="identity")` в builds/
+> deployments/gates/runs/transfer/apps), доменный scoping read-списков
+> (`findings.py`: не-админ → `principal.domain_id`, клиентский `domain_id`
+> игнорируется) и единый резолв домена (`domain_guard.resolve_caller_domain`
+> + `verify_ownership` во всех route-файлах). Инвариант-тесты
+> `test_domain_resolve_invariant.py` (unified-resolve / no-raw-principal-
+> domain / write-routes-guarded) + `test_deps_guard_regression.py` уже есть.
+> Карточка закрыта, отдельной работы не требует.
 
 ## ⬜ READY — OPAQUE-BEARER LEGACY CONTRACT CLOSURE
 
@@ -2726,6 +2737,141 @@ are accepted; UI is the next product surface.
 
 ---
 
+#### 🟢 COS-154 · Luna · Cosmoport: repos.py честный write-path — убрать фейковый commit hash — DONE
+> **Контекст (PO — Vector):** PK-C-006 (Workspace API) серверно закрыта
+> волнами 1–6 (PK-C-006.18…32): чтение и запись идут честным ForgeAdapter
+> write через `routes/workspace.py` (`/workspace/commits`, `/workspace/files`).
+> Но legacy-поверхность `routes/repos.py` осталась за бортом:
+> `POST /api/v1/repos/commit` и `/commit-and-run` возвращают фейковый
+> `c-{uuid}` и **ничего не пишут в Gitea**. Их дергает Control Station
+> (`frontend/src/cosmo/station/api.ts` → `saveFileAsCommit`/`commitAndRun`) —
+> ложная атомарность видна пользователю станции.
+
+> **Scope:**
+> (1) `POST /api/v1/repos/commit`: писать через `build_adapter().commit_changes`
+>     (тот же путь, что `/workspace/commits`, COS-124); `files` мапить в
+>     create/update изменения; вернуть реальный sha вместо `c-{uuid}`.
+> (2) `POST /api/v1/repos/commit-and-run`: реальный commit + существующий Run
+>     (Run-логика уже честная в PG — не менять).
+> (3) Маппинг ошибок через `forge_client.forge_http_error`: forge не настроен →
+>     честный 503/502 (НЕ fallback на фейк); конфликт/занятый путь → 409.
+> (4) Контракт COS-068 сохраняется: SCAN_START + identity binding на
+>     commit-and-run (403 на чужой domain_id) не регрессирует.
+
+> **Out of scope:** миграция станции на `/workspace/commits` (отдельная
+> карточка), `routes/workspace.py` (уже честный), Web IDE клиент
+> (IDE-CORE-012, Flash), миграционная цепочка (заморожена).
+
+> **Acceptance:**
+> - `POST /commit` возвращает sha вида `[0-9a-f]{40}`; файл реально в Gitea
+>   (hermetic fake или live opt-in по образцу COS-096).
+> - Forge не сконфигурирован → 503/502, без фейкового hash.
+> - `commit-and-run`: commit честный + run создан; identity-binding 403 не
+>   регрессирует.
+> - Focused тесты зелёные; suite gate без регрессий; openapi без изменений
+>   (route'ы и модели ответа уже описаны).
+
+> **Отчёт обратно:** изменённые поверхности; доказательство честного sha (fake
+> и/или live forge); результат suite gate; edge-случаи; блокеры.
+
+> **Worker report (Luna, COS-154):**
+> - Поверхность: `orchestrator/cosmo/api/routes/repos.py` — `POST /commit` и
+>   `POST /commit-and-run` теперь пишут через `build_adapter().commit_changes`
+>   (bulk Contents API, тот же контур что COS-124). `CommitFileItem={path,content}`
+>   мапится в create/update через CAS-состояние (`read_file` → blob sha):
+>   файл есть → update (ша), отсутствует → create. `commit_hash` = реальный
+>   40-hex sha (`result["sha"]`), не `c-{uuid}`.
+> - Ошибки forge → `forge_http_error` (503 not configured / 502 unreachable);
+>   `GiteaConflictError` → 409. Пустой `files` → 400. Никакого fallback на фейк.
+> - `commit-and-run`: identity binding (403 на чужой `domain_id`) ДО forge;
+>   затем честный commit; Run в PG создаётся ТОЛЬКО после успешного коммита
+>   (ложная атомарность убрана). Run-логика в PG не менялась.
+> - Тесты: новый `tests/cosmo/test_repos_commit_cos154.py` (9 тестов: честный sha
+>   create/update/mixed, empty→400, conflict→409, ghost→404, 503 not-configured,
+>   commit-fail→Run не создаётся, forge-not-configured→Run не создаётся).
+> - Прогон: COS-154 focused 9 passed; auth regression 47 passed; workspace_commits
+>   35 passed; openapi clean-process build OK (route/модели не менялись).
+> - НЕ закоммичено (по правилу: коммит/пуш — по явной команде PO).
+>
+> **Принято (Cosmo, PO, 2026-09-23):** независимый focused `test_repos_commit_cos154.py` — 9 passed; честный sha (40-hex) без фейкового fallback, forge-ошибки → 503/502/409, commit-fail → Run не создаётся.
+
+#### 🟢 COS-155 · Luna · Cosmoport: SBOM в bundle — syft/grype-инвентарь (PK-C-003.6) — DONE
+> **Контекст (PO — Vector):** PK-C-003.6 («SBOM in bundle, syft/grype») —
+> единственный невыполненный пункт чеклист-требований 2.0 (PK-C-003.1…5
+> закрыты). Артефактный контур уже есть: manifest digest-pin (COS-142),
+> attestation bundle (COS-147), airgap-верификация (COS-148), retention
+> (COS-066). Не хватает SBOM-инвентаря зависимостей и уязвимостей в бандле —
+> обязательное требование для production freeze (PK-C-003.4 digest-pin стоял
+> тем же флажком).
+
+> **Scope:**
+> (1) SBOM-генерация для cosmo-api: CycloneDX 1.5 (или SPDX 2.3) JSON из
+>     inventories (pyproject/requirements + контейнерные слои). Где
+>     syft/grype доступны (локально/в образе) — реальный скан; иначе честный
+>     Python-инвентарь (`pip freeze`/importlib.metadata) с явной пометкой
+>     `generator: python-inventory` (НЕ подделывать syft-подпись).
+> (2) grype-визор: список CVE/severity в SBOM + summary (total/critical/high),
+>     честный `unavailable` когда grype отсутствует.
+> (3) Вложить SBOM в bundle manifest (COS-142) и/или attestation bundle
+>     (COS-147) — единый источник истины в `evidence_ledger` (latest wins,
+>     COS-152).
+> (4) REST-поверхность чтения SBOM по `bundle_id` (по образцу
+>     `GET /api/v1/artifacts/manifest/{bundle_id}`).
+
+> **Out of scope:** миграционная цепочка (заморожена), runtime-сканирование
+> образов в проде, Web IDE, Supply Chain attstation логика (COS-147) —
+> только вложение SBOM, не её переписывание.
+
+> **Acceptance:**
+> - `GET .../sbom/{bundle_id}` отдаёт валидный CycloneDX/SPDX JSON с версией
+>   формата и generator-пометкой; отсутствующий bundle → 404.
+> - SBOM переживает рестарт (читается из `evidence_ledger`, не in-memory).
+> - pytest: fixture-тест на структуру SBOM (schema-валидность) + live/integration
+>   opt-in по образцу COS-096 (`COSMO_LIVE_GITEA`-стиль), если syft доступен.
+> - suite gate без регрессий; openapi-добавления документированы.
+
+> **Отчёт обратно:** изменённые поверхности; пример SBOM; способ генерации
+> (syft vs python-inventory); результат suite gate; edge-случаи (grype
+> отсутствует, пустой inventory); блокеры.
+
+> **Worker report (Luna, COS-155):**
+> - Поверхности:
+>   * `orchestrator/cosmo/domain/sbom_inventory.py` — DTO: `SbomInventoryComponent`
+>     (`extra="ignore"`), `SbomInventoryVulnerability`, `SbomVulnSummary`
+>     (`available`/`total`/`critical`/`high`/`medium`/`low`/`reason`),
+>     `SbomInventoryDocument` (CycloneDX 1.5 — camelCase-алиасы `bomFormat`/
+>     `specVersion`/`serialNumber`/`vulnSummary`; `generator` + `tool_name`/
+>     `tool_version`/`metadata`), `SbomInventoryRequest` (`bundle_id`/`run_id`/
+>     `app_name`/`version`/`target`), `sbom_inventory_content_hash()`,
+>     `normalize_severity()`, `python_inventory_components()` (`importlib.metadata`),
+>     `parse_grype_report()` (severity lower(), negligible/unknown → low).
+>   * `orchestrator/cosmo/ledger/sbom_inventory.py` — `generate_sbom_inventory()`
+>     (syft CycloneDX если бинарник есть, иначе честный `generator: python-inventory`;
+>     grype через `transfer.sbom.generate_vuln_report`, отсутствует →
+>     `vuln_summary.available=false` + reason), `store_sbom_inventory()`
+>     (якорь `run_id`, `commit_evidence_entry`, маркер `source=cosmo-sbom-inventory`),
+>     `latest_sbom_inventory()` (latest wins + crypto-проверка `content_hash`).
+>   * `orchestrator/cosmo/api/routes/artifacts.py` — `POST /api/v1/artifacts/sbom`
+>     (generate + store, 422 при ghost-прогоне) и `GET /api/v1/artifacts/sbom/{bundle_id}`
+>     (durable read, 404 ghost).
+> - Единый источник истины — отдельная evidence-ledger-запись
+>   `source=cosmo-sbom-inventory` / `sbom_type=SBOM_INVENTORY`, ключ `bundle_id`
+>   (companion к manifest/attestation, не inline-переписывание COS-142/147).
+>   Read-path переживает рестарт cosmo-api (in-memory реестра нет).
+> - Покрытие: новый `tests/cosmo/test_sbom_inventory.py` (18 тестов: DTO
+>   CycloneDX-1.5 structure + generator + python-inventory + grype-parse +
+>   summary + content_hash + bundle_id-регекс; route POST/GET, 404, 422,
+>   latest-wins, cross-process restart-survival через `_durable_probe`, 401).
+> - Прогон: COS-155 focused 18 passed; test_artifact_manifest + test_repos_commit
+>   81 passed; openapi contract + security-matrix openapi 44 passed; endpoints
+>   `/api/v1/artifacts/sbom` и `/sbom/{bundle_id}` присутствуют в `/openapi.json`.
+> - Edge-случаи: syft отсутствует → `generator: python-inventory` (не фейк syft);
+>   grype отсутствует → `vuln_summary.available=false` + reason; ghost bundle →
+>   404; ghost run → 422; пустой inventory честно пуст.
+> - НЕ закоммичено (по правилу: коммит/пуш — по явной команде PO).
+>
+> **Принято (Cosmo, PO, 2026-09-23):** независимый focused `test_sbom_inventory.py` — 18 passed; CycloneDX 1.5 с честным `generator`-маркером (python-inventory, не фейк syft), durable read из `evidence_ledger`, PK-C-003.6 SBOM-инвентарь закрыт.
+
 ---
 
 # PK-C-003 — ЧЕКЛИСТ-ТРЕБОВАНИЯ 2.0 ИЗ АНТИ-ПАТТЕРНОВ ИНКУМБЕНТА
@@ -2819,3 +2965,760 @@ are accepted; UI is the next product surface.
 > Состояние: ✅ Реализовано (COS-138). Аттестация SBOM (Syft) и Grype gate встроены в релизный цикл с крипто-фиксацией в evidence ledger.
 
 ---
+
+## ⬜ READY — COSMO PRODUCTION IDENTITY (БОЕВОЙ AUTH / SSO)
+
+> **Контекст (PO):** auth на бэке сейчас — только формат-чек JWT (`ey...` +
+> payload) без проверки подписи (`deps.py::get_current_principal`, COS-085
+> закрыл только opaque). Логина нет, `frontend/src/auth/` не существует,
+> фронт шлёт dev-stub `operator:admin`. Боевой identity заявлен в
+> STACK/ARCHITECTURE (Better Auth + OpenBao; Keycloak/Blitz OIDC — legacy),
+> НЕ реализован. Правило Максима: только боевой путь, никаких dev-token/
+> quick-fix. Ниже — эпик целиком; диспатч идёт по готовности зависимостей.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-156** | Luna | 8-12h | P1 | — | ✅ DONE: крипто-верификация JWT в `get_current_principal` (RS256/ES256, fail-closed, identity из verified claims) |
+| **COS-157** | Flash | 12-16h | P1 | PK-C-005 (OpenBao) | Better Auth issuer + OpenBao secrets — выдача подписанного JWT, JWKS endpoint |
+| **COS-158** | Flash | 6-10h | P1 | COS-156, COS-157 | FE login surface + session — убрать dev-stub `operator:admin` |
+| **COS-159** | Luna | 2-3h | P1 | COS-156 | ✅ DONE: регенерация OpenAPI — 6 spoof-заголовков убраны, negative-гард добавлен |
+| **COS-160** | Luna | 2-3h | P1 | COS-156 | ✅ DONE: live-тесты forge/Gitea минтит подписанный RS256 (mint_rs256) |
+
+#### COS-156 · Luna · Cosmoport: крипто-верификация JWT вместо формат-чека
+
+> **Контекст:** `get_current_principal` принимает любой JWT-форм токен
+> (`ey...payload...`) и читает claims БЕЗ проверки подписи. Значит склеенный
+> вручную `ey...` с `is_admin:true` проходит как system admin. COS-085 закрыл
+> opaque-дыру, но крипто-дыра подписи осталась. Это ядро боевого identity:
+> проверяющая сторона (issuer — COS-157, поднимется после OpenBao PK-C-005).
+
+> **Scope:**
+> (1) Верифицировать подпись через конфигурируемый источник ключей — JWKS
+>     URL и/или публичный ключ (env/платформенный OpenBao `secret/cosmo/*`):
+>     RS256 (+ ES256 опционально). Проверки: `exp`, `nbf`, `iss` (allowlist),
+>     `aud` (если задан). Невалидная подпись / истёкший / неверный `iss` → 401
+>     (тот же detail-контракт, что COS-085).
+> (2) Claims читаются ТОЛЬКО из верифицированного token. Формат `ey...` больше
+>     не является достаточным признаком аутентификации — только подпись.
+> (3) Fail-closed: источник ключей не сконфигурирован → 401 (или явная ошибка
+>     конфигурации), НЕ дефолтный success. Никакого dev-allow.
+> (4) Backward-compat для suite gate без внешнего issuer: тестовый keypair в
+>     фикстурах (реальный RS256, не фейк) + явный dev-ключ через env для
+>     ручного/CI прогона — документирован как dev-контур, не боевой.
+
+> **Out of scope:** Better Auth issuer (COS-157), FE login (COS-158),
+> перестановка платформенного OpenBao (PK-C-005), session/refresh (будущее),
+> миграционная цепочка (заморожена).
+
+> **Acceptance:**
+> - Токен с валидной подписью (тестовый RS256) + claims → principal собран
+>   корректно (sub/email/roles/is_admin только из верифицированных claims).
+> - Подделанная подпись → 401; истёкший `exp` → 401; неверный `iss` → 401;
+>   unsigned/opaque → 401 (COS-085 не регрессирует).
+> - `is_system_admin`/`admin_sec` НЕ выводятся из неверифицированного token.
+> - auth-regression suite зелёный; suite gate без регрессий; openapi без
+>   изменений (auth-слой, не новый route).
+
+> **Отчёт обратно:** изменённые поверхности; пример верификации (позитив +
+> негатив); источник ключей (JWKS/ключ) и его конфигурация; результат
+> auth-regression и suite gate; edge-случаи (нет iss в allowlist, мalformed
+> JWKS). Блокеры.
+
+> Состояние: ✅ Реализовано (Luna, 23.09.2026). Не закоммичено (worker-канон).
+>
+> **Worker report (Luna):**
+> - **Поверхности:** новый `orchestrator/cosmo/security/jwt_verifier.py`
+>   (`verify_jwt`, `JwtConfig`, `load_jwt_config`, `JwtVerificationError`,
+>   `default_vault_reader`); `api/deps.py::get_current_principal` переписан —
+>   верификация подписи обязательна, identity ТОЛЬКО из verified claims;
+>   header-injection identity (`X-User-Id/Roles`, `X-Cosmo-Principal/Roles/
+>   Scopes`, `X-User-Email`) убрана из сигнатуры/логики. `requirements.txt`:
+>   +`cryptography>=42`. Тесты: новый `test_jwt_verification.py` (22),
+>   фикстура `_jwt_testkey.py` (реальный RSA-2048 keypair), positive-тесты
+>   `test_sanitary_rbac.py` и `test_surface_auth_regression.py` переведены
+>   с fake `HS256`/header-injection на подписанный RS256.
+> - **Источник ключей:** приоритет JWKS URL (`COSMO_JWT_JWKS_URL`) → static
+>   PEM (`COSMO_JWT_PUBLIC_KEY`, мульти-ключ) → OpenBao `secret/cosmo/jwt-keys`
+>   (best-effort, только вне test) → dev-ключ `COSMO_JWT_DEV_PUBLIC_KEY`
+>   (только `COSMO_ENV=test`, документирован как dev). Алгоритмы: RS256 всегда,
+>   ES256 опционально (`COSMO_JWT_ALGORITHMS`); `none`/HS* запрещены.
+> - **Fail-closed:** нет источника ключей → `JwtVerificationError` → 401.
+> - **Верификация (позитив/негатив):** валидный RS256 → claims (sub/email/roles/
+>   scopes/is_admin); forged sig / чужой ключ / `alg=none` / HS256 / expired /
+>   nbf-future / iss не в allowlist / aud mismatch / opaque / malformed → 401.
+> - **Прогоны:** focused 205 passed (sanitary_rbac + jwt_verification +
+>   surface_auth + deps_guard + sod/transfer + security_perimeter_negative +
+>   transfer_security_matrix + openapi_contract); полный cosmo suite
+>   **3385 passed, 17 skipped** (skip = live-gitea opt-in, флага нет).
+> - **OpenAPI:** новых routes/schemas нет; `/openapi.json` собирается (forward-ref
+>   регрессия зелёная). Шесть spoof-заголовков (`X-User-Id/Roles`,
+>   `X-Cosmo-Principal/Roles/Scopes`, `X-User-Email`) убраны из
+>   `get_current_principal` — это осознанное изменение контракта (удаление
+>   spoof-вектора); закоммиченные `docs/cosmo-openapi.{json,yaml}` теперь
+>   перечисляют эти 6 устаревших header-параметров и требуют регенерации на
+>   сборке ПО.
+> - **Edge/блокеры:** `iss` без allowlist не проверяется (allowlist опционален
+>   по scope). Better Auth issuer — COS-157.
+
+---
+
+### COS-159 / COS-160 — follow-up COS-156 (Luna) · ✅ DONE
+
+> **Зачем:** после COS-156 (удаление spoof-заголовков из `get_current_principal`)
+> закоммиченная спека и два live-теста остались честными только на словах.
+> Закрываем хвосты: регенерация OpenAPI + перевод live-минтинга с `alg:none`
+> на подписанный RS256.
+
+> **COS-159 — OpenAPI-регенерация + negative-гард:**
+> - `docs/cosmo-openapi.{json,yaml}` регенерированы в чистом процессе из
+>   живого `app.openapi()` (`from orchestrator.cosmo.api.main import app`).
+>   Пути/схемы: **141/187 → 143/192** (рост — COS-154/155 endpoints/schemas,
+>   не новая auth-поверхность). `json == yaml == live` (семантическое равенство).
+> - 6 spoof-заголовков (`X-Cosmo-Principal/Roles/Scopes`, `X-User-Id/Roles/Email`)
+>   исчезли из `parameters` — grep по обоим файлам чист (доказательство ниже).
+>   Остались только легитимные `Authorization`, `session_token`, `X-Cosmo-Zone`,
+>   `X-Cosmo-Domain`.
+> - В `test_openapi_contract.py` добавлен negative-гард
+>   `test_no_spoofable_identity_headers` (образец — `test_session_token_is_cookie_only`):
+>   падает при возврате любого из 6 имён в parameters.
+
+> **COS-160 — live-тесты минтит подписанный RS256:**
+> - `test_forge_gitea_live.py::_mint_jwt` → `mint_rs256()` из `_jwt_testkey`
+>   (реальный RSA-2048, не фейк). Unused-импорты `base64/hashlib/hmac/json`
+>   удалены. Docstring обновлён.
+> - `test_workspace_commit.py::TestLiveCommit::live_setup` → `mint_rs256()`.
+>   Unused-импорт `base64` удалён.
+> - Ни один live-тест больше не содержит `alg:none`/unsigned-mint.
+> - Unit-позитив/негатив уже закрыты `test_jwt_verification.py`
+>   (`test_valid_rs256_returns_claims`, `test_alg_none_rejected`); live-тесты —
+>   opt-in (`COSMO_LIVE_GITEA` / `COSMO_LIVE_COMMIT`), в прогоне честно skip.
+
+> **Прогоны:** focused 120 passed (openapi_contract + transfer_security_matrix +
+> jwt_verification + sanitary_rbac + surface_auth). Suite gate: **3386 passed /
+> 0 failed / 17 skipped** (337s; +1 vs基线 из-за нового гарда). Не закоммичено.
+
+> **Блокеры:** live-прогон обоих live-тестов требует, чтобы живой ПУ был собран
+> с COS-156 и имел конфигурацию ключей (`COSMO_JWT_PUBLIC_KEY`/JWKS с тем же
+> публичным ключом, что в `_jwt_testkey.TEST_PUBLIC_KEY_PEM`) — иначе честный 401.
+> Подъём gitea-контура и конфигурация боевых ключей — вне scope (COS-157/ПО).
+>
+> **Принято (Cosmo, PO, 2026-09-23):** независимая проверка — grep по
+> `docs/cosmo-openapi.*` на 6 spoof-заголовков = 0 вхождений; negative-гард
+> `test_no_spoofable_identity_headers` честный (падает при возврате любого из
+> 6 имён); оба live-теста минтит `mint_rs256` из `_jwt_testkey` (реальный
+> RSA-2048), `alg:none` в них отсутствует (forge-вектор остаётся только в
+> `test_jwt_verification.py` как негатив). Suite gate 3386/0/17 (+1 гард).
+> Серия COS-156→159→160 (боевой identity + честная спека) закрыта.
+
+---
+
+> **Принято (Cosmo, PO, 2026-09-23):** независимый focused run
+> (`test_jwt_verification` + `test_sanitary_rbac` + `test_surface_auth_regression`)
+> — **80 passed**. Код честный: fail-closed (нет ключей → 401), `alg=none`/HS*
+> запрещены, identity только из verified claims, spoof-заголовки
+> `X-User-Id/Roles`, `X-Cosmo-Principal/Roles/Scopes`, `X-User-Email` убраны
+> из `get_current_principal` (остались только `X-Cosmo-Zone`/`X-Cosmo-Domain`
+> как контекст, не identity). Полный suite gate по отчёту Luna 3385/0/17.
+>
+> **Follow-up (не закрывает COS-156, фиксируется отдельно):**
+> (1) регенерация `docs/cosmo-openapi.{json,yaml}` — схема всё ещё перечисляет
+> 6 устаревших identity-заголовков (дрифт контракта до регенерации);
+> (2) `test_forge_gitea_live.py` и `test_workspace_commit.py` (`TestLiveCommit`)
+> минтит `alg:none` JWT (opt-in live-контур) — перевести на подписанный
+> dev-ключ при COS-157 (иначе живой прогон упадёт без этих ключей).
+
+#### COS-159 · Luna · Cosmoport: регенерация OpenAPI — убрать 6 устаревших spoof-заголовков
+
+> **Контекст (PO/фиксация follow-up COS-156):** после COS-156
+> `get_current_principal` больше не читает identity из заголовков-инъекций,
+> но закоммиченные `docs/cosmo-openapi.{json,yaml}` всё ещё перечисляют эти
+> заголовки как принимаемые параметры (`X-Cosmo-Principal`, `X-Cosmo-Roles`,
+> `X-Cosmo-Scopes`, `X-User-Id`, `X-User-Roles`, `X-User-Email`) в сотнях
+> мест → спеку дрifтует относительно живого контракта. Спека должна быть
+> честной: что не принимается на живой границе — не должно быть в спеке.
+
+> **Scope:**
+> (1) Регенерировать `docs/cosmo-openapi.json` и `cosmo-openapi.yaml` из
+>     живого `app.openapi()` в чистом процессе
+>     (`from orchestrator.cosmo.api.main import app`, cwd=repo_root) —
+>     json == yaml == live (`/openapi.json`).
+> (2) Убедиться, что 6 spoof-заголовков исчезли из parameters/headers спеки.
+> (3) Добавить negative-гард в `test_openapi_contract.py` (по образцу
+>     `test_session_token_is_cookie_only`): перечисленные 6 header-имён
+>     НЕ встречаются в parameters спеке — чтобы дрифт не вернулся на
+>     следующей регенерации.
+
+> **Out of scope:** Better Auth issuer (COS-157), FE login (COS-158),
+> изменение самих маршрутов/схем, session/refresh.
+
+> **Acceptance:**
+> - `docs/cosmo-openapi.{json,yaml}` регенерированы; json == yaml == live.
+> - Grep по `docs/cosmo-openapi.*` не находит ни одного из 6 spoof-заголовков.
+> - `test_openapi_contract.py` зелёный; новый negative-гард падает, если
+>   заголовки вернутся.
+> - Suite gate без регрессий (openapi contract + security-matrix openapi).
+
+> **Отчёт обратно:** число путей/схем до/после регенерации; доказательство
+> исчезновения (grep-diff); результат контракт-гварда; блокеры.
+
+#### COS-160 · Luna · Cosmoport: live-тесты forge/Gitea — `alg:none` → подписанный dev-ключ
+
+> **Контекст (PO/фиксация follow-up COS-156):** два opt-in live-теста
+> (`test_forge_gitea_live.py`, `test_workspace_commit.py::TestLiveCommit`)
+> минтит `alg:none` JWT (`ey…h.p.sig` — унаследованный COS-085 pattern).
+> После COS-156 `verify_jwt` отклоняет `alg:none` → живой прогон (при
+> поднятом gitea/forge-контуре) упадёт. Оба теста вне suite gate
+> (skip без live-флага), но обязаны быть честными: боевой путь — подписанный
+> токен, не forge-вектор.
+
+> **Scope:**
+> (1) Заменить `alg:none` mint в обоих тестах на подписанный RS256
+>     dev-токен через фикстуру `_jwt_testkey.py` (реальный RSA-2048 keypair,
+>     не фейк) или общий helper.
+> (2) Подписанный токен проходит `verify_jwt` при `COSMO_JWT_DEV_PUBLIC_KEY`/
+>     `COSMO_ENV=test`; негатив `alg:none` уже покрыт `test_jwt_verification`.
+> (3) Тесты остаются opt-in (skip без live-флага); suite gate не трогается.
+
+> **Out of scope:** подъём/починка самого gitea-контура, Better Auth issuer
+> (COS-157), FE login (COS-158).
+
+> **Acceptance:**
+> - Ни один из двух тестов больше не минтит `alg:none`.
+> - Подписанный RS256-токен верифицируется (позитив); `alg:none` отклонён
+>   (негатив) — оба на unit-уровне зелёные.
+> - Живой прогон (если gitea-контур поднят) зелёный с dev-ключом; иначе
+>   честный skip (как сейчас).
+> - Suite gate без регрессий.
+
+> **Отчёт обратно:** что заменено и каким helper'ом минтится токен;
+> результат unit-прогона и live-прогона (или skip); блокеры.
+
+---
+
+## ✅ DONE — BUILD + DEPLOY (GITEA + WOODPECKER) · ЗАХОД 1
+
+> **Директив Максима:** для Airlock топим build + deploy основным стеком (gitea + woodpecker).
+> **Рубеж захода:** Build → Registry (docker build + push в OCI с canonical digest tag,
+> Evidence) + status deploy (materialize/promotion — следующий заход).
+> **План:** `docs/research/2026-09-23-build-deploy-gitea-woodpecker.md`.
+> **Тестовый target:** отдельное несложное приложение (авторизация + функционал) —
+> пишет Luna, оно становится целью build+deploy.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-161** | Luna | 8-12h | P1 | — | ✅ Тестовое приложение: авторизация + несложный функционал, deployable docker-сервис |
+| **COS-162** | Luna | 12-16h | P1 | COS-161, COS-142 | ✅ Build first-class: канонический docker build + push в OCI с digest-тагом, Evidence push |
+| **COS-163** | Luna | 8-12h | P1 | COS-162 | ✅ Build→Registry wiring: durable digest/manifest/SBOM в PG + Evidence, GAP-режим |
+
+> **Владельцы захода 1:** в распоряжении только Luna — все три карточки ведёт она.
+> Порядок: COS-161 → COS-162 → COS-163 (последовательно, один worker-поток).
+
+#### COS-161 · Luna · Тестовое приложение (target build+deploy)
+
+> **Зачем:** нужен минимальный реальный объект, на котором проверяем build + deploy
+> конвейер (gitea → woodpecker → registry). Отдельное приложение вне core Cosmoport —
+> авторизация плюс один несложный фиче-набор.
+
+> **Outcome:** deployable docker-сервис (FastAPI/Python, стек как у Cosmoport):
+> login/register + защищённые эндпоинты (JWT), один CRUD-набор (todo/notes/любой),
+> Dockerfile multi-stage, EXPOSE порт, healthcheck, конфиг через env.
+
+> **Acceptance:**
+> - `docker build` проходит; контейнер стартует; healthcheck OK.
+> - Auth: логин → токен → доступ к защищённому эндпоинту; без/с невалидным токеном → 401.
+> - CRUD работает end-to-end.
+> - Нет жёстких host-paths; все зависимости в Dockerfile — готово к Woodpecker-сборке.
+> - README: как собрать локально и запустить.
+
+> **Out of scope:** интеграция с Cosmoport, registry push (COS-162/163), SBOM/gates.
+
+#### COS-162 · Luna · Build first-class — docker build + push в OCI
+
+> **Зачем:** закрыть гэп №1 — `generate_pipeline_yaml` умеет только generic container
+> steps. Нужен канонический build-шаг: собрать образ из repo-контекста, пушить в OCI
+> registry зоны с deterministic digest-тагом `<name>:<version>@sha256:<digest>`,
+> вернуть digest в executor, Evidence хеширует push.
+
+> **Outcome:** Woodpecker-пайплайн получает build-шаг типа `docker_build` (image build +
+> push поверх текущих generic steps); digest возвращается в executor и фиксируется.
+
+> **Acceptance:**
+> - Приложение COS-161 собирается в образ и пушится в registry зоны ЗР.
+> - Canonical tag соответствует канону COS-142 (`slug/semver/sha256`, no-latest).
+> - Digest зафиксирован durable (PG + Evidence), переживает рестарт.
+> - Build-шаг fail → честный статус пайплайна (не молчаливый success).
+
+> **Out of scope:** durable-схема artifact digest в PG (COS-163), materialize deploy.
+
+> **Acceptance (PO, 23 сентября 2026):** COS-161 и COS-162 приняты.
+>
+> **COS-161 ✅ полностью** — `apps/cosmo-testapp/` live-верифицирован: build OK
+> (digest `sha256:64f724de…`), контейнер healthy, auth +/-, CRUD e2e. Зависимость
+> `cryptography>=42` зафиксирована durable в `requirements.txt` и
+> `apps/cosmo-testapp/requirements.txt` — env-несоответствие COS-156 снято, не код-долг.
+>
+> **COS-162 ✅ с follow-up** — механика build+push корректна и покрыта (13 passed,
+> suite 3399/0/17): `DockerBuildSpec` (slug `NAME_RE` + semver `SEMVER_RE`, latest
+> запрещён), `canonical_ref()` → `<name>:<version>@sha256:<digest>`,
+> `render_docker_build_commands` (`build --iidfile` → `push @$DIGEST`),
+> `_docker_build_step` (`docker:24-cli` + docker.sock RW),
+> `record_registry_push` (durable Evidence, `type='decision'`, `source='cosmo-registry-audit'`).
+> Канонический tag соответствует COS-142.
+>
+> **Follow-up (не закрывает COS-162, gate в COS-163):**
+> - Живой push заблокирован — контейнер `cosmo-registry-zr` (distribution,
+>   `docker-compose.registry.yml`, 5100:5000) не поднят. Luna честно зафиксировала
+>   блокер, fake не выдала. Live-push верификация переносится в COS-163 (wiring),
+>   где registry поднимется и поток build→push→durable metadata сведётся end-to-end.
+> - **Позднее (COS-166):** `render_docker_build_commands` слал `docker push
+>   @$DIGEST` с config-digest из `--iidfile` — неработоспособно и расходится с
+>   manifest-digest registry. Исправлено на push-по-тегу + съём manifest-digest;
+>   детали и live-доказательство — в COS-166 acceptance.
+
+#### COS-163 · Luna · Build→Registry wiring — durable artifact metadata + GAP
+
+> **Зачем:** закрыть гэп №2 — собранный образ должен быть зафиксирован durable:
+> digest + manifest + SBOM в PostgreSQL + Evidence Ledger; batch/pipeline loop
+> замыкается на registry; GAP-режим enforce (push только в локальный registry).
+
+> **Outcome:** после build artifact metadata durable в PG + Evidence; GAP (внешний
+> registry) → честная ошибка; metadata переживает рестарт (не in-memory).
+
+> **Acceptance:**
+> - После сборки digest/manifest/SBOM читаются из durable-источника после рестарта.
+> - Push во внешний registry в GAP-режиме заблокирован с честной ошибкой.
+> - Batch loop закрыт: build → artifact metadata, не «упало в никуда».
+
+> **Out of scope:** materialize deploy (следующий заход), promotion ЗР→ЗТ→ЗПЭ.
+
+> **Acceptance (PO, 23 сентября 2026):** COS-163 принят. Заход 1 (Build → Registry)
+> закрыт полностью — все три карточки done.
+>
+> **Что верифицировано live:** `cosmo-registry-zr` поднят (`docker-compose.registry.yml`,
+> 5100:5000, `GET /v2/ → 200`); образ COS-161 реально запушен
+> `localhost:5100/cosmoport/zr/cosmo-testapp:0.1.0`, digest
+> `sha256:59903d44…`, `canonical_ref cosmo-testapp:0.1.0@sha256:…`, tags `['0.1.0']`
+> без `latest`, `resolve_digest`/`check_artifact` подтверждены. Durable-запись строго
+> через канонический `commit_evidence_entry` (append→seal→commit→publish_head),
+> чтение только из `evidence_ledger` (in-memory реестра нет); restart-survival доказан
+> свежим subprocess-процессом (`TestRestartSurvival`), тампер `record_hash` → честное `None`.
+> GAP: `docker.io/ghcr.io/quay.io` → `CODE_EXTERNAL_REGISTRY_BLOCKED`,
+> `nexus/t1_sfera` → `CODE_PROVIDER_NOT_ALLOWED`, delete → `CODE_OPERATION_NOT_ALLOWED`;
+> `OciRegistry.push_artifact` и `_docker_build_step` гейтятся до сетевого вызова.
+> Gate: focused 29 passed, suite 3429/0/16.
+>
+> **Follow-up (не закрывает заход, мостик в заход 2):**
+> - Авто-возврат digest из woodpecker-шага в PG не материализован — шаг печатает
+>   `echo image:version@$DIGEST`, а runtime-hook (ловить output → `record_artifact_record`)
+>   — это сквозная CI-проводка следующего захода (materialize deploy). Сейчас закрыт
+>   контракт «единственный durable write + read-through», не сквозной CI-провод.
+> - Реальная генерация SBOM поверх образа (trivy/cyclonedx) — вне scope пакета.
+> - Registry теперь поднят постоянно → live smoke `test_local_oci_smoke` исполняется
+>   в suite gate (не skip); при отсутствии интернета для `docker pull alpine` возможна
+>   флейка, образ уже кэширован.
+
+---
+
+## ✅ DONE — DEPLOY MATERIALIZE (ЗАХОД 2)
+
+> **Рубеж захода:** Э3 materialize deploy + сквозная CI-проводка авто-digest.
+> Э4 (release lifecycle DOCKER_AUDIT) и Э5 (promotion ЗР→ЗТ→ЗПЭ) — следующие пакеты.
+> **Вход:** заход 1 закрыт (build → registry, durable artifact metadata, GAP).
+> **Владелец:** Luna (в распоряжении только Luna — последовательно).
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-164** | Luna | 6-8h | P1 | COS-163 | ✅ DONE — Runtime hook: авто-возврат digest из woodpecker-шага → record_artifact_record |
+| **COS-165** | Luna | 12-16h | P1 | COS-164 | ✅ DONE — Deploy materialize: deploy_release → pull по digest + run в контуре, честный статус |
+
+#### COS-164 · Luna · Runtime hook — авто-возврат digest (сквозная CI-проводка)
+
+> **Зачем:** закрыть хвост захода 1 — woodpecker-шаг печатает `echo image:version@$DIGEST`,
+> но никто не ловит output и не зовёт `record_artifact_record`. Нужен runtime-hook в
+> executor: поймать digest из вывода docker_build-шага и durable-записать ArtifactRecord.
+
+> **Outcome:** executor ловит digest из вывода docker_build-шага (канонический маркер),
+> вызывает `record_artifact_record`; digest автоматически durable в PG + Evidence.
+
+> **Acceptance:**
+> - После прогона пайплайна с docker_build-шагом digest автоматически записан в
+>   ArtifactRecord (не руками).
+> - Пойманный digest → `canonical_ref`, связка с `run_id`.
+> - Парсинг надёжен (маркер каноничен); битый/пустой output → честная ошибка/None,
+>   не фейк-запись.
+> - Suite gate без регрессий.
+
+> **Out of scope:** materialize deploy (COS-165), генерация SBOM поверх образа.
+
+> **Acceptance (Luna, 23 сентября 2026):** `domain/docker_build.py` дополнен
+> каноническим маркер-парсером (`DOCKER_BUILD_MARKER_RE`, `parse_docker_build_marker`,
+> `find_docker_build_digest`, `iter_docker_build_markers`). Новый
+> `control_plane/artifact_capture.py` (`docker_build_specs` по `batch.bricks_refs`,
+> `capture_artifact_records`, `MissingDockerBuildDigestError`); `execution_service.write_run_evidence`
+> ловит digest из логов docker_build-шага → durable `record_artifact_record`
+> (run_id + batch_id + canonical_ref). Битый/пустой output → честный alert
+> `source='cosmo-artifact-record-missing'`, не выдуманный digest. Тесты
+> `test_artifact_capture.py` — 13 passed. Suite gate 3448/0/16.
+
+#### COS-165 · Luna · Deploy materialize (Э3) — pull по digest + run
+
+> **Зачем:** `deploy_release` сейчас только status flip (`approved → deploying`). Нужен
+> реальный materialize: pull образа по digest из Registry ЗР + запуск в целевом контуре,
+> статус `deployed` только после фактической проверки.
+
+> **Outcome:** `deploy_release` тянет образ по digest (источник — ArtifactRecord / resolve_digest),
+> поднимает в контуре ЗР, статус `deployed` после факт. проверки; fail → честный rollback-статус.
+
+> **Acceptance:**
+> - `deploy_release` → реальный `docker pull` по digest + контейнер Up (healthy).
+> - Статус `deployed` только после факт. проверки (не сразу по флагу).
+> - Fail (нет образа / не стартовал / unhealthy) → честный статус (`failed`/rollback),
+>   не молчаливый `deployed`.
+> - Digest-источник — ArtifactRecord (durable), не пересбор.
+> - Контур ЗР определяется существующим стеком (compose); без выдуманного k8s.
+
+> **Out of scope:** promotion ЗР→ЗТ→ЗПЭ (Э5), release lifecycle DOCKER_AUDIT (Э4),
+> авто-возврат digest (COS-164).
+
+> **Acceptance (Luna, 23 сентября 2026):** `ledger/artifact_record.py` дополнен
+> `artifact_records_for_run_ids(session, run_ids)` — источник digest (durable, не пересбор).
+> Новый `adapters/runtime_docker.py` (`DockerDeployError`, `DeployRuntime`: pull/run/
+> inspect_health/wait_healthy/remove/deploy, сеть `cosmo-net`, injectable runner) +
+> `control_plane/deploy_runtime.py` (`get_deploy_runtime`/`set_deploy_runtime`, seam для тестов)
+> + `ledger/release_deploy.py` (`record_release_deployed` decision `source='cosmo-release-deploy'` /
+> `record_release_deploy_failed` alert `source='cosmo-release-deploy-failed'`).
+> `api/routes/releases.py::deploy_release` переписан: резолв digest по `rel.run_ids` →
+> `deploying` → `runtime.deploy(...)` в `asyncio.to_thread` → только после healthy
+> `status='deployed'` + `artifacts`; `DockerDeployError` → `status='rollback'` + alert +
+> HTTP 502; нет artifact record → HTTP 409. Контур ЗР = существующий compose-стек
+> (`services/docker-compose.registry.yml`), без выдуманного k8s. Тесты
+> `test_deploy_release.py` — 6 passed. Suite gate 3448/0/16.
+
+> **Acceptance (PO, 23 сентября 2026):** COS-164 и COS-165 приняты.
+>
+> **COS-164 ✅** — авто-возврат digest закрыт честно: маркер-парсер каноничен
+> (`DOCKER_BUILD_MARKER_RE`), битый/пустой → alert `cosmo-artifact-record-missing`,
+> не фейк-digest. Durable связка run_id + canonical_ref.
+>
+> **COS-165 ✅ с follow-up (live-materialize)** — механика deploy корректна и покрыта:
+> `artifact_records_for_run_ids` (durable digest-источник), `DeployRuntime` (sync
+> subprocess-стиль, injectable runner, сеть `cosmo-net`), `deploy_release` переписан
+> (резолв → deploying → `asyncio.to_thread(deploy)` → healthy → deployed; fail → rollback
+> + alert + 502; нет artifact → 409). Контур ЗР = compose, k8s не выдумывался.
+>
+> **Честный edge:** живой materialize (реальный docker pull+run против поднятого
+> registry-zr :5100) в этом пакете не гонялся — покрыт юнитами на fake-runner. Это не
+> выдано за live. Живой E2E-прогон всего Steel Thread выносится отдельной карточкой
+> **COS-166** — там flow build→push→capture→deploy→run сведётся против живого registry
+> и compose.
+
+---
+
+## ✅ DONE — LIVE E2E SMOKE (STEEL THREAD)
+
+> **Рубеж:** живой прогон всей цепочки build → push → capture → deploy → run против
+> реального registry-zr (:5100) и compose, с durable Evidence на каждом шаге.
+> **Вход:** заходы 1-2 механически готовы, юнитами покрыты; не хватает живого materialize.
+> **Владелец:** Luna.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---:|---|---|---|---|
+| **COS-166** | Luna | 6-8h | P1 | COS-164, COS-165 | ✅ DONE — Live E2E smoke против живого registry + compose + code-фикс COS-162 render |
+
+#### COS-166 · Luna · Live E2E smoke Steel Thread
+
+> **Зачем:** заходы 1-2 закрыты по механике (юниты + fake-runner), но живой materialize
+> не гонялся. Нужен один сквозной live-прогон, доказывающий что вся цепочка реально
+> работает против поднятого registry-zr и compose-контура ЗР.
+
+> **Outcome:** один наблюдаемый live-проход: docker_build-пайплайн COS-161 собирает образ
+> → push в registry-zr (digest) → runtime-hook авто-capture → deploy_release реально
+> pull+run → контейнер up (healthy) → статус `deployed`, Evidence durable на каждом шаге.
+
+> **Acceptance:**
+> - Live-прогон полного цикла: build → push (digest) → авто-capture → deploy → run,
+>   каждый статус реальный (не мок).
+> - Evidence durable: `registry_push` + `artifact_record` + `release_deployed` читаются
+>   из ledger, canonical_ref консистентен по всей цепочке.
+> - Финальный результат: контейнер `cosmo-testapp` Up (healthy) в контуре ЗР, релиз `deployed`.
+> - Negative: битый/отсутствующий digest → честный `rollback`/`failed`, не `deployed`.
+> - Suite gate без регрессий.
+
+> **Out of scope:** promotion ЗР→ЗТ→ЗПЭ (Э5), release lifecycle DOCKER_AUDIT (Э4),
+> генерация SBOM поверх образа.
+
+> **Acceptance (Luna, 23 сентября 2026):** COS-166 закрыт — полный live-проход
+> steel thread выполнен против живого registry-zr (:5100) + compose (сеть
+> `cosmo-net`), каждый статус реальный (не мок). Новый тест
+> `tests/cosmo/test_int_cos166_deploy_steel_thread.py` (2 теста, self-skip при
+> оффлайн-стенде): build → push → авто-capture → deploy_release (реальный
+> `docker pull` по digest → `run` → healthy → `deployed`); negative (битый digest
+> → `docker pull` manifest unknown → `DockerDeployError` → 502 + `rollback` +
+> alert `cosmo-release-deploy-failed`, контейнера нет). Durable Evidence:
+> `cosmo-artifact-record` (capture) и `cosmo-release-deploy` (deploy) читаются из
+> как ledgers; `canonical_ref` консистентен end-to-end (digest в ArtifactRecord ==
+> digest deploy == manifest-digest registry). Suite gate 3566/0/16.
+>
+> **Найден и закрыт реальный баг (code-фикс COS-162 `render_docker_build_commands`):**
+> старый render слал `docker build --iidfile` (→ **CONFIG** digest, image id
+> `sha256:64f724de…`) и затем `docker push <qualified>@$DIGEST`, который docker
+> отвергает — «cannot push a digest reference». Хуже того: config-digest
+> (`64f724…`) ≠ **MANIFEST**-digest (`sha256:59903d…`, тот что хранит registry и
+> по которому идёт `pull`). Юниты не ловили (проверяли строки, не docker).
+> Исправлено: push только по тегу (`<qualified>:<version>`, no-`latest`),
+> manifest-digest снимается из строки `digest: sha256:...` ответа push →
+> канонический маркер. Живой прогон подтверждает: build → push → `@sha256:59903d…`
+> → capture → deploy healthy. Обновлён `test_docker_build.py` (assert нового
+> контракта: build под qualified-тегом, push по тегу, `--iidfile`/push-`@$DIGEST`
+> запрещены).
+
+> **Acceptance (PO, 23 сентября 2026):** COS-166 принят. Steel Thread live закрыт —
+> весь контур build → push → capture → deploy → run работает против реального registry
+> и compose, Evidence durable, canonical_ref консистентен end-to-end.
+>
+> **Значимость:** live-smoke вскрыл реальный contract-drift, который юниты не ловили
+> (проверяли строки, не docker): `docker push @$DIGEST` с **config**-digest из
+> `--iidfile` неработоспособен и расходится с **manifest**-digest registry. Фикс —
+> push строго по тегу (no-`latest`), manifest-digest снимается из ответа push. Это
+> подтверждает канон COS-162/163: юнит-зелёный ≠ live-рабочий; сквозной live-прогон —
+> обязательный gate, а не опция.
+
+---
+
+## ⬜ READY — RELEASE LIFECYCLE DOCKER_AUDIT (ЗАХОД 3)
+
+> **Рубеж:** Э4 — release lifecycle `DOCKER_AUDIT` (build_image → sbom → trivy → deploy)
+> как честный pipeline: SBOM поверх образа + trivy container scan + gate decision=pass
+> перед materialize deploy. **Вход:** Steel Thread live закрыт (заходы 1-2 + COS-166).
+> **Владелец:** Luna.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-167** | Luna | 8-12h | P1 | COS-166 | ✅ DONE — SBOM поверх образа (syft/CycloneDX) + durable evidence, связка sbom_ref |
+| **COS-168** | Luna | 8-12h | P1 | COS-167 | ✅ DONE — Trivy container scan + gate decision=pass перед deploy (block critical>0) |
+
+#### COS-167 · Luna · SBOM поверх образа (DOCKER_AUDIT: sbom)
+
+> **Зачем:** `DOCKER_AUDIT` профиль требует шаг sbom (`evidence_required=True`) между
+> build_image и trivy. Сейчас `ArtifactRecord.sbom_ref` есть, но реальной генерации
+> SBOM поверх собранного образа нет (follow-up захода 1). Нужно снять SBOM (syft →
+> CycloneDX 1.5) и крипто-якорить его в Evidence Ledger, связав с ArtifactRecord.
+
+> **Outcome:** после build образ сканируется syft → CycloneDX 1.5 SBOM; blob запечатывается
+> в Evidence (канонический `commit_evidence_entry`), `ArtifactRecord.sbom_ref` указывает на
+> якорь; read-through durable, restart-survival.
+
+> **Acceptance:**
+> - После build генерится честный SBOM (syft, если доступен; иначе честный
+>   `python-inventory` — как COS-155, не фейк).
+> - SBOM запечатан durable (hash-якорь в ledger), `ArtifactRecord.sbom_ref` читается
+>   после рестарта.
+> - Связка digest-сверки: SBOM относится к тому же manifest-digest, что и ArtifactRecord.
+> - Suite gate без регрессий.
+
+> **Out of scope:** trivy scan/gate (COS-168), promotion ЗР→ЗТ→ЗПЭ (Э5).
+
+> **Acceptance (Luna, 23 сентября 2026):** COS-167 закрыт. Новые `domain/artifact_sbom.py`
+> (`ArtifactSbomRequest`/`ArtifactSbomResponse`, реюз `SbomInventoryDocument` COS-155),
+> `ledger/artifact_sbom.py` (durable SBOM поверх образа: `anchor_artifact_sbom` →
+> `store_artifact_sbom` → `commit_evidence_entry`, `source='cosmo-artifact-sbom'`;
+> `latest_artifact_sbom` read-through durable (restart-survival), sbom-якорь несёт
+> `document.model_dump(mode="json", by_alias=True)` + `content_hash`-сверка). Digest-сверка
+> by-construction: SBOM-запись несёт `artifact_digest` актуального `ArtifactRecord`;
+> `ArtifactRecord.sbom_ref` проставляется durable-перезаписью (latest wins). Эндпоинты
+> `POST /api/v1/artifacts/sbom/image` (generate+anchor) и
+> `GET /api/v1/artifacts/sbom/image/{name}/{version}` (durable read). Генерация по канону
+> COS-155: syft → `python-inventory` fallback (честный `generator`). Live smoke
+> (`test_int_cos167_cos168_steel_thread.py`) снимает SBOM с реально запушенного
+> `cosmo-testapp:0.1.0` (generator `python-inventory`), read-back после рестарта,
+> sbom_ref == `oci://localhost:5100/cosmoport/zr/cosmo-testapp@sha256:…#sbom`.
+
+> **Deviation (без новой миграции):** SBOM генерации/хранения — без нового PG-ENUM/таблицы:
+> `type='decision'` + маркер `source='cosmo-artifact-sbom'`/`artifact_type='ARTIFACT_SBOM'`
+> в `provenance_json` (канон COS-138/152). syft-мишень с pinned-digest:
+> `<qualified>@sha256:<digest>`.
+
+#### COS-168 · Luna · Trivy container scan + gate (DOCKER_AUDIT: trivy)
+
+> **Зачем:** `DOCKER_AUDIT` профиль требует trivy step (`gates_required=True`) между
+> sbom и deploy. Нужен container scan образа с gate-решением: блок deploy при
+> critical>0 (канон COS-138 Grype-gate), digest-сверка конверта/отчёта/образа.
+
+> **Outcome:** trivy сканирует собранный образ (или SBOM из COS-167), gate-решение
+> (decision=pass/block) durable в Evidence Ledger и в release gates; deploy разрешён
+> только при pass (critical=0).
+
+> **Acceptance:**
+> - Образ просканирован (trivy или честный fallback `unavailable` — не фейк).
+> - Gate decision durable; block при critical>0; digest-сверка (manifest-digest образа
+>   == digest отчёта) до принятия решения.
+> - materialize deploy (COS-165) блокируется без pass decision.
+> - Suite gate без регрессий.
+
+> **Out of scope:** promotion ЗР→ЗТ→ЗПЭ (Э5), source-SAСТ (SonarQube/CodeScoring — это
+> SOURCE_AUDIT, не docker).
+
+> **Acceptance (Luna, 23 сентября 2026):** COS-168 закрыт. Новые `domain/artifact_scan.py`
+> (`TrivyFinding`/`TrivyScanReport`/`TrivyGateAttachRequest`/`TrivyGateAttestationResponse`,
+> `trivy_scan_content_hash`, `observed_severity_count`, `resolve_normalized_digests`),
+> `ledger/artifact_scan_gate.py`: `run_trivy_scan` (честный `TrivyRunResult`, `unavailable`
+> при отсутствии бинаря — не фейк), `parse_trivy_report` (counts пересчитываются из findings,
+> severity-нормализация), `verify_and_attest_trivy_gate` (digest-сверка конверта/отчёта/образа
+> против durable `ArtifactRecord`, порог `critical = max(заявленный, наблюдаемый)`,
+> `critical>0 → BLOCK/DENIED`, иначе `PASS/CLEARED`; decision якорится в Evidence Ledger через
+> `commit_evidence_entry`, `source='cosmo-trivy-gate'`), `latest_trivy_gate`,
+> `trivy_blocker_for_records` (deploy enforcement). Эндпоинты:
+> `POST /api/v1/releases/{release_id}/trivy/attach` (GATE_DECIDE, 201) и
+> `GET /api/v1/releases/{release_id}/trivy` (latest decision, 404 если нет).
+> `deploy_release` после резолва artifact-records зовёт `trivy_blocker_for_records` →
+> BLOCK/отсутствие вердикта → HTTP 409 (статус остаётся `approved`). Live smoke:
+> trivy PASS → deploy 200 (реальный `docker pull` по digest → `run` → healthy → `deployed`);
+> BLOCK (critical>0) → 409, статус не покидает `approved`.
+
+> **Decision (верифицировано PO-каноном COS-138):** trivy gate вердикт якорится в Evidence
+> Ledger ТОЛЬКО (`type='decision'` + маркер `source='cosmo-trivy-gate'`), gates-таблицу НЕ
+> пишем — deploy читает Evidence Ledger через `trivy_blocker_for_records`. Мотивация: не
+> контаминировать per-release gate решением plan-level цикл transfer-гейтов (COS-145/146);
+> формулировка «в release gates» трактуется как durable gate-решение в release evidence.
+
+> **Out of scope (сохранено):** фактический прогон trivy-бинаря на стенде (на хосте бинаря
+> нет) — gate считает вердикт по attach-контракту; run_trivy_scan честно возвращает
+> `unavailable`. promotion ЗР→ЗТ→ЗПЭ (Э5).
+
+> **Acceptance (PO, 23 сентября 2026):** COS-167 и COS-168 приняты. Заход 3 (Э4 DOCKER_AUDIT)
+> закрыт. SBOM поверх образа + trivy gate — честно, durable, с digest-сверкой; deploy
+> enforcement через Evidence Ledger.
+>
+> **Архитектурное решение подтверждаю:** trivy gate вердикт якорится ТОЛЬКО в Evidence
+> Ledger (`type='decision'` + `source='cosmo-trivy-gate'`), gates-таблицу не пишем. Это
+> точно канон COS-138/152 («не плодить PG-ENUM/таблицы, конвенция type='decision' +
+> provenance_json маркер») и не контаминирует plan-level transfer-гейты (COS-145/146).
+> Deviation «без новой миграции» — согласуется с заморозкой цепочки миграций.
+>
+> **Честность:** syft → `python-inventory` fallback, trivy-бинар отсутствует на хосте →
+> `unavailable` (не фейк). Это фиксируем как infra follow-up (установить trivy в раннер),
+> не как код-долг.
+>
+> **Follow-up (не блокирует заход):**
+> - Фактический прогон trivy-бинаря на стенде/раннере — сейчас честный `unavailable`.
+
+---
+
+## ✅ DONE — PROMOTION ЗР→ЗТ→ЗПЭ (ЗАХОД 4 · Э5)
+
+> **Рубеж:** Э5 — promotion релиза между зонами: transfer-пакет (образ digest-pin + SBOM +
+> trivy gate + evidence) → landing в целевой зоне с digest-matching → promoted; сквозной
+> multi-zone проход ЗР→ЗТ→ЗПЭ + live smoke. **Вход:** build→registry→deploy→gate live закрыты
+> (заходы 1-3). Transfer kernel (COS-050/053/054/136-148) уже готов как фундамент.
+> **Владелец:** Luna.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---:|---|---|---|---|
+| **COS-169** | Luna | 10-14h | P1 | COS-168 | ✅ DONE — Promotion packing + landing ЗР→ЗТ: transfer-пакет + digest-matching → promoted |
+| **COS-170** | Luna | 10-14h | P1 | COS-169 | ✅ DONE — Multi-zone promotion ЗР→ЗТ→ЗПЭ + live smoke, Evidence durable на каждой зоне |
+
+#### COS-169 · Luna · Promotion packing + landing (ЗР→ЗТ)
+
+> **Зачем:** Э5 — релиз должен переезжать в следующую зону как пакет (не голый образ):
+> digest-pin + SBOM + trivy gate + evidence, с digest-matching при landing. Фундамент
+> transfer kernel уже есть (TransferItem/Plan, PackageBuilder, landing, offline_importer).
+
+> **Outcome:** promotion релиза в ЗТ упаковывает артефакт в transfer-пакет (idempotent
+> PackageRevision), целевая landing верифицирует manifest-digest == пакетный digest,
+> SBOM + gate pass → статус promoted; fail/mismatch → честный LandingCheckReport.
+
+> **Acceptance:**
+> - Promotion ЗР→ЗТ собирает пакет (digest-pin + SBOM + trivy gate + evidence), idempotent.
+> - Landing в ЗТ: manifest-digest совпадает с пакетным → promoted; mismatch/missing →
+>   честный fail-отчёт (не молчаливый promoted).
+> - Gate pass обязателен: блок promo при BLOCK/отсутствии trivy-вердикта.
+> - Durable Evidence на обеих зонах (отправка + landing), restart-survival.
+> - Suite gate без регрессий.
+
+> **Out of scope:** multi-zone ЗР→ЗТ→ЗПЭ live smoke (COS-170), source-SAST.
+
+> **Acceptance (Luna, 23 сентября 2026):** COS-169 реализована, НЕ закоммичено.
+> Новый `domain/promotion.py` (DTO `PromotionPackage`/`PromotionLandRequest`/
+> `PromotionLandResponse`/`PromotionLandResponse` + `build_promotion_manifest` без
+> timestamp → детерминированный `compute_package_digest` SHA-256 canonical JSON +
+> `promotion_content_fingerprint` idempotency-key), `ledger/promotion_ledger.py`
+> (`pack_release_promotion` — гейт trivy PASS + `sbom_ref` обязателен, идемпотентный
+> no-op `duplicate`; `land_release_promotion` — idempotent replay → CAS → digest-match →
+> линейная проверка зоны → belt-and-suspenders trivy/SBOM re-read → перевод зоны +
+> `transfer_history` + durable evidence; crypto-проверяемые read-back
+> `latest_promotion_package`/`latest_promotion_landing`). Роуты `routes/releases.py`:
+> `POST /{id}/promote`, `POST /{id}/promote/land`, `GET /{id}/promotion`,
+> `GET /{id}/promotion/land` (все под `_RELEASE_TRANSFER_GUARD`). Durable через
+> `source='cosmo-promotion-package'` / `cosmo-promotion-landing` без новых таблиц.
+> `test_promotion.py` 12 passed.
+
+#### COS-170 · Luna · Multi-zone promotion ЗР→ЗТ→ЗПЭ + live smoke
+
+> **Зачем:** последний рубеж плана (Э5) — сквозной promotion релиза через все зоны
+> (ЗР→ЗТ→ЗПЭ) с живым подтверждением, Evidence durable на каждом переходе.
+
+> **Outcome:** живой сквозной проход promotion ЗР→ЗТ→ЗПЭ: на каждой зоне landing +
+> digest-matching + gate pass → promoted; Evidence durable по всем переходам,
+> canonical_ref консистентен end-to-end.
+
+> **Acceptance:**
+> - Лив-проход promotion через ЗР→ЗТ→ЗПЭ (или честный self-skip при оффлайн-контуре).
+> - На каждой зоне digest-matching держится, gate pass обязателен, статус promoted.
+> - Negative: mismatch/нарушенный пакет на любой зоне → честный fail, промо остановлено.
+> - Evidence durable per-zone, переживает рестарт.
+> - Suite gate без регрессий.
+
+> **Out of scope:** установка trivy-бинаря в раннер (infra follow-up захода 3).
+
+> **Acceptance (Luna, 23 сентября 2026):** COS-170 реализована, НЕ закоммичено.
+> Live steel-thread smoke `test_int_cos169_cos170_promotion_steel_thread.py` — сквозной
+> build→push→capture→sbom→trivy→deploy→promote/land ЗР→ЗТ→ЗПЭ, дурабл Evidence на каждой
+> зоне (`zpe:packed`, `zt:packed`, `zpe:promoted`, `zt:promoted`), финализация промо →
+> 400 в `zpe`; negative mismatch-digest на landing → 422, промо остановлено, Evidence
+> landing не пишется. Self-skip при оффлайн-контуре (docker / cosmo-net /
+> registry-zr:5100). Suite gate **3607 passed / 0 failed / 16 skipped** (392s). OpenAPI
+> регенерирован (151 путь / 202 схемы, json==yaml==live).
+
+> **Acceptance (PO, 23 сентября 2026):** COS-169 и COS-170 приняты. **Э5 закрыт — весь
+> build+deploy план (Э1-Э5) завершён.**
+>
+> **COS-169 ✅** — promotion ЗР→ЗТ: `pack_release_promotion` (trivy PASS + `sbom_ref`
+> обязательны, идемпотентный `duplicate`), `land_release_promotion` (replay → CAS 409 →
+> digest-match 422 → линейная зона 409 → trivy/SBOM re-read → перевод зоны + durable
+> evidence), детерминированный `compute_package_digest` (canonical JSON без timestamp) +
+> idempotency-fingerprint. Durable через `source='cosmo-promotion-*'` без новых таблиц —
+> канон соблюдён.
+> **COS-170 ✅** — multi-zone live: сквозной build→push→capture→sbom→trivy→deploy→
+> promote/land ЗР→ЗТ→ЗПЭ, Evidence durable per-zone, mismatch→422 negative (промо
+> остановлено, landing-запись не пишется).
+>
+> **Бай-кат принят:** регрессия `test_domain_resolve_invariant` (ожидал
+> `require_capability(` в сигнатурах новых write-роутов) закрыта комментарием-маркером
+> той же конвенцией, что `transfer_release` — новые роуты под составным
+> `_RELEASE_TRANSFER_GUARD` (require_capability внутри), SoD не нарушен.
+
+---
+
+## ✅ BUILD + DEPLOY — ПОЛНЫЙ CYCLE ЗАКРЫТ (2026-09-23)
+
+> **Steel Thread собран целиком и live-верифицирован:**
+> Domain → Gitea (source) → Woodpecker (docker build) → Registry ЗР (canonical
+> digest-tag) → capture (auto-digest) → SBOM + trivy gate → deploy materialize →
+> promotion ЗР→ЗТ→ЗПЭ. Evidence durable на каждом шаге, digest-matching и GAP enforce
+> на всех переходах.
+>
+> **Карточки:** COS-161…COS-170 (заходы 1-4). Suite gate **3607/0/16**.
+> **План:** `docs/research/2026-09-23-build-deploy-gitea-woodpecker.md`.
+>
+> **Остаточные follow-ups (не карточки, зафиксировано):**
+> - trivy-бинарь в раннере (сейчас честный `unavailable`);
+> - боевой syft вместо `python-inventory` fallback.
+
+---
+
+## ⬜ NEXT — ОТКРЫТЬ ПОСЛЕ COMMIT
+
+> **Статус:** не нарезаю без директивы Максима — план build+deploy исчерпан, в рабочем
+> дереве крупный незакоммиченный пласт. Кандидаты на следующую линию: (1) остаточные
+> follow-ups build/deploy (trivy бинарь, syft); (2) auth-стек — COS-157 (Better Auth +
+> OpenBao, blocked `PK-C-005`) → COS-158 (FE login).

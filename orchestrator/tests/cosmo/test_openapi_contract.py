@@ -122,6 +122,30 @@ class TestOpenAPINoLeaks:
                         )
         assert seen > 0, "auth canon lost: no session_token cookie params"
 
+    def test_no_spoofable_identity_headers(self, spec):
+        """COS-156/COS-159: identity-injection заголовки не встречаются в parameters.
+
+        Ранее `get_current_principal` принимал X-User-Id/Roles/Email и
+        X-Cosmo-Principal/Roles/Scopes как источник identity — spoof-вектор
+        ролей вплоть до system admin. После COS-156 identity живёт ТОЛЬКО в
+        крипто-верифицированных claims; заголовки убраны из сигнатуры и не
+        должны появляться в спеке. Падение при возврате любого из них.
+        """
+        spoof = {
+            "X-Cosmo-Principal", "X-Cosmo-Roles", "X-Cosmo-Scopes",
+            "X-User-Id", "X-User-Roles", "X-User-Email",
+        }
+        for path, methods in spec["paths"].items():
+            for method, details in methods.items():
+                if not isinstance(details, dict):
+                    continue
+                for param in details.get("parameters", []):
+                    name = str(param.get("name", ""))
+                    assert name not in spoof, (
+                        f"spoofable identity header '{name}' leaked back into "
+                        f"{method} {path} — identity must come from verified claims only"
+                    )
+
     def test_forge_binding_token_ref_is_vault(self, spec):
         """ForgeBinding.token_ref — это Vault-ссылка, с правильным описанием."""
         schemas = spec.get("components", {}).get("schemas", {})

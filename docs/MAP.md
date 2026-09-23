@@ -184,3 +184,40 @@ Cosmoport (ПУ, эта репа)
 | `cosmo-valkey` | `:6379` | TCP | `orchestrator/cosmo/api/sse_backlog.py` | Буфер SSE-событий (Valkey Streams) |
 | `cosmo-minio` | `:9100` | S3 API| `orchestrator/cosmo/ledger/artifact_store.py` | Неизменяемое хранение артефактов и логов |
 | `cosmo-openbao` | `:8200` | HTTP | `orchestrator/cosmo/adapters/tls_config.py` | Хранилище секретов и токенов Forge |
+
+---
+
+## 6. Release lifecycle DOCKER_AUDIT (SBOM + Trivy gate → deploy) — COS-167/168
+
+Профиль `DOCKER_AUDIT` (Э4): `build_image → sbom → trivy → deploy`. Два шага,
+закрытые COS-167 (SBOM поверх образа) и COS-168 (trivy container scan + gate),
+материализуют **честный** аудит перед deploy. Единый источник вердикта — Evidence
+Ledger (канон COS-138: gates-таблицу per-release НЕ пишем).
+
+| Шаг | DTO / эндпоинт | Файл и функция | Куда пишет | Вердикт |
+|---|---|---|---|---|
+| **sbom** (COS-167) | `POST /api/v1/artifacts/sbom/image`<br>`GET /api/v1/artifacts/sbom/image/{name}/{version}` | `ledger/artifact_sbom.py::anchor_artifact_sbom()` / `latest_artifact_sbom()`<br>`domain/artifact_sbom.py` (DTO) | `evidence_ledger` (`source='cosmo-artifact-sbom'`, `document` + `content_hash`); `ArtifactRecord.sbom_ref` durable latest wins | CycloneDX 1.5 (syft → `python-inventory` fallback, честный `generator`); digest by-construction == ArtifactRecord |
+| **trivy** (COS-168) | `POST /api/v1/releases/{id}/trivy/attach`<br>`GET /api/v1/releases/{id}/trivy` | `ledger/artifact_scan_gate.py::verify_and_attest_trivy_gate()`<br>`domain/artifact_scan.py` (DTO) — `run_trivy_scan` честный `unavailable` при отсутствии бинаря | `evidence_ledger` (`source='cosmo-trivy-gate'`) | `critical = max(заявленный, наблюд.)`; `>0 → BLOCK/DENIED`, иначе `PASS/CLEARED`; digest-сверка конверта/отчёта/образа |
+| **deploy** (COS-165) | `POST /api/v1/releases/{id}/deploy` | `routes/releases.py::deploy_release()` → `trivy_blocker_for_records()` | `releases.status` `deploying → deployed / rollback` | materialize ТОЛЬКО при trivy PASS каждого образа; BLOCK/нет вердикта → 409 |
+
+Канонический ref образа: `<name>:<version>@sha256:<manifest-digest>` (COS-142/162);
+`sbom_ref`: `oci://<registry>/<repo>/<ns>/<name>@<digest>#sbom`.
+
+---
+
+## 7. Release promotion ЗР→ЗТ→ЗПЭ (packing + landing) — COS-169/170
+
+Поверх `deployed`-релиза: упаковка в transfer-пакет (digest-pin + SBOM + trivy gate),
+затем landing в следующей зоне с digest-matching → `promoted`. Единый источник вердикта —
+Evidence Ledger (без новых таблиц, канон COS-138): `source='cosmo-promotion-package'`
+(pack) / `source='cosmo-promotion-landing'` (landing).
+
+| Шаг | DTO / эндпоинт | Файл и функция | Куда пишет | Вердикт |
+|---|---|---|---|---|
+| **pack** (COS-169) | `POST /api/v1/releases/{id}/promote`<br>`GET /api/v1/releases/{id}/promotion` | `ledger/promotion_ledger.py::pack_release_promotion()` / `latest_promotion_package()`<br>`domain/promotion.py` (`PromotionPackage`) | `evidence_ledger` (`source='cosmo-promotion-package'`) | idempotent (`duplicate` на совпадении `content_fingerprint`); gate trivy PASS + `sbom_ref` обязательны; нет → 409 |
+| **land** (COS-169) | `POST /api/v1/releases/{id}/promote/land`<br>`GET /api/v1/releases/{id}/promotion/land` | `ledger/promotion_ledger.py::land_release_promotion()` / `latest_promotion_landing()`<br>`domain/promotion.py` (`PromotionLandRequest`/`PromotionLandResponse`) | `releases.current_zone` + `transfer_history`; `evidence_ledger` (`source='cosmo-promotion-landing'`) | replay `duplicate` → CAS 409 → digest-mismatch 422 → линейная зона 409 → trivy/SBOM re-read → `promoted` |
+
+Порядок в `land_release_promotion`: idempotent replay (уже `promoted` → `duplicate`)
+→ CAS `expected_current_zone` → manifest-digest match → линейный путь `next_zone` →
+belt-and-suspenders trivy/SBOM re-read → перевод зоны + durable evidence.
+`package_digest` = SHA-256 канонического JSON манифеста без timestamp (детерминирован).

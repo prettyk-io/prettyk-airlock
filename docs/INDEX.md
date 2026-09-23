@@ -33,6 +33,12 @@
 | `orchestrator/cosmo/ledger/` | Как формируется неизменяемая SHA-256 цепочка улик и ГОСТ-акт? |
 | `orchestrator/cosmo/adapters/forge_gitea.py` | Как устроен адаптер к Gitea (привязка репозитория, вебхуки, чтение веток)? |
 | `orchestrator/cosmo/adapters/execution_woodpecker.py` | Как устроен адаптер к Woodpecker (запуск шагов в контейнерах, сбор логов)? |
+| `orchestrator/cosmo/domain/artifact_record.py` | Где определена durable-запись артефакта (digest + manifest + sbom_ref, canonical_ref)? |
+| `orchestrator/cosmo/ledger/artifact_record.py` | Как digest артефакта durable-пишется и читается из PG (latest wins, restart-survival)? |
+| `orchestrator/cosmo/domain/artifact_sbom.py` + `ledger/artifact_sbom.py` | Как снимается и якорится SBOM поверх образа (COS-167, sbom_ref → Evidence Ledger)? |
+| `orchestrator/cosmo/domain/artifact_scan.py` + `ledger/artifact_scan_gate.py` | Как триви-скан образа аттестуется в gate decision=pass/block (COS-168, deploy-blocker)? |
+| `orchestrator/cosmo/domain/promotion.py` + `ledger/promotion_ledger.py` | Как упаковывается и лендится transfer-пакет promotion ЗР→ЗТ→ЗПЭ (COS-169/170, digest-matching + Evidence per-zone)? |
+| `orchestrator/cosmo/adapters/runtime_docker.py` | Как происходит реальный materialize deploy (pull по digest + run + healthcheck)? |
 | `orchestrator/cosmo/db/models.py` | Где определены SQLAlchemy 2.0 Async ORM-модели 35 таблиц PostgreSQL? |
 | `orchestrator/cosmo/api/main.py` | Где конфигурируется FastAPI приложение, middleware и подключение роутов? |
 | `orchestrator/cosmo/api/deps.py` | Как валидируются JWT-токены, сессионные куки и роли в RBAC-системе? |
