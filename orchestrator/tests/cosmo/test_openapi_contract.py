@@ -66,12 +66,17 @@ class TestOpenAPINoLeaks:
     def test_no_raw_token_in_schemas(self, spec):
         """Ни в одной схеме нет поля типа `token: squ_...`."""
         schemas = spec.get("components", {}).get("schemas", {})
+        # COS-157: LoginResponse легитимно ВЫДАЁТ access_token (ответ ручки
+        # login) — это не утечка хранимого секрета, а продукт выпуска JWT.
+        allowed = {("LoginResponse", "access_token")}
         for schema_name, schema in schemas.items():
             props = schema.get("properties", {})
             for prop_name, prop_def in props.items():
                 # token_ref — OK (Vault reference)
                 # но raw_token / access_token / api_key — не должны быть
                 if prop_name in ("access_token", "api_key", "api_secret", "private_key"):
+                    if (schema_name, prop_name) in allowed:
+                        continue
                     desc = prop_def.get("description", "")
                     assert False, f"RAW TOKEN in {schema_name}.{prop_name}: {desc}"
 
