@@ -10,6 +10,21 @@
 # 2. Start uvicorn
 set -e
 
+# COS-171/172: seed trivy offline DB into mounted volume on first boot.
+# Образ несёт скачанный DB (--download-db-only на сборке). Volume в compose
+# тенирует image-layer; если volume пуст — восстанавливаем из seed-тарбола
+# (offline, без сети). Идемпотентно: при наличии DB шаг пропускается.
+TRIVY_CACHE_DIR="${TRIVY_CACHE_DIR:-/var/lib/trivy}"
+if [ ! -d "$TRIVY_CACHE_DIR/db" ] || [ -z "$(ls -A "$TRIVY_CACHE_DIR/db" 2>/dev/null)" ]; then
+    if [ -f /opt/trivy-db-seed.tar.gz ]; then
+        echo "[entrypoint] Seeding trivy offline DB -> ${TRIVY_CACHE_DIR}"
+        mkdir -p "$TRIVY_CACHE_DIR"
+        tar -xzf /opt/trivy-db-seed.tar.gz -C "$TRIVY_CACHE_DIR"
+    else
+        echo "[entrypoint] WARN: no trivy DB seed and DB absent (scans will be 'unavailable')"
+    fi
+fi
+
 echo "[entrypoint] Checking DB state..."
 DB_STATE=$(python - <<'PYEOF'
 import os

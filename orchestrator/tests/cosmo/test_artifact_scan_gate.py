@@ -65,6 +65,13 @@ DIG_B = "sha256:" + "cd" * 32
 REGISTRY = "localhost:5100"
 
 
+class _Proc:
+    def __init__(self, rc: int, stdout: str = "", stderr: str = ""):
+        self.returncode = rc
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 def _scan(digest: str = DIGEST, critical: int = 0,
           findings: list | None = None) -> dict:
     return {
@@ -186,6 +193,53 @@ class TestTrivyDto:
         assert res.available is False
         assert res.source == "none"
         assert res.reason
+
+    def test_run_trivy_scan_argv_cache_dir(self):
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return _Proc(rc=0, stdout='{"Results": []}')
+
+        res = run_trivy_scan(
+            "cosmo-registry-zr:5000/cosmoport/zr/x:0.1.0",
+            trivy_path="trivy",
+            runner=fake_run,
+            cache_dir="/cache/trivy",
+        )
+        argv = calls[0]
+        assert "--cache-dir" in argv
+        assert argv[argv.index("--cache-dir") + 1] == "/cache/trivy"
+        assert "--skip-db-update" in argv
+        assert res.source == "trivy"
+
+    def test_run_trivy_scan_no_insecure_for_external_registry(self):
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return _Proc(rc=0, stdout='{"Results": []}')
+
+        run_trivy_scan(
+            "registry.example.com/cosmoport/zr/x:0.1.0",
+            trivy_path="trivy",
+            runner=fake_run,
+        )
+        assert "--insecure" not in calls[0]
+
+    def test_run_trivy_scan_insecure_for_allowlisted_registry(self):
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return _Proc(rc=0, stdout='{"Results": []}')
+
+        run_trivy_scan(
+            "cosmo-registry-zr:5000/cosmoport/zr/x:0.1.0",
+            trivy_path="trivy",
+            runner=fake_run,
+        )
+        assert "--insecure" in calls[0]
 
 
 # ── Route tests ──────────────────────────────────────────────────────────

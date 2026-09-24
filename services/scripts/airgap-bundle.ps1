@@ -25,6 +25,13 @@ $ServicesDir = Join-Path $RepoRoot "services"
 $BundleWork = Join-Path $RepoRoot $OutDir
 $BundleName = "cosmoport2-v$Version-airgap"
 
+# COS-171/172: scanner tools (digest-pinned; ДОЛЖНЫ совпадать с ARG в
+# services/cosmo-api.Dockerfile).
+$TrivyVersion = "0.74.0"
+$TrivySha256  = "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+$SyftVersion  = "1.20.0"
+$SyftSha256   = "689e12c5cbf67521ce61b9c126068f9eaabe1223e77971b2fede50033ff6b5cc"
+
 # ═══════════════════════════════════════════════════════════════════════
 # Карта образов
 # ═══════════════════════════════════════════════════════════════════════
@@ -124,6 +131,33 @@ Copy-Item "$ServicesDir\scripts\install.ps1"        "$BundleWork\scripts\" -Forc
 Copy-Item "$ServicesDir\scripts\install.sh"         "$BundleWork\scripts\" -Force -ErrorAction SilentlyContinue
 Copy-Item "$ServicesDir\scripts\verify-bundle.sh"   "$BundleWork\scripts\" -Force -ErrorAction SilentlyContinue
 
+# 6b. Scanner tools + offline trivy DB snapshot (COS-171/172)
+Write-Host "[bundle] collect scanner tools + offline trivy DB"
+New-Item -ItemType Directory -Path "$BundleWork\tools" -Force | Out-Null
+
+# Digest-pinned binaries (для host-side airgap scan; в образ уже зашиты).
+$Tools = @(
+    @{ url = "https://github.com/aquasecurity/trivy/releases/download/v$TrivyVersion/trivy_$TrivyVersion`_Linux-64bit.tar.gz"; file = "trivy_$TrivyVersion`_Linux-64bit.tar.gz"; sha = $TrivySha256 },
+    @{ url = "https://github.com/anchore/syft/releases/download/v$SyftVersion/syft_$SyftVersion`_linux_amd64.tar.gz"; file = "syft_$SyftVersion`_linux_amd64.tar.gz"; sha = $SyftSha256 }
+)
+foreach ($t in $Tools) {
+    Write-Host "  fetch $($t.file)"
+    curl.exe -fsSL $t.url -o "$BundleWork\tools\$($t.file)"
+    if ($LASTEXITCODE -ne 0) { throw "tools fetch failed: $($t.file)" }
+    $actual = (Get-FileHash -Path "$BundleWork\tools\$($t.file)" -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne $t.sha) { throw "sha256 mismatch: $($t.file) got=$actual want=$($t.sha)" }
+}
+
+# Отдельный артефакт (правило #6): offline vuln DB snapshot из уже
+# собранного cosmo-api:local (там DB скачана на этапе image-build).
+$snapCid = docker create --name cosmo-bundle-trivy-snap cosmo-api:local
+try {
+    docker cp "${snapCid}:/opt/trivy-db-seed.tar.gz" "$BundleWork\tools\trivy-db-$TrivyVersion.tar.gz"
+    if ($LASTEXITCODE -ne 0) { throw "trivy DB snapshot extract failed (is cosmo-api:local built?)" }
+} finally {
+    docker rm $snapCid | Out-Null
+}
+
 # 7. SBOM — CycloneDX 1.5
 Write-Host "[bundle] generate supply-chain SBOM"
 $allImagesSBOM = @()
@@ -214,6 +248,11 @@ $manifest = @{
     )
     compose = @(
         @{ file = "compose/docker-compose.yml"; role = "full-stack" }
+    )
+    tools = @(
+        @{ name = "trivy"; version = $TrivyVersion; file = "tools/trivy_$TrivyVersion`_Linux-64bit.tar.gz"; sha256 = $TrivySha256 },
+        @{ name = "syft"; version = $SyftVersion; file = "tools/syft_$SyftVersion`_linux_amd64.tar.gz"; sha256 = $SyftSha256 },
+        @{ name = "trivy-offline-db"; version = $TrivyVersion; file = "tools/trivy-db-$TrivyVersion.tar.gz"; note = "extract into TRIVY_CACHE_DIR volume; no network at install" }
     )
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path "$BundleWork\manifest.json" -Encoding UTF8

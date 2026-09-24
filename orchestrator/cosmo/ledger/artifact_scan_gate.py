@@ -22,10 +22,16 @@ gate-вердикт (``pass``/``block``), который читает ``deploy_r
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
+
+from orchestrator.cosmo.scanner.registry_policy import (
+    allows_insecure,
+    load_insecure_hosts,
+)
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +58,12 @@ TRIVY_SOURCE = "cosmo-trivy-gate"
 
 #: Версия контракта PK-C-003.6.
 TRIVY_CONTRACT = "PK-C-003.6"
+
+#: Env-переменная католога кэша trivy (offline DB + policy-бандлы).
+TRIVY_CACHE_DIR_ENV = "TRIVY_CACHE_DIR"
+
+#: Дефолтный каталог кэша (корень рабочей точки, не требует root-прав).
+DEFAULT_TRIVY_CACHE_DIR = "/root/.cache/trivy"
 
 _TRIVY_SEV_MAP = {
     "critical": "critical",
@@ -111,8 +123,17 @@ def run_trivy_scan(
     trivy_path: Optional[str] = None,
     runner: Optional[Runner] = None,
     timeout: int = 600,
+    cache_dir: Optional[str] = None,
+    insecure_hosts: Optional[Iterable[str]] = None,
 ) -> TrivyRunResult:
-    """Прогнать trivy по образу. Никакой сети: ``--skip-db-update``.
+    """Прогнать trivy по образу. Offline: ``--skip-db-update`` + ``--cache-dir``.
+
+    Никакой сети для DB; ``--cache-dir`` указывает на предзагруженный offline
+    каталог trivy (``TRIVY_CACHE_DIR``, default ``/root/.cache/trivy``).
+
+    Точечный insecure (никакой глобальный downgrade): ``--insecure`` ставится
+    ТОЛЬКО если host образа в allowlist ``insecure_hosts`` (default из
+    ``INSECURE_REGISTRY_HOSTS``). Для HTTPS-регистри не добавляется.
 
     Нет бинарника/вывод невалиден → ``source='none'`` с reason (честно,
     НИКОГДА фейковый отчёт).
@@ -126,9 +147,23 @@ def run_trivy_scan(
             {"status": "unavailable", "tool": "trivy",
              "reason": "trivy binary not found"},
             source="none", reason="trivy binary not found")
+
+    cache = cache_dir or os.environ.get(TRIVY_CACHE_DIR_ENV) or \
+        DEFAULT_TRIVY_CACHE_DIR
+    if insecure_hosts is None:
+        insecure_hosts = load_insecure_hosts()
+
+    argv = [
+        exe, "image", "--skip-db-update", "--cache-dir", cache,
+        "--format", "json",
+    ]
+    if allows_insecure(image_ref, insecure_hosts):
+        argv.append("--insecure")
+    argv.append(image_ref)
+
     try:
         proc = run(
-            [exe, "image", "--skip-db-update", "--format", "json", image_ref],
+            argv,
             capture_output=True, text=True, timeout=timeout, check=False,
         )
         if proc.returncode == 0 and proc.stdout.strip():

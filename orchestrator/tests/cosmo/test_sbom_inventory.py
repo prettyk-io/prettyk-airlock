@@ -190,6 +190,71 @@ class TestSbomInventoryDto:
         assert summary.total == 0
 
 
+# ── syft plumbing unit (COS-171/172: точечный insecure-allow) ────────────
+
+class _Proc:
+    def __init__(self, rc: int, stdout: str = "", stderr: str = ""):
+        self.returncode = rc
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+_SYFT_CDX = (
+    '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,'
+    '"components":[{"type":"library","name":"fastapi","version":"0.115.0"}]}'
+)
+
+
+class TestGenerateSyftDocument:
+    def _fake_run(self, calls):
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            if argv and argv[-1] == "version":
+                return _Proc(0, "Application: syft v1.20.0\n")
+            return _Proc(0, _SYFT_CDX)
+        return run
+
+    def test_insecure_env_for_allowlisted_registry(self, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(ledger.shutil, "which", lambda _: "syft")
+        monkeypatch.setattr(ledger.subprocess, "run", self._fake_run(calls))
+
+        ledger._generate_syft_document(
+            "cosmo-registry-zr:5000/cosmoport/zr/x:0.1.0",
+            insecure_hosts={"cosmo-registry-zr:5000"},
+        )
+        scan_call = calls[0]
+        argv, kwargs = scan_call
+        assert "--insecure-skip-tls-verify" not in argv
+        env = kwargs.get("env")
+        assert env is not None
+        assert env["SYFT_REGISTRY_INSECURE_USE_HTTP"] == "true"
+
+    def test_no_insecure_env_for_external_registry(self, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(ledger.shutil, "which", lambda _: "syft")
+        monkeypatch.setattr(ledger.subprocess, "run", self._fake_run(calls))
+
+        ledger._generate_syft_document(
+            "registry.example.com/cosmoport/zr/x:0.1.0",
+            insecure_hosts={"cosmo-registry-zr:5000"},
+        )
+        env = calls[0][1].get("env")
+        assert env is None
+
+    def test_no_insecure_env_for_filesystem_target(self, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(ledger.shutil, "which", lambda _: "syft")
+        monkeypatch.setattr(ledger.subprocess, "run", self._fake_run(calls))
+
+        ledger._generate_syft_document(
+            ".",
+            insecure_hosts={"cosmo-registry-zr:5000"},
+        )
+        env = calls[0][1].get("env")
+        assert env is None
+
+
 # ── Route tests ──────────────────────────────────────────────────────────
 
 class TestSbomInventoryRoute:

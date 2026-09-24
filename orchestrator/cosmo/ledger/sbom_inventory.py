@@ -23,15 +23,20 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import uuid
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.cosmo.db.models import EvidenceLedgerEntry, Run
+from orchestrator.cosmo.scanner.registry_policy import (
+    allows_insecure,
+    load_insecure_hosts,
+)
 from orchestrator.cosmo.domain.sbom_inventory import (
     BOM_FORMAT,
     PYTHON_INVENTORY_GENERATOR,
@@ -68,8 +73,15 @@ def _generate_syft_document(
     *,
     syft_path: Optional[str] = None,
     timeout: int = 300,
+    insecure_hosts: Optional[Iterable[str]] = None,
 ) -> tuple[dict[str, Any], str, str] | None:
     """Попытаться снять реальный SBOM через syft CLI (CycloneDX 1.5).
+
+    Точечный insecure: ``SYFT_REGISTRY_INSECURE_USE_HTTP=true`` ставится ТОЛЬКО
+    если host ``target`` в allowlist ``insecure_hosts`` (default из
+    ``INSECURE_REGISTRY_HOSTS``) — для локального dev CSV registry ЗР (HTTP).
+    Syft не имеет ``--insecure-skip-tls-verify`` CLI-флага (это grype); для
+    HTTP-registry он читает ``SYFT_REGISTRY_INSECURE_USE_HTTP``.
 
     Возвращает ``(document, tool_name, tool_version)`` либо ``None``, если
     syft недоступен/упал — тогда честный python-inventory fallback.
@@ -77,10 +89,19 @@ def _generate_syft_document(
     exe = syft_path or shutil.which("syft")
     if not exe:
         return None
+    if insecure_hosts is None:
+        insecure_hosts = load_insecure_hosts()
+
+    argv = [exe, target, "-o", "cyclonedx-json"]
+    env = None
+    if allows_insecure(target, insecure_hosts):
+        env = dict(os.environ, SYFT_REGISTRY_INSECURE_USE_HTTP="true")
+
     try:
         proc = subprocess.run(
-            [exe, target, "-o", "cyclonedx-json"],
+            argv,
             capture_output=True, text=True, timeout=timeout, check=False,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
