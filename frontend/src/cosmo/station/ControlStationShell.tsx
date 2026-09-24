@@ -21,9 +21,10 @@ import {
 import {
   Dashboard, Apps, AccountTree, PlayArrow, Gavel,
   DarkMode, LightMode, Notifications, Person, RocketLaunch, Search,
-  Build, CloudUpload, Folder, Settings, Checklist, Code,
+  Build, CloudUpload, Folder, Settings, Checklist, Code, Logout,
 } from '@mui/icons-material';
 import { useCosmoTheme } from '../theme';
+import { useSession, logout } from '../auth/authStore';
 import { usePreference } from '../shared/usePreference';
 import type { IDEContext } from '../shared/DeepLinker';
 
@@ -82,6 +83,7 @@ const DRAWER_WIDTH = 240;
 
 export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlStationProps) {
   const { mode, toggleMode } = useCosmoTheme();
+  const session = useSession();
   const [nav, setNavRaw] = usePreference('nav');
   const [searchOpen, setSearchOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -269,9 +271,15 @@ export function ControlStationShell({ view, runId, onNavigateToIDE }: ControlSta
                 {mode === 'dark' ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
               </IconButton>
             </Tooltip>
-            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, background: 'rgba(148,163,184,0.1)', color: '#64748B', border: '1px solid rgba(148,163,184,0.2)', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Person style={{ fontSize: 14 }} /> Operator
+            <span data-testid="header-user" style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, background: 'rgba(148,163,184,0.1)', color: '#64748B', border: '1px solid rgba(148,163,184,0.2)', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Person style={{ fontSize: 14 }} /> {session?.user.email || session?.user.sub}
             </span>
+            <Tooltip title="Выйти">
+              <IconButton size="small" onClick={logout} aria-label="logout"
+                sx={{ color: 'text.secondary' }}>
+                <Logout fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Toolbar>
         </AppBar>
 

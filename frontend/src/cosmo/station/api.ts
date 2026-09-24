@@ -3,6 +3,7 @@
  *
  * All requests fetch from `/api/v1/...` (no localStorage).
  */
+import { getAccessToken, clearSessionOnUnauthorized } from '../auth/authStore';
 
 export interface ForgeBinding {
   forge_type: 'gitea' | 'jenkins';
@@ -488,18 +489,11 @@ export type DeploymentStatus = Deployment['status'];
 // ── Fetch Wrappers ──────────────────────────────────────────────────
 
 /**
- * COS-064: auth-aware seam. Backend resolves recipient_id from the bearer
- * token (`user_id:roles` dev format). V1 contract = fixed 'operator' —
- * must match AlertHUD SSE recipient and notification fixtures.
- * Future RBAC: replace the dev default with a real session token;
- * localStorage override stays for browser tests.
+ * COS-158: auth token берётся из боевой сессии (authStore). Dev-stub удалён —
+ * без сессии Authorization не шлётся вовсе.
  */
 export function getCosmoAuthToken(): string {
-  let override: string | null = null;
-  try {
-    override = globalThis.localStorage?.getItem('cosmo_auth_token') ?? null;
-  } catch { /* no localStorage (tests) */ }
-  return override || 'operator:admin';
+  return getAccessToken() ?? '';
 }
 
 /**
@@ -526,13 +520,18 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     const extra = init.headers as Record<string, string>;
     Object.assign(headers, extra);
   }
-  if (!headers.Authorization) {
-    headers.Authorization = `Bearer ${getCosmoAuthToken()}`;
+  const token = getCosmoAuthToken();
+  if (!headers.Authorization && token) {
+    headers.Authorization = `Bearer ${token}`;
   }
   if (!headers['X-Cosmo-Domain'] && cosmoDomainHeader) {
     headers['X-Cosmo-Domain'] = cosmoDomainHeader;
   }
   const res = await fetch(url, { ...init, headers });
+  if (res.status === 401) {
+    // COS-158: токен больше не валиден → сброс сессии (UI вернётся на login).
+    clearSessionOnUnauthorized();
+  }
   if (!res.ok) {
     let errDetail = `${res.status} ${res.statusText}`;
     try {

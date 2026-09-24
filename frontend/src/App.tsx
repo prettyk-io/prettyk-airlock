@@ -11,29 +11,38 @@ import { SurfaceSwitcher } from './cosmo/shared/SurfaceSwitcher';
 import { useDeepLink } from './cosmo/shared/DeepLinker';
 import { ControlStationShell } from './cosmo/station/ControlStationShell';
 import { WebIDEShell } from './cosmo/ide/WebIDEShell';
+import { useSession } from './cosmo/auth/authStore';
+import { LoginView } from './cosmo/auth/LoginView';
 import './styles/global.css';
 import './styles/control-station.css';
 import './styles/web-ide.css';
 
 export function App() {
   const { state, setSurface, setIDEContext, setStationContext } = useDeepLink();
+  const session = useSession();
 
   return (
     <CosmoThemeProvider>
-      <SurfaceSwitcher surface={state.surface} onChange={setSurface} />
-      {state.surface === 'station' ? (
-        <ControlStationShell
-          view={state.station.view}
-          runId={state.station.run_id}
-          onNavigateToIDE={setIDEContext}
-        />
+      {!session ? (
+        <LoginView />
       ) : (
-        <WebIDEShell
-          repo={state.ide.repo}
-          file={state.ide.file}
-          line={state.ide.line}
-          onNavigateToStation={setStationContext}
-        />
+        <>
+          <SurfaceSwitcher surface={state.surface} onChange={setSurface} />
+          {state.surface === 'station' ? (
+            <ControlStationShell
+              view={state.station.view}
+              runId={state.station.run_id}
+              onNavigateToIDE={setIDEContext}
+            />
+          ) : (
+            <WebIDEShell
+              repo={state.ide.repo}
+              file={state.ide.file}
+              line={state.ide.line}
+              onNavigateToStation={setStationContext}
+            />
+          )}
+        </>
       )}
     </CosmoThemeProvider>
   );

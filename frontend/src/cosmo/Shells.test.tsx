@@ -17,6 +17,13 @@ beforeEach(() => {
   // Очищаем URL перед каждым тестом
   window.history.replaceState(null, '', '/');
 
+  // COS-158: App gate'ится за боевой auth-сессией — сидируем валидную
+  // сессию (display-only; подпись клиентом не проверяется).
+  window.localStorage.setItem(
+    'cosmo_auth_token',
+    'eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiIsImVtYWlsIjoiYWRtaW5AY29zbW9wb3J0LmxvY2FsIiwicm9sZXMiOlsiYWRtaW5fc2VjIl0sImlzX2FkbWluIjp0cnVlfQ.test',
+  );
+
   // COS-061: Mock notification API + EventSource for AlertHUD
   vi.stubGlobal('EventSource', class MockEventSource {
     onopen: (() => void) | null = null;

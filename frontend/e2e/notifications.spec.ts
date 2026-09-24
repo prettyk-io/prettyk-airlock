@@ -6,7 +6,7 @@
  *
  * COS-075: recipient резолвится на бэкенде из principal (bearer → user_id);
  * SSE-стрим открывается по short-TTL ticket'у (без bearer в URL).
- * V1 recipient contract: 'operator' (bearer operator:admin + explicit_recipients).
+ * V1 recipient contract: 'operator' (bearer principal + explicit_recipients).
  */
 import { test, expect, type Page } from '@playwright/test';
 import { execSync } from 'child_process';
