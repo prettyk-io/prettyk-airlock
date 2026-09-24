@@ -34,8 +34,8 @@
 ### 2.1. Подготовка
 
 ```powershell
-# 1. Убедиться что OpenBao запущен
-docker ps --filter name=cosmo-openbao
+# 1. Убедиться что standalone OpenBao запущен (pk-infra, prettyk-openbao)
+docker ps --filter name=prettyk-openbao
 
 # 2. Убедиться что есть доступ к OpenBao
 curl http://127.0.0.1:8200/v1/sys/health

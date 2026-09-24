@@ -4,6 +4,33 @@ Pydantic-валидатор для ссылок vault:secret/path/to/key.
 Детектор сырых токенов/паролей в запросах → HTTP 422.
 Сканнер утечек для CI.
 
+Двухслойная модель secret-refs (COS-174) — канон, чтобы слои не путали при
+миграции. Есть ДВА разных класса ссылок под общим префиксом ``secret/cosmo/``:
+
+**Layer 1 — runtime-токены** (операционные сервис-секреты Космопорта).
+Читаются рантаймом ``cosmo-api`` через ``VaultClient`` (AppRole ``cosmo-app``,
+COS-105) и ротационным дрилом; значения никогда не лежат в БД/моделях:
+  - ``secret/cosmo/database``         — PG-креды
+  - ``secret/cosmo/forge/gitea``      — Gitea admin-token (forge adapter)
+  - ``secret/cosmo/ci/woodpecker``    — Woodpecker agent secret
+  - ``secret/cosmo/minio``            — MinIO-креды
+  - ``secret/cosmo/pipeline``         — pipeline-секреты
+  - ``secret/cosmo/jwt-keys``         — JWT signing keypair (issuer COS-157 /
+                                          verifier COS-156)
+
+**Layer 2 — external-integration creds** (учётные данные ВНЕШНИХ систем).
+Хранятся как **строковые значения** ``auth_ref`` в БД/конфиге (DB-default'ы
+``forge_auth_ref``/``registry_auth_ref``/``prettyk_auth_ref`` в
+``models_lr.py``, ``instance_config.py``, alembic) и резолвятся против
+внешних систем при их онбординге — это НЕ runtime-токены Космопорта:
+  - ``secret/cosmo/forge/credentials``    — креды внешнего Git-форджа
+  - ``secret/cosmo/registry/credentials`` — креды артефактного реестра
+  - ``secret/cosmo/prettyk/credentials``  — креды внешнего PrettyK/SecOps
+
+Правило: Layer 1 живёт в ``_KNOWN_VAULT_PATHS`` и в OpenBao-read через
+``VaultClient``; Layer 2 — только как reference-строки в моделях/БД, в
+``_KNOWN_VAULT_PATHS`` их не добавляем.
+
 Usage:
     from orchestrator.cosmo.domain.vault_ref import VaultSecretRef, validate_secret_reference
 
@@ -56,7 +83,6 @@ _KNOWN_VAULT_PATHS = frozenset({
     "secret/cosmo/forge/gitea",
     "secret/cosmo/ci/woodpecker",
     "secret/cosmo/minio",
-    "secret/cosmo/openbao",
     "secret/cosmo/pipeline",
 })
 

@@ -6,7 +6,7 @@
 # РџРѕСЂС‚С‹ (local/dev profile):
 #   5432 вЂ” cosmo-postgres    (РґРёР°РіРЅРѕСЃС‚РёРєР°)
 #   6379 вЂ” cosmo-valkey       (РґРёР°РіРЅРѕСЃС‚РёРєР°)
-#   8200 вЂ” cosmo-openbao      (РґРёР°РіРЅРѕСЃС‚РёРєР°)
+
 #   9000 вЂ” cosmo-minio S3     (API; host-bind 9100: 9000 = PureK SonarQube canon)
 #   9001 вЂ” cosmo-minio Console (РЅРµ РїСѓР±Р»РёРєРѕРІР°С‚СЊ РІ prod; host-bind 9101)
 #   3000 вЂ” cosmo-gitea        (forge)
@@ -61,35 +61,6 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
-
-  cosmo-openbao:
-    profiles: ["full"]
-    image: openbao/openbao:2.2
-    # digest-pin: sha256 Р·Р°С„РёРєСЃРёСЂРѕРІР°С‚СЊ РїСЂРё production freeze
-    container_name: cosmo-openbao
-    restart: unless-stopped
-    ports:
-      - "8200:8200"
-    cap_add:
-      - IPC_LOCK
-    environment:
-      VAULT_DEV_ROOT_TOKEN_ID: ${COSMO_BAO_ROOT_TOKEN:-cosmo-bao-root-dev}
-      # Quirk: OpenBao 2.2.2 НЕ уважает VAULT_DEV_ROOT_TOKEN_ID —
-      # dev-рут-токен генерируется случайно (s.3zS...). VAULT_DEV_*
-      # оставлены для обратной совместимости с Vault; OPENBAO_DEV_*
-      # — приоритетный для OpenBao, если контейнер читает их.
-      OPENBAO_DEV_ROOT_TOKEN_ID: ${COSMO_BAO_ROOT_TOKEN:-cosmo-bao-root-dev}
-      OPENBAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-      VAULT_ADDR: http://0.0.0.0:8200
-    volumes:
-      - cosmo_openbao:/vault/data
-    healthcheck:
-      test: ["CMD", "vault", "status"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 15s
 
   cosmo-minio:
     profiles: ["full"]
@@ -231,6 +202,25 @@ services:
       PK_MINIO_URL: http://cosmo-minio:9000
       PK_MINIO_ACCESS_KEY: ${COSMO_MINIO_USER:-cosmo}
       PK_MINIO_SECRET_KEY: ${COSMO_MINIO_PASSWORD:-cosmo-minio-dev}
+      # COS-171/172: scanner tools (trivy/syft) + точечный insecure-allow.
+      # TRIVY_CACHE_DIR единый: build --cache-dir == ENV == volume ниже.
+      TRIVY_CACHE_DIR: /var/lib/trivy
+      # Insecure ТОЛЬКО через allowlist (registry_policy). Никакого глобального
+      # TRIVY_INSECURE / SYFT_REGISTRY_INSECURE_USE_HTTP.
+      INSECURE_REGISTRY_HOSTS: cosmo-registry-zr:5000
+      # Контейнерная адресация registry ЗР (НЕ localhost:5100): image_ref внутри
+      # cosmo-api обязан резолвиться через cosmo-net.
+      REGISTRY_ZR_ENDPOINT: http://cosmo-registry-zr:5000
+      # COS-173: platform OpenBao (AppRole cosmo-app); creds in .env (gitignored)
+      VAULT_ADDR: http://prettyk-openbao:8200
+      VAULT_APPROLE_ROLE_ID: ${VAULT_APPROLE_ROLE_ID:-}
+      VAULT_APPROLE_SECRET_ID: ${VAULT_APPROLE_SECRET_ID:-}
+    volumes:
+      # Офлайн trivy DB: seed из образа при первом старте (entrypoint).
+      - cosmo_trivy_cache:${TRIVY_CACHE_DIR:-/var/lib/trivy}
+    networks:
+      - default
+      - pk-infra
     depends_on:
       cosmo-postgres:
         condition: service_healthy
@@ -299,12 +289,12 @@ services:
 volumes:
   cosmo_postgres:
   cosmo_valkey:
-  cosmo_openbao:
   cosmo_minio:
   cosmo_gitea:
   cosmo_woodpecker:
   cosmo_caddy_data:
   cosmo_caddy_config:
+  cosmo_trivy_cache:
 
 # в”Ђв”Ђ Network в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
@@ -314,3 +304,5 @@ networks:
     # cosmo-net belongs to Cosmoport only. Never connect to pk-net.
     # docker network create cosmo-net вЂ” РїСЂРё РїРµСЂРІРѕРј Р·Р°РїСѓСЃРєРµ.
     # external: false РѕР·РЅР°С‡Р°РµС‚ С‡С‚Рѕ compose СЃРѕР·РґР°СЃС‚ СЃРµС‚СЊ СЃР°Рј.
+  pk-infra:
+    external: true

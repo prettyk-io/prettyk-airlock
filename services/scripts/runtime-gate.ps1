@@ -33,7 +33,7 @@ $ErrorActionPreference = "Continue"
 $ComposeFile = "$PSScriptRoot\..\docker-compose.yml"
 $TS = Get-Date -Format "yyyyMMddHHmmss"  # no dashes: used in SQL identifiers
 $Core = @("cosmo-postgres", "cosmo-valkey", "cosmo-api", "cosmo-frontend", "cosmo-caddy")
-$FullExtra = @("cosmo-minio", "cosmo-openbao", "cosmo-gitea", "cosmo-woodpecker", "cosmo-woodpecker-agent")
+$FullExtra = @("cosmo-minio", "cosmo-gitea", "cosmo-woodpecker", "cosmo-woodpecker-agent")
 $script:Results = [ordered]@{}
 
 # API perimeter (COS-067): authenticated requests only. Dev token format

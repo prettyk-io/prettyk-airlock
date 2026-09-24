@@ -82,7 +82,7 @@ try {
     Write-Audit "OpenBao health: initialized=$($r.initialized) sealed=$($r.sealed)"
 } catch {
     Write-Audit "OpenBao health check FAILED: $($_.Exception.Message)"
-    Write-Audit "Is docker compose up -d cosmo-openbao running?"
+    Write-Audit "Check standalone OpenBao on pk-infra (prettyk-openbao) on 127.0.0.1:8200."
     exit 1
 }
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """COS-105: Vault adapter — unit (mock), integration (dev root token),
-и opt-in live (против cosmo-openbao :8200).
+и opt-in live (против платформенного prettyk-openbao :8200).
 """
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ from orchestrator.cosmo.infra.vault import (
 ROOT_TOKEN_DEFAULT = "cosmo-bao-root-dev"
 
 # Quirk: OpenBao 2.2.2 игнорирует VAULT_DEV_ROOT_TOKEN_ID —
-# реальный рут-токен ловится из логов контейнера.
+# реальный рут-токен ловится из логов контейнера (платформенный prettyk-openbao,
+# COS-173; раньше — per-product cosmo-openbao).
 def _live_root_token() -> str:
     """Рут-токен OpenBao в dev-режиме (из логов или env)."""
     explicit = os.getenv("COSMO_LIVE_BAO_ROOT_TOKEN", "").strip()
@@ -30,7 +31,7 @@ def _live_root_token() -> str:
     try:
         import subprocess
         out = subprocess.run(
-            ["docker", "logs", "cosmo-openbao"],
+            ["docker", "logs", "prettyk-openbao"],
             capture_output=True, text=True, timeout=5,
         )
         for line in out.stdout.split("\n"):
@@ -312,7 +313,7 @@ class TestHealth:
 
 @pytest.mark.skipif(not os.getenv(LIVE_GATE), reason=f"{LIVE_GATE} not set")
 class TestLiveOpenBao:
-    """Живой тест против cosmo-openbao :8200 (dev mode, рут-токен из логов)."""
+    """Живой тест против prettyk-openbao :8200 (dev mode, рут-токен из логов)."""
 
     @staticmethod
     def _root_token() -> str:

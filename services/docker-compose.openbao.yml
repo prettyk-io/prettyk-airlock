@@ -1,0 +1,46 @@
+# PrettyK Platform — OpenBao standalone (dev-контур)
+#
+# Канон: D:\prettyk.io\nexus-core\OPENBAO-PLATFORM.md (§4 dev-топология).
+# Один shared OpenBao на платформу; per-product инстансы запрещены.
+# Container: prettyk-openbao · Network: pk-infra (external) · Volume: prettyk_openbao.
+#
+# Порт 8200 — только localhost (127.0.0.1), для диагностики и GUI; наружу не публикуется.
+# AppRole cosmo-app (rw secret/cosmo/*) конфигурируется bootstrap-скриптом
+# (services/scripts/openbao-bootstrap.ps1); role-id/secret-id — в services/.env (gitignored).
+#
+# Запуск:
+#   docker network create pk-infra   # один раз
+#   docker compose -f services/docker-compose.openbao.yml up -d
+
+services:
+  openbao:
+    image: openbao/openbao:2.2
+    container_name: prettyk-openbao
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8200:8200"
+    cap_add:
+      - IPC_LOCK
+    environment:
+      # Dev mode: unsealed with generated root token (bootstrap only).
+      # 2.2.2 игнорирует VAULT_DEV_ROOT_TOKEN_ID — реальный token из docker logs.
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://0.0.0.0:8200
+    volumes:
+      - prettyk_openbao:/vault/data
+    networks:
+      - pk-infra
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  prettyk_openbao:
+    name: prettyk_openbao
+
+networks:
+  pk-infra:
+    external: true
