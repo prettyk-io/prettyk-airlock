@@ -252,7 +252,6 @@ checksum, размером, provenance и retention policy. Нельзя счи�
 docker compose
   ├── cosmo-postgres
   ├── cosmo-valkey
-  ├── cosmo-openbao
   ├── cosmo-minio
   ├── cosmo-gitea
   ├── cosmo-woodpecker
@@ -402,7 +401,6 @@ Buddy собирает отдельный Cosmo Compose в `D:\prettyk-airlock\s
 |---|---|---|
 | `cosmo-postgres` | Cosmo entities, states, audit | named volume / external disk |
 | `cosmo-valkey` | Streams, PubSub, queue, cache | optional volume, не SoT |
-| `cosmo-openbao` | secrets/KMS | encrypted volume |
 | `cosmo-minio` | S3 artifacts | named volume / external disk |
 | `cosmo-gitea` | forge | named volume + Cosmo ForgeBinding |
 | `cosmo-woodpecker` | execution server | named volume / PG database |
@@ -439,7 +437,7 @@ Buddy собирает отдельный Cosmo Compose в `D:\prettyk-airlock\s
 
 ```text
 1. Network и volumes
-2. cosmo-postgres, cosmo-valkey, cosmo-openbao, cosmo-minio
+2. cosmo-postgres, cosmo-valkey, cosmo-minio
 3. migration/init jobs
 4. cosmo-gitea и cosmo-woodpecker
 5. cosmo-api

@@ -2966,6 +2966,119 @@ are accepted; UI is the next product surface.
 
 ---
 
+## ✅ DONE — OPENBAO STANDALONE HOST + МИГРАЦИЯ COSMO (PK-C-005 → COS-173)
+
+> **Состояние:** COS-173 и COS-174 закрыты (Flash, 24.09.2026). Standalone
+> `prettyk-openbao` на `pk-infra`, AppRole `cosmo-app`, миграция `secret/cosmo/*`,
+> `cosmo-openbao` убран из Compose; двухслойная модель secret-refs зафиксирована.
+
+> **Контекст (PO):** auth-линия (COS-157 → COS-158) заблокирована: issuer
+> (Better Auth) обязан брать signing-ключи из боевого OpenBao. Канон
+> `D:\prettyk.io\nexus-core\OPENBAO-PLATFORM.md`: один shared OpenBao на
+> платформу, per-product инстансы запрещены. В Cosmo Compose всё ещё стоит
+> `cosmo-openbao`; платформенный OpenBao не поднят (PK-C-005 был на Buddy,
+> Buddy исключён — ведёт Flash). Cosmo-адаптер уже готов (COS-105
+> `infra/vault.py`, AppRole client) — ждёт живой сервис. Максим: воркер один
+> (Flash), идём по очереди.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---:|---|---|---|---|
+| **COS-173** | Flash | 8-12h | P1 | COS-105 | ✅ DONE: платформенный OpenBao на `pk-infra`, AppRole `cosmo-app` читает/пишет `secret/cosmo/*`, `cosmo-openbao` убран из Compose |
+| **COS-174** | Flash | 2-4h | P2 | COS-173 | ✅ DONE: мёртвый `openbao`-allowlist удалён; двухслойная модель secret-refs задокументирована |
+
+#### COS-173 · Flash · Infra: OpenBao standalone host + миграция Cosmo
+
+> **Зачем:** разблокировать auth-эпик. Issuer (COS-157) обязан брать ключи из
+> OpenBao `secret/cosmo/*`, а не из `.env`/кода. Сейчас такого инстанса нет —
+> есть per-product `cosmo-openbao` (запрещён каноном) и готовый, но не
+> подключённый к живому сервису клиент COS-105.
+
+> **Scope (dev-контур, поверхность Cosmo):**
+> (1) Один платформенный OpenBao (image `openbao/openbao:2.2`) на общей сети
+>     `pk-infra`, persistent volume; порт 8200 — только localhost (dev GUI
+>     допустим), наружу не публикуется.
+> (2) AppRole `cosmo-app` + policy `rw secret/cosmo/*`; role-id/secret-id
+>     прошиваются как runtime-secrets (не в git).
+> (3) Миграция секретов `cosmo-openbao` → `secret/cosmo/*` (в отчёте — имена,
+>     не значения): PG, MinIO, Gitea, Woodpecker, jwt-keys.
+> (4) Переключение Cosmo API на новый `VAULT_ADDR` + AppRole `cosmo-app` —
+>     код уже есть (COS-105), правится только конфиг/Compose/env.
+> (5) `cosmo-openbao` удаляется из Cosmo Compose; Compose/startup остаются
+>     здоровыми.
+> (6) Live-доказательство: vault-клиент Cosmo читает/пишет `secret/cosmo/*`
+>     через AppRole (не `COSMO_ENV=test` fallback) — 4 live-теста COS-105,
+>     что раньше честно скипались, теперь проходят.
+
+> **Out of scope:** secops-сторона (`prettyk-openbao` → `secret/secops/*`,
+> зона Keeper — только координация); AppRole `hub-app` (Arbiter) и
+> `platform-admin` + recovery snapshot / production hardening (platform/Buddy,
+> будущее); Better Auth issuer (COS-157); FE login (COS-158).
+
+> **Acceptance:**
+> - Один OpenBao на `pk-infra`; `cosmo-net` подключена как external network.
+> - `cosmo-app` аутентифицируется и читает/пишет `secret/cosmo/*` live.
+> - Секреты перенесены; `cosmo-openbao` из Compose удалён; Cosmo стартует,
+>   suite gate без регрессий.
+> - Root token в рантайме не используется; secret-id не в git.
+> - Порт 8200 не публикуется за пределы localhost.
+
+> **Отчёт обратно:** топология (сеть/контейнер/volume); применённые AppRole и
+> policy; список перенесённых секретов (имена); доказательство live I/O через
+> AppRole; негатив (неверный secret-id → отказ, истёкший токен → re-auth);
+> результат suite gate; блокеры.
+
+> **Worker report (Flash, COS-173 ✅):** standalone `prettyk-openbao` на `pk-infra`
+> (image `openbao/openbao:2.2` → 2.2.2, порт `127.0.0.1:8200`, volume
+> `prettyk_openbao`), AppRole `cosmo-app` + policy `rw secret/cosmo/*`, 5 секретов
+> `secret/cosmo/*` (PG/MinIO/Gitea/Woodpecker/jwt-keys); `services/.env`/
+> `.env.example` обновлены; `cosmo-openbao` убран из Compose + контейнер удалён.
+> Live-доказательство AppRole внутри `cosmo-api` PASS; `test_vault.py` 16 passed /
+> 4 skipped (live 20/20). Root token — только bootstrap, не рантайм.
+
+#### COS-174 · Flash · Infra: secret-ref hygiene — мёртвый allowlist + двухслойная модель
+
+> **Зачем:** хвосты COS-173. (1) после удаления per-product `cosmo-openbao`
+> путь `secret/cosmo/openbao` в allowlist `_KNOWN_VAULT_PATHS`
+> (`domain/vault_ref.py`) стал мёртвым — canon-list не должен врать. (2) в
+> моделях живёт второй слой refs (`forge/credentials`, `registry/credentials`,
+> `prettyk/credentials` — DB-default'ы `forge_auth_ref`/`registry_auth_ref`/
+> `prettyk_auth_ref`) — его надо сверить с runtime-токенами и задокументировать,
+> чтобы два слоя не спутали при следующей миграции.
+
+> **Scope:**
+> (1) Убрать `secret/cosmo/openbao` из `_KNOWN_VAULT_PATHS` (и из `secret_ref.py`,
+>     если там дублируется); обновить `test_vault_secret_ref.py` / соседние тесты,
+>     перечисляющие known-paths.
+> (2) Сверить второй слой refs (`forge/credentials`, `registry/credentials`,
+>     `prettyk/credentials` в `models_lr.py`, `instance_config.py`, alembic,
+>     k8s-манифестах) — подтвердить, что это осознанный отдельный слой внешних
+>     интеграций (не runtime-токены `database`/`forge/gitea`/`ci/woodpecker`),
+>     и зафиксировать двухслойную модель в docstring `vault_ref.py` (одно место).
+> (3) Grep-чистота: после чистки `_KNOWN_VAULT_PATHS` содержит только живые пути.
+
+> **Out of scope:** заведение новых секретов/refs; миграция secops/hub (Keeper/
+> Arbiter); изменение verify-логики secret_ref; FE; Better Auth issuer (COS-157).
+
+> **Acceptance:**
+> - `_KNOWN_VAULT_PATHS` не содержит `secret/cosmo/openbao`; тесты зелёные.
+> - Двухслойная модель secret-refs (runtime-токены vs external-integration creds)
+>   зафиксирована в одном месте; расхождений код↔doc нет.
+> - Suite gate без регрессий (`test_vault_secret_ref` + security-matrix).
+
+> **Отчёт обратно:** что удалено из allowlist; результат сверки двух слоёв
+> (совпало/дрифт, с фиксом или без); где зафиксирована модель; suite gate; блокеры.
+
+> **Worker report (Flash, COS-174 ✅):** `secret/cosmo/openbao` удалён из
+> `_KNOWN_VAULT_PATHS` (`domain/vault_ref.py`), grep `cosmo/openbao` → 0.
+> Двухслойная модель (Layer 1 runtime-токены `database`/`forge/gitea`/
+> `ci/woodpecker`/`minio`/`pipeline`/`jwt-keys` через AppRole; Layer 2 внешние
+> креды `forge/credentials`/`registry/credentials`/`prettyk/credentials` — только
+> reference-строки) зафиксирована в docstring `vault_ref.py`. Сверка: дрифта нет,
+> не хватало только документации. Тесты `test_vault_secret_ref.py` +
+> `test_security_perimeter_negative.py` → 68 passed.
+
+---
+
 ## ⬜ READY — COSMO PRODUCTION IDENTITY (БОЕВОЙ AUTH / SSO)
 
 > **Контекст (PO):** auth на бэке сейчас — только формат-чек JWT (`ey...` +
@@ -2979,7 +3092,7 @@ are accepted; UI is the next product surface.
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
 | **COS-156** | Luna | 8-12h | P1 | — | ✅ DONE: крипто-верификация JWT в `get_current_principal` (RS256/ES256, fail-closed, identity из verified claims) |
-| **COS-157** | Flash | 12-16h | P1 | PK-C-005 (OpenBao) | Better Auth issuer + OpenBao secrets — выдача подписанного JWT, JWKS endpoint |
+| **COS-157** | Flash | 12-16h | P1 | COS-173 (OpenBao) | ✅ DONE: Python-native issuer — выдача RS256 JWT (login) + JWKS endpoint |
 | **COS-158** | Flash | 6-10h | P1 | COS-156, COS-157 | FE login surface + session — убрать dev-stub `operator:admin` |
 | **COS-159** | Luna | 2-3h | P1 | COS-156 | ✅ DONE: регенерация OpenAPI — 6 spoof-заголовков убраны, negative-гард добавлен |
 | **COS-160** | Luna | 2-3h | P1 | COS-156 | ✅ DONE: live-тесты forge/Gitea минтит подписанный RS256 (mint_rs256) |
@@ -3059,6 +3172,96 @@ are accepted; UI is the next product surface.
 >   сборке ПО.
 > - **Edge/блокеры:** `iss` без allowlist не проверяется (allowlist опционален
 >   по scope). Better Auth issuer — COS-157.
+
+#### COS-157 · Flash · Cosmoport: Better Auth issuer + OpenBao — выдача RS256 JWT + JWKS
+
+> **Контекст:** verifier (COS-156) готов и fail-closed, но выпускать токены
+> некому — логина нет, `frontend/src/auth/` не существует, фронт шлёт dev-stub
+> `operator:admin`. Нужён боевой issuer: проверяющая сторона (COS-156) ждёт
+> реальные подписанные токены. Канон STACK/ARCHITECTURE: Better Auth + OpenBao.
+
+> **Scope:**
+> (1) Мятеж RS256 JWT (библиотека на `cryptography>=42`, уже в requirements):
+>     claims `sub`/`email`/`roles`/`scopes`/`is_admin`, `iss` (allowlist),
+>     `exp`, `nbf`, `aud`. Приватный signing-ключ читается из OpenBao
+>     `secret/cosmo/jwt-keys` (`rsa_private`) через AppRole `cosmo-app`
+>     (клиент COS-105) — НЕ в коде/`.env`/git.
+> (2) JWKS endpoint (RFC 7517), отдающий публичный ключ (`rsa_public`); verifier
+>     COS-156 через `COSMO_JWT_JWKS_URL` сквозно верифицирует выпущенный токен.
+> (3) Боевой логин-путь (Better Auth): реальная проверка креденшелов, возврат
+>     подписанного токена; не dev-stub, не root token в рантайме.
+> (4) Тесты: сквозной mint → JWKS → verify → principal (claims валидны),
+>     негатив (неверные креды → 401; нет ключа → явная ошибка, не дефолт-success).
+
+> **Решение-стоп (если расходится — остановись и согласуй с PO до кода):**
+> - **Топология:** default — Python-native issuer внутри `cosmo-api` (монорепо
+>   Python, verifier-плюмбинг уже есть, новый рантайм не заводим). Если Better
+>   Auth обязан быть отдельным TS/Node сервисом — это новый сервис/рантайм, стоп.
+> - **Креденшел-источник:** default — self-managed (email/password) через Better
+>   Auth; внешний OIDC-контракт (банк) — не в scope (DEPLOYMENT §11.3 «при
+>   необходимости», будущее).
+
+> **Out of scope:** FE login surface + session (COS-158); session/refresh/rotation
+> токенов (будущее); внешний OIDC/Blitz SSO; миграционная цепочка; перестановка
+> OpenBao (COS-173); изменение verifier (COS-156 закрыт).
+
+> **Acceptance:**
+> - По логину (боевой креденшел) мётится RS256 JWT с верными claims; `iss` в
+>   allowlist; подпись валидна.
+> - JWKS endpoint отдаёт ключ; verifier COS-156 через `COSMO_JWT_JWKS_URL`
+>   собирает principal из выпущенного токена (сквозной прогон, не unit-mock).
+> - Приватный ключ только из OpenBao `secret/cosmo/jwt-keys`; в git/`.env` его нет.
+> - Negative: неверный пароль/креды → 401; ключ отсутствует → явная ошибка.
+> - auth-regression + jwt_verification + suite gate зелёные; openapi задокументирован
+>   (login/JWKS route).
+
+> **Отчёт обратно:** поверхности; пример mint→JWKS→verify→principal; как читается
+> ключ из OpenBao (AppRole, не root); логин-провайдер и его конфиг; негативы;
+> suite gate; блокеры. Отметь, если топология/креденшел-источник разошлись с
+> default — отдельно, до сдачи.
+
+> **Решения PO (согласованы до кода, 24.09.2026):**
+> - **Креденшел-источник = A: OpenBao-seeded admin** — self-managed
+>   email/password, пароль хранится `secret/cosmo/auth` как hashed (PBKDF2),
+>   а не внешний OIDC/Blitz. Внешний OIDC — вне scope.
+> - **Топология = Python-native issuer внутри `cosmo-api`** — без отдельного
+>   TS/Node Better Auth сервиса/рантайма.
+> - **Crypto:** RS256 через `cryptography>=42`; PBKDF2-HMAC-SHA256 через stdlib
+>   `hashlib`; формат хэша `pbkdf2_sha256$<iterations>$<salt_b64url>$<hash_b64url>`
+>   (self-describing, без новой зависимости).
+
+> Состояние: ✅ Реализовано (Flash, 24.09.2026). Не закоммичено (worker-канон).
+>
+> **Worker report (Flash):**
+> - **Поверхности (новые):** `orchestrator/cosmo/security/jwt_issuer.py`
+>   (`IssuerConfig` из `secret/cosmo/jwt-keys`, `mint_access_token` RS256 с
+>   claims sub/email/roles/scopes/is_admin/iss/iat/nbf/exp/aud, `build_jwks`
+>   RFC 7517 (n/e/kid), `derive_kid` SHA-256 над SPKI);
+>   `orchestrator/cosmo/security/credentials.py`
+>   (`hash_password`/`verify_password`, PBKDF2-HMAC-SHA256, 600k default);
+>   `orchestrator/cosmo/api/routes/auth.py` (`POST /api/v1/auth/login` — проверка
+>   креденшела → подписанный токен, 401 при неверных креденшелах, 503 при
+>   отсутствии ключа/`IssuerConfigError`/`VaultLookupError`; `GET
+>   /.well-known/jwks.json`); `api/main.py` подключён `auth_router`.
+> - **Ключ:** приватный signing-ключ читается из OpenBao `secret/cosmo/jwt-keys`
+>   (`rsa_private`) через AppRole `cosmo-app` (клиент COS-105) — не в коде/.env.
+> - **Негативы (тест-покрытие):** неверный пароль → 401; ключ отсутствует → 503
+>   (fail-closed, не default-success).
+> - **Прогоны:** новые тесты `test_jwt_issuer.py` + `test_credentials.py` +
+>   `test_auth_login.py` → 20 passed; auth-regression + openapi
+>   (`test_jwt_verification`, `sanitary_rbac`, `surface_auth_regression`,
+>   `openapi_contract`, `deps_guard_regression`) → 152 passed / 2 pre-existing
+>   warnings. Live `app.openapi()` → 153 paths / 205 schemas, login+JWKS на месте.
+> - **OpenAPI:** `docs/cosmo-openapi.{json,yaml}` регенерированы из `app.openapi()`
+>   (json==yaml); `LoginResponse` allowlist'нут в `test_no_raw_token_in_schemas`
+>   — login легитимно ВЫДАЁТ `access_token` (продукт выпуска, не утечка хранимого
+>   секрета).
+> - **Хвосты COS-173 (зачищены):** `runtime-gate.ps1` `$FullExtra` без
+>   `cosmo-openbao`; `rotate-secrets.ps1` подсказка standalone OpenBao;
+>   `SECURITY_MAINTENANCE.md` docker-проверка `prettyk-openbao`; заголовок
+>   `docker-compose.yml` (строка 8200/cosmo-openbao) убран; `MAP.md`/
+>   `DEPLOYMENT.md` строки `cosmo-openbao` → `prettyk-openbao` / убраны.
+> - **Блокеров нет.** FE login surface + session — COS-158 (следующая).
 
 ---
 
@@ -3716,9 +3919,309 @@ are accepted; UI is the next product surface.
 
 ---
 
-## ⬜ NEXT — ОТКРЫТЬ ПОСЛЕ COMMIT
+## ✅ DONE — INFRA: TRIVY/SYFT В СКАН-РАННЕРЕ (ЗАХОД 5)
 
-> **Статус:** не нарезаю без директивы Максима — план build+deploy исчерпан, в рабочем
-> дереве крупный незакоммиченный пласт. Кандидаты на следующую линию: (1) остаточные
-> follow-ups build/deploy (trivy бинарь, syft); (2) auth-стек — COS-157 (Better Auth +
-> OpenBao, blocked `PK-C-005`) → COS-158 (FE login).
+> **Директив Максима:** боевой `trivy`-бинарь в раннере + `syft` вместо
+> `python-inventory` fallback — режь для Boss. Это закрывает два остаточных follow-up
+> захода 3 (зафиксированы в «BUILD + DEPLOY — ПОЛНЫЙ CYCLE» и в out-of-scope COS-167/168).
+>
+> **Трактование «раннера» (допущение, поправь одним словом если нет):** сканы исполняются
+> субпроцессом **внутри контейнера `cosmo-api`** (`run_trivy_scan`, `generate_artifact_sbom`
+> / `generate_sbom_inventory`), а не в Woodpecker agent (тот делает только docker build+push,
+> COS-162/163). Значит бинарики/DB ставятся в образ `cosmo-api` (`python:3.12-slim`,
+> `services/cosmo-api.Dockerfile`). Отдельный security-runner контейнер НЕ заводим —
+> это был бы новый сервис вне поверхности.
+>
+> **Ключевой риск:** локальный registry `cosmo-registry-zr:5000` — plain HTTP (distribution,
+> без TLS). trivy/syft по умолчанию отказываются от insecure-registry — нужен явный allow
+> для этого хоста, иначе реальный скан честно упадёт. Решение — на владельце поверхности
+> (env-флаг/`--insecure`/registry-config), но обязано быть точечным (только локальный
+> registry, не глобально).
+>
+> **Владелец:** Boss (единственный поток; карточки идут последовательно, одна поверхность).
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-171** | Boss | 8-12h | P1 | COS-168 | ✅ DONE — боевой `trivy` 0.74.0 + offline DB (1.4G, seed) в образе: `source=trivy`, 203 findings |
+| **COS-172** | Boss | 8-12h | P1 | COS-167, COS-155 | ✅ DONE — боевой `syft` 1.20.0 в образе: `generator=syft`, 2820 components |
+
+> **Пересечение поверхностей:** 0 (обе карточки — один worker, общая Dockerfile/airgap
+> поверхность ведётся им последовательно). Скан-код (`artifact_scan_gate.py`,
+> `artifact_sbom.py`, `sbom_inventory.py`) меняется минимально и только ради plumbing
+> (insecure-registry + cache-dir), если это реально требуется — логика гейтов не трогается.
+
+### Карточки
+
+#### ✅ COS-171 · Boss · Infra: боевой trivy-бинарь + offline DB в скане-раннере — DONE (2026-09-24)
+
+> **Зачем:** `run_trivy_scan` честно возвращает `unavailable` — на хосте и в образе
+> trivy-бинаря нет, а реальный прогон `trivy image --skip-db-update` требует бинарь +
+> предзагруженную offline DB. Это закрывает последний честный `unavailable` захода 3
+> (COS-168 out-of-scope) и переводит DOCKER_AUDIT на реальный скан.
+
+> **Scope:**
+> (1) Образ `cosmo-api` (`services/cosmo-api.Dockerfile`) получает рабочий trivy-бинарь в
+>     PATH (детерминированная версия, не `latest`; digest-pin где возможно).
+> (2) Offline trivy DB предзагружается и попадает в контейнер как смонтированный кэш
+>     (без сетевого `--download-db-only` в рантайме — airgap-канон: 0 внешних запросов).
+>     `run_trivy_scan` продолжает держать `--skip-db-update`: без DB → честный `unavailable`, не фейк.
+> (3) Реальный прогон по локально запушенному образу (`cosmo-registry-zr:5000` HTTP):
+>     точечный insecure-allow строго для этого registry; digest-образ сканируется, JSON-отчёт
+>     парсится `parse_trivy_report` в реальные findings.
+> (4) `services/docker-compose.yml` + `airgap-bundle.ps1`: env/volumes для DB-кэша, а в бандл
+>     попадают бинарь + DB-снапшот (в образе либо отдельным артефактом) — установка
+>     остаётся без внешней сети.
+> (5) Тесты: focused-юнит на plumbing (бинарь есть/нет, DB есть/нет, insecure-allow) +
+>     live opt-in smoke против registry-zr (self-skip при оффлайн-стенде, как COS-166).
+
+> **Out of scope:** логика гейта (`verify_and_attest_trivy_gate`, порог `critical>0`,
+> digest-сверка — уже принято COS-168), promotion (закрыт COS-169/170), source-SAST,
+> syft (COS-172), миграционная цепочка (заморожена).
+
+> **Acceptance:**
+> - Внутри контейнера `trivy --version` отвечает; DB-кэш на месте и не тянется из сети в прогоне.
+> - `run_trivy_scan(<qualified>@sha256:digest)` на локально запушенном образе возвращает
+>   `source='trivy'` с реальным JSON (findings > 0 или честно пусто, но не `unavailable`).
+> - `verify_and_attest_trivy_gate` принимает тот отчёт: `content_hash` считается, decision
+>   якорится durable; `trivy_blocker_for_records` видит PASS для чистого `cosmo-testapp:0.1.0`.
+> - Negative: registry недоступен / DB нет / бинарь убран → честный `unavailable` (не фейк, не 5xx).
+> - Airgap-бандл собран: бинарь + DB-снапшот присутствуют, установка без сети.
+> - Suite gate без регрессий.
+
+> **Отчёт обратно:** как поставили бинарь + DB (версия, digest); как разрешили insecure-HTTP
+> registry точечно; прогон реального скана (источник + findings-count); negative-кейсы;
+> состав airgap-бандла; bumped-версии/дрифты; блокеры.
+
+#### ✅ COS-172 · Boss · Infra: боевой syft-бинарь вместо python-inventory fallback — DONE (2026-09-24)
+
+> **Зачем:** `generate_sbom_inventory` / `generate_artifact_sbom` / `transfer.sbom.generate_sbom`
+> честно падают в `python-inventory`/`internal`, потому что syft отсутствует в образе.
+> Закрываем follow-up COS-167/COS-155: SBOM поверхности снимается реальным syft (CycloneDX 1.5).
+
+> **Scope:**
+> (1) Образ `cosmo-api` получает рабочий syft-бинарь в PATH (детерминированная версия,
+>     digest-pin где возможно) — та же Dockerfile-поверхность, что COS-171.
+> (2) Реальный скан OCI-образа: `generate_artifact_sbom` передаёт
+>     `<qualified>@sha256:digest`; syft снимает SBOM с локально запушенного образа
+>     (`cosmo-registry-zr:5000` HTTP → точечный insecure-allow, как COS-171), документ
+>     возвращается с `generator=syft` (НЕ `python-inventory`).
+> (3) SBOM запечатывается durable (`store_artifact_sbom` / `store_sbom_inventory`),
+>     `ArtifactRecord.sbom_ref` проставляется, read-through переживает рестарт (уже есть
+>     в COS-167/152 — не переписывать, только подтвердить на реальном syft-документе).
+> (4) `airgap-bundle.ps1`: syft-бинарь попадает в бандл (в образе).
+> (5) Тесты: focused-юнит (бинарь есть/нет → generator-маркер) + live opt-in smoke
+>     против registry-zr (self-skip при оффлайн).
+
+> **Out of scope:** grype-визор (остаётся честный `available=false` при отсутствии grype —
+> в scope этой карточки не входит), trivy (COS-171), promotion, миграционная цепочка,
+> source-SAST.
+
+> **Acceptance:**
+> - Внутри контейнера `syft version` отвечает.
+> - SBOM поверх реально запушенного `cosmo-testapp:0.1.0` отдаётся с `generator=syft`,
+>   валидный CycloneDX 1.5 (schema-проверка), не `python-inventory`.
+> - SBOM durable в Evidence Ledger, `ArtifactRecord.sbom_ref` проставлен, GET видит после рестарта.
+> - Negative: registry недоступен / бинарь убран → честный `python-inventory` fallback (не фейк syft).
+> - Airgap-бандл несёт syft-бинарь.
+> - Suite gate без регрессий.
+
+> **Отчёт обратно:** версия/digest syft; как разрешили insecure-registry; пример SBOM с
+> `generator=syft` (компоненты); доказательство durable-read после рестарта; negative-кейсы;
+> состав airgap-бандла; блокеры.
+
+> **Исполнено (Boss, 2026-09-24, live smoke из контейнера cosmo-api):**
+> - Бинари в образе (digest-pin sha256): trivy `0.74.0` (`2ae6fe3e…`), syft `1.20.0` (`689e12c5…`).
+> - Offline trivy DB: `/var/lib/trivy/db/trivy.db` = 1.4G, seed-тарбол `/opt/trivy-db-seed.tar.gz`
+>   (entrypoint идемпотентно раскатывает в volume `services_cosmo_trivy_cache`).
+> - Insecure точечно: trivy `--insecure` и syft `SYFT_REGISTRY_INSECURE_USE_HTTP=true` —
+>   только при host ∈ allowlist `INSECURE_REGISTRY_HOSTS` (`registry_policy.py`).
+> - Live: `run_trivy_scan(cosmo-registry-zr:5000/…cosmo-testapp:0.1.0)` → `source=trivy`, 203 findings;
+>   `generate_sbom_inventory(…)` → `generator=syft`, 2820 components, CycloneDX.
+> - Negative: пустой cache → `source=none` (честно); unreachable registry → `python-inventory` (честно).
+> - Баг закрыт: syft plumbing ставил несуществующий `--insecure-skip-tls-verify` (флаг grype)
+>   + гейт `"://" in target` → заменён на env по allowlist; +3 юнита `TestGenerateSyftDocument`.
+> - Suite gate: `pytest orchestrator/tests/cosmo/` → **3476 passed, 16 skipped, 0 failed**.
+> - Блокер: коммит + push — ждёт команды Максима (не выполнен). grype вне scope → `available=false`.
+
+---
+
+## 🔄 ACTIVE — AUTH-ЭПИК (FLASH, ОДИН ПОТОК, ПО ОЧЕРЕДИ)
+
+> **Статус (24.09.2026):** auth-эпик **закрыт полностью** — COS-156 (verifier) → COS-157
+> (issuer, suite gate 3526/16/0) → COS-175 (auth-bootstrap + live-smoke) → COS-158
+> (FE login, e2e 4/4). Весь пласт незакоммичен. Воркер — Flash.
+
+**Очередь Flash:**
+1. ✅ **COS-157-CLOSE** — полный suite gate по auth-коду (закрыто, 24.09.2026).
+2. ✅ **COS-175** — OpenBao auth-bootstrap + сквозной live-smoke (принято, 24.09.2026).
+3. ✅ **COS-158** — FE login surface + session, dev-stub удалён (принято, 24.09.2026).
+4. 🔄 **COS-176** — e2e auth-mint миграция: `alg:none` → реальный login (follow-up приёмки COS-158).
+
+> **Follow-up (найден при приёмке COS-158):** остальные e2e-спеки (notifications/web-ide/
+> degraded/release-readiness) минтят `alg:none` через `helpers/e2e_auth.ts` — verifier COS-156
+> теперь отвергает их → e2e-линия красная вне login-флоу. Идёт в COS-176.
+
+> Коммит+push пласта — ждёт команды Максима. Кандидаты после auth-линии: grype
+> follow-up (честный `available=false`), source-SAST (SonarQube/CodeScoring) для
+> SOURCE_AUDIT; серверные IDE follow-up от Vector (SSE resume лог-стрима; typed 409
+> `expected_head_sha`; PTY exec).
+
+#### ✅ COS-157-CLOSE · Flash · Полный suite gate по auth-коду (acceptance №5)
+
+> **Зачем:** acceptance COS-157 №5 требует «auth-regression + jwt_verification + suite
+> gate зелёные». Flash прогнал только фокус (20 новых + 152 regression); полный сет
+> (~3476+) по новому боевому `auth_router`/`Depends(get_vault)` не прогонялся. Это
+> единственный незакрытый критерий приёмки COS-157.
+
+> **Acceptance:**
+> - Полный suite gate (`pytest orchestrator/tests/cosmo/`) зелёный; либо все красные
+>   зоны — чужие поверхности с явным владельцем (не auth).
+> - passed/skipped/failed зафиксированы в отчёте.
+> - Боевого кода не менять — gate только показывает наличие/отсутствие регрессий.
+
+> **Принято (24.09.2026):** полный сет **3526 passed / 16 skipped / 0 failed** (358s),
+> красных зон нет. auth-поверхности COS-157 (jwt_issuer, credentials, auth_login) в сете
+> зелёные; `test_openapi_contract` с allowlist `LoginResponse` прошёл; регрессионные
+> auth-наборы зелёные. 16 skipped — опциональный live-контур (`COSMO_LIVE_*` не подняты),
+> ожидаемый класс. Боевой код не менялся. **COS-157 закрыт полностью** (acceptance 1–5).
+
+> **Отчёт обратно:** команда, длительность, passed/skipped/failed; красные зоны и их
+> владелец (если есть); подтверждение, что auth-поверхность не регрессирует.
+
+#### ✅ COS-175 · Flash · OpenBao auth-bootstrap + сквозной live-smoke
+
+> **Зачем:** issuer (COS-157) и verifier (COS-156) в коде готовы, но в standalone
+> OpenBao (`prettyk-openbao`, AppRole `cosmo-app`) НЕ засидированы
+> `secret/cosmo/jwt-keys` (RSA-пара подписи) и `secret/cosmo/auth` (email + PBKDF2-хэш
+> админа). Без этого живой прогон «login → mint → JWKS → verify» невозможен, а COS-158
+> (FE login) нельзя верифицировать живьём. Сидирования в репозитории нет нигде
+> (grep по скриптам/ps1/sh пуст).
+
+> **Scope:**
+> (1) Скрипт/процедура сидирования в standalone OpenBao: `jwt-keys` → `{rsa_private,
+>     rsa_public, issuers:[...], audience:"cosmo-api"}` (RSA-2048+); `auth` → `{email,
+>     password_hash (PBKDF2, self-describing формат COS-157), sub, roles, is_admin}`.
+> (2) Идемпотентность: повторный запуск не плодит дубли и не роняет существующие секреты.
+> (3) Сквозной live-smoke: AppRole-read ключа → POST `/api/v1/auth/login` (верные/неверные
+>     креды) → выпуск RS256 JWT → GET `/.well-known/jwks.json` → `verify_jwt` собирает
+>     principal (sub/roles/is_admin) сквозь реальный JWKS (не mock-fetcher).
+> (4) Fail-closed проверка: без сидирования → 503 (не default-success).
+
+> **Out of scope:** сам issuer/verifier код (COS-156/157 готовы); FE login (COS-158);
+> session/refresh/rotation; внешний OIDC; миграционная цепочка.
+
+> **Acceptance:**
+> - Живой login→mint→JWKS→verify→principal зелёный «глазами» (не unit-mock).
+> - Приватный ключ только в OpenBao, в git/`.env` не попадает.
+> - Неверный пароль → 401; отсутствие секретов → 503.
+> - Сидирование идемпотентно и задокументировано (скрипт + секция/readme).
+
+> **Принято (24.09.2026):** `services/scripts/seed-auth-secrets.py` (идемпотентный, AppRole
+> `cosmo-app`, kv-v2 `secret/cosmo/{jwt-keys,auth}`, `--rotate`). `jwt-keys` → реальный
+> RSA-2048 (PKCS#8/SPKI), `issuers=["cosmoport"]`, `audience="cosmo-api"`; `auth` →
+> `admin@cosmoport.local` / PBKDF2 / sub=admin / roles=[admin_sec] / is_admin=true.
+> Live-smoke глазами: login до seed → **503**, JWKS → 200 (kid совпал), верный пароль →
+> **200 + RS256 JWT** (header kid == JWKS kid), неверный → **401**, host-side `verify_jwt`
+> через реальный JWKS URL → principal `{sub=admin, roles=[admin_sec], is_admin=true}`,
+> tampered → rejected. Идемпотентность: второй запуск → PRESERVED (тот же kid/hash).
+> Приватный ключ только в OpenBao. Известный факт: старый образ cosmo-api отдавал 404 на
+> auth-роуты → потребовался rebuild/recreate (auth-маршруты вошли в образ). Dev-креды админа
+> переопределяются оператором для прод-контура.
+
+> **Отчёт обратно:** скрипт/команда сидирования; live-smoke лог (шаги + результаты);
+> подтверждение прохождения verify→principal; блокеры.
+
+> **Принято (24.09.2026, Flash):**
+> - **Скрипт:** `services/scripts/seed-auth-secrets.py` — идемпотентный seed через
+>   AppRole `cosmo-app` (клиент COS-105, не root token). Читает/пишет kv-v2
+>   `secret/cosmo/{jwt-keys,auth}`; `--rotate` форсирует перегенерацию ключа.
+> - **jwt-keys:** placeholder `DEV-ONLY-PLACEHOLDER-COS-157` заменён живой RSA-2048
+>   (PKCS#8 private / SPKI public), `issuers=["cosmoport"]`, `audience="cosmo-api"`,
+>   `kid=WOvAMAJ-eukgrtc9knBkew`. auth: `email=admin@cosmoport.local`,
+>   `sub=admin`, `roles=["admin_sec"]`, `is_admin=true`, PBKDF2-hash
+>   (`pbkdf2_sha256$…` via `credentials.hash_password`).
+> - **Fail-closed:** до сидирования `POST /api/v1/auth/login` → **503**
+>   `{"detail":"auth secret not bootstrapped (secret/cosmo/auth not seeded)"}`.
+> - **Live-smoke «глазами»:** JWKS → **200** (RSA JWK, kid совпал); login верный →
+>   **200** + RS256 JWT (header kid = JWKS kid); login неверный → **401**
+>   `invalid credentials`; host-side `verify_jwt` сквозь реальный
+>   `COSMO_JWT_JWKS_URL=http://localhost:8100/.well-known/jwks.json` → principal
+>   `{sub=admin, roles=[admin_sec], is_admin=true, iss=cosmoport, aud=cosmo-api}`;
+>   tampered-токен отвергнут (signature failed).
+> - **Идемпотентность:** второй запуск → `PRESERVED` (тот же kid, тот же hash).
+> - Приватный ключ только в OpenBao (в git/.env/вывод скрипта не попадает).
+> - **Заметка:** пересобран `cosmo-api:local` (в старом образе auth-роуты 404) +
+>   recreate container. Без rebuild старые 404 на `/login`/`/jwks` неизбежны.
+
+#### COS-158 · Flash · FE login surface + session — убрать dev-stub `operator:admin`
+
+> **Зачем:** фронт сейчас шлёт dev-stub `operator:admin` (заголовочный контракт до
+> COS-156). Нужен боевой login surface: форма логина → `POST /api/v1/auth/login` →
+> подписанный токен → хранение сессии → `Authorization: Bearer` на все API-вызовы.
+
+> **Scope:**
+> (1) `frontend/src/auth/` — login-форма (email/password), вызов `POST /api/v1/auth/login`,
+>     хранение `access_token` (сессия), `Bearer` в Authorization.
+> (2) Логаут; обработка 401 (истёкший/неверный токен) → редирект на login.
+> (3) Убрать dev-stub `operator:admin` (и старый заголовочный контракт) из всех вызовов.
+> (4) Честные состояния: loading, 401 (неверные креды), 503 (issuer не готов), network
+>     error; никакого дефолт-успеха.
+
+> **Out of scope:** session refresh/rotation; внешний OIDC/Blitz SSO; парольный reset;
+> сам issuer/verifier (приняты).
+
+> **Acceptance:**
+> - Логин с валидными креденшелами (засидированный админ COS-175) → токен → доступ к
+>   guarded-поверхностям; неверный пароль → честный 401 на форме.
+> - Ни одного dev-stub `operator:admin` в клиентском коде (grep пуст).
+> - tsc/vitest/build зелёные; e2e login-флоу зелёный (если есть линия).
+
+> **Отчёт обратно:** поверхности FE; как хранится/передаётся токен; логаут и 401-флоу;
+> результат tsc/vitest/build; подтверждение удаления stub'а; блокеры.
+
+**Worker report (Flash):**
+- **Поверхности FE:** `frontend/src/cosmo/auth/authStore.ts` (reactive store: `localStorage['cosmo_auth_token']` → `useSession()`, `login`/`logout`/`clearSessionOnUnauthorized`, user display-only из payload без проверки подписи) + `LoginView.tsx` (MUI форма email/password → `POST /api/v1/auth/login`, честные idle/submitting/401/503/network, без дефолт-успеха). `App.tsx` — gate за `useSession()` (нет сессии → LoginView); `ControlStationShell.tsx` — `header-user` + logout.
+- **Хранение/передача токена:** `cosmo_auth_token` в localStorage; `api.ts` `getCosmoAuthToken()` → `Authorization: Bearer`; на любой 401 `clearSessionOnUnauthorized()` → App сам возвращает на login.
+- **Checks:** vitest 81/81 passed; `tsc -b` + `vite build` green; `grep operator:admin` в `frontend/` = 0 (dev-stub и старый заголовочный контракт удалены); e2e `frontend/e2e/login.spec.ts` (новый) 4/4 green против live `:5175+:8100` (реальный RS256 из issuer; no-session/wrong-password/empty-fields/success+logout).
+- **Блокеры:** нет. **Finding (не блокер COS-158):** остальные e2e-спеки (notifications/web-ide/degraded/release-readiness) минтят `alg:none` через `helpers/e2e_auth.ts` — COS-156 теперь отвергает их на бэке; миграция на реальный логин = **COS-176** (follow-up, нарезана ниже).
+
+> **Принято (Cosmo, PO, 24.09.2026):** acceptance COS-158 закрыта — e2e `login.spec.ts` 4/4
+> green против live `:5175+:8100` (реальный RS256 из issuer: no-session→login, empty-fields,
+> wrong-password→честный 401, success→Control Station→logout); `grep operator:admin` в
+> `frontend/` = 0; vitest 81/81, `tsc -b` + `vite build` green. Хранение токена — localStorage
+> (`cosmo_auth_token`), `Authorization: Bearer` через `getCosmoAuthToken()`, 401 →
+> `clearSessionOnUnauthorized()` → возврат на login. **Finding зачтён как follow-up COS-176**
+> (e2e-хелпер `e2e_auth.ts` отстал от verifier COS-156; вне scope COS-158, но разбивает
+> остальную e2e-линию — must-fix до коммита пласта).
+
+---
+
+#### COS-176 · Flash · e2e auth-mint миграция: `alg:none` → реальный login
+
+> **Зачем:** приёмка COS-158 вскрыла, что e2e-хелпер `frontend/e2e/helpers/e2e_auth.ts` и
+> зависящие от него спеки (notifications / web-ide / degraded / release-readiness) всё ещё
+> минтит `alg:none` JWT. Verifier COS-156 теперь reject'ит `alg:none` → эти e2e-флоу
+> получают 401 и краснеют. login.spec.ts (COS-158) уже честен — остальное отстало на
+> один шаг (тот же класс, что закрывал COS-160 на pytest live-тестах, но для Playwright).
+
+> **Scope:**
+> (1) `helpers/e2e_auth.ts` — заменить `alg:none`/unsigned mint на реальный логин:
+>     `POST /api/v1/auth/login` (dev-админ `admin@cosmoport.local` / `cosmo-admin-dev`,
+>     сидирован в COS-175) → `access_token` — или use `mint_rs256` dev-ключом с тем же
+>     публичным ключом, что в `jwt-keys` (для e2e без поднятого live-backend).
+> (2) Перевести все спеки-потребители на реальный токен; не оставлять ни одного `alg:none`.
+> (3) e2e-линия целиком зелёная против live-стенда (login + notifications/web-ide/degraded/
+>     release-readiness); либо честный skip там, где live-контур не поднят.
+
+> **Out of scope:** сам verifier/issuer (приняты); pytest live-тесты (COS-160 уже закрыл);
+> миграция прод-контура.
+
+> **Acceptance:**
+> - `grep alg:none` в `frontend/e2e/` = 0 (кроме, если есть, задокументированного негатива).
+> - Все e2e-спеки либо зелёные с реальным RS256, либо честный skip.
+> - login.spec.ts не регрессирует (4/4).
+> - tsc/build зелёные.
+
+> **Отчёт обратно:** что заменено в `e2e_auth.ts` (логин vs mint_rs256) и почему; список
+> спейся-потребителей и их статус; grep-доказательство отсутствия `alg:none`; e2e-прогон
+> (числа); блокеры.

@@ -183,7 +183,7 @@ Cosmoport (ПУ, эта репа)
 | `cosmo-postgres` | `:5432` | TCP | `orchestrator/cosmo/db/session.py` | Главное хранилище (35 durable таблиц) |
 | `cosmo-valkey` | `:6379` | TCP | `orchestrator/cosmo/api/sse_backlog.py` | Буфер SSE-событий (Valkey Streams) |
 | `cosmo-minio` | `:9100` | S3 API| `orchestrator/cosmo/ledger/artifact_store.py` | Неизменяемое хранение артефактов и логов |
-| `cosmo-openbao` | `:8200` | HTTP | `orchestrator/cosmo/adapters/tls_config.py` | Хранилище секретов и токенов Forge |
+| `prettyk-openbao` | `:8200` | HTTP | `orchestrator/cosmo/adapters/vault_ref.py` | Платформенное хранилище секретов (`secret/cosmo/*`, AppRole `cosmo-app`) |
 
 ---
 
