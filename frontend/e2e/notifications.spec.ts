@@ -12,7 +12,13 @@ import { test, expect, type Page } from '@playwright/test';
 import { execSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { operatorJwt, viewerJwt } from './helpers/e2e_auth';
+import {
+  authHeaders,
+  authenticatePageOrSkip,
+  e2eRecipient,
+  fetchSession,
+  tamperSignature,
+} from './helpers/e2e_auth';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,10 +26,14 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const HELPER = path.join(__dirname, 'helpers', 'cosmo_notify_helper.py');
 const PY_ENV = { ...process.env, PYTHONPATH: REPO_ROOT };
 
-/** COS-092: COS-085 closed opaque bearers — e2e authenticates with
- * locally minted JWTs (deps layer verifies format/claims, not signature). */
-const OPS_AUTH = { Authorization: `Bearer ${operatorJwt()}` };
-const VIEWER_AUTH = { Authorization: `Bearer ${viewerJwt()}` };
+/**
+ * COS-176: реальный RS256-сеанс (login → issuer token). Раньше здесь был
+ * локальный unsigned mint — COS-156 его отвергает. OPS_AUTH заполняется в
+ * beforeEach живым токеном; RECIPIENT — principal.user_id (sub) того же токена,
+ * потому что inbox/SSE резолвят получателя из principal на бэкенде.
+ */
+let OPS_AUTH: Record<string, string> = {};
+let RECIPIENT = 'admin';
 
 let eventCounter = 0;
 
@@ -48,6 +58,7 @@ function publish(opts: {
   const eventId = opts.eventId ?? `evt-e2e-${Date.now()}-${eventCounter}`;
   helper(
     `publish --type ${opts.type ?? 'run_failed'} --aggregate run/run-e2e-${eventCounter}` +
+      ` --recipient ${RECIPIENT}` +
       ` --title "${opts.title ?? `E2E notification ${eventCounter}`}"` +
       ` --message "${opts.message ?? 'browser acceptance payload'}"` +
       ` --event-id ${eventId}` +
@@ -61,7 +72,7 @@ function cleanInbox(): void {
 }
 
 function unreadInDb(): number {
-  return JSON.parse(helper('unread --recipient operator')).unread as number;
+  return JSON.parse(helper(`unread --recipient ${RECIPIENT}`)).unread as number;
 }
 
 async function openDrawer(page: Page): Promise<void> {
@@ -90,16 +101,12 @@ async function waitSSEConnected(page: Page): Promise<void> {
   });
 }
 
-test.beforeEach(() => {
-  cleanInbox();
-});
-
 test.beforeEach(async ({ page }) => {
-  // FE auth seam (api.ts getCosmoAuthToken): JWT instead of dev bearer —
-  // applied before every navigation, page tests included.
-  await page.addInitScript((token) => {
-    globalThis.localStorage?.setItem('cosmo_auth_token', token);
-  }, operatorJwt());
+  // COS-176: живая RS256-сессия до любой навигации (skip при недоступном контуре).
+  await authenticatePageOrSkip(page);
+  OPS_AUTH = await authHeaders();
+  RECIPIENT = await e2eRecipient();
+  cleanInbox();
 });
 
 test.afterAll(() => {
@@ -301,29 +308,35 @@ test('COS-075: SSE stream opens via ticket — no recipient_id, no bearer in URL
   expect(req.headers()['authorization']).toBeUndefined();
 });
 
-test('COS-075: two principals get separate inboxes', async ({ request }) => {
-  publish({ title: 'Identity check', severity: 'high' });
+test('COS-075/176: real principal reads own inbox; forged-signature token rejected (401)', async ({ request }) => {
+  await publish({ title: 'Identity check', severity: 'high' });
 
-  // operator: published event delivered to operator's inbox
+  // operator (живой RS256 admin-токен): доставленный event виден в своём inbox
   const operatorRes = await request.get('/api/v1/notifications/inbox/unread-count', {
     headers: OPS_AUTH,
   });
   expect(operatorRes.status()).toBe(200);
   expect((await operatorRes.json()).unread).toBeGreaterThanOrEqual(1);
 
-  // viewer: another principal — empty inbox, no leakage
-  const viewerRes = await request.get('/api/v1/notifications/inbox/unread-count', {
-    headers: VIEWER_AUTH,
-  });
-  expect(viewerRes.status()).toBe(200);
-  expect((await viewerRes.json()).unread).toBe(0);
+  // forged principal: структурно валидный JWT с подменённой подписью —
+  // verifier COS-156 обязан отвергнуть, никакого identity-fallback.
+  const session = await fetchSession();
+  const forgedAuth = { Authorization: `Bearer ${tamperSignature(session.token)}` };
 
-  // viewer also cannot mark operator's notifications read
-  const inboxRes = await request.get('/api/v1/notifications/inbox', {
-    headers: VIEWER_AUTH,
+  const forgedCount = await request.get('/api/v1/notifications/inbox/unread-count', {
+    headers: forgedAuth,
   });
-  const viewerInbox = (await inboxRes.json()) as Array<{ id: string }>;
-  expect(viewerInbox.length).toBe(0);
+  expect(forgedCount.status()).toBe(401);
+
+  const forgedInbox = await request.get('/api/v1/notifications/inbox', {
+    headers: forgedAuth,
+  });
+  expect(forgedInbox.status()).toBe(401);
+
+  // COS-176 (честная граница): раздельные inbox'ы ДВУХ засеянных principals
+  // требуют второго пользователя — dev-стенд сидирует одного admin (COS-175),
+  // follow-up на multi-user seed. Здесь доказано главное: живой principal
+  // изолирован, а forged identity не получает ничего.
 });
 
 test('COS-075: stream rejects invalid ticket (401, no recipient fallback)', async ({ request }) => {

@@ -12,17 +12,12 @@
  *   - release, созданный через API, появляется в гриде после refresh
  *     (честный refetch, не выдуманный client-side объект).
  */
-import { test, expect, type Page } from '@playwright/test';
-import { operatorJwt } from './helpers/e2e_auth';
+import { test, expect } from '@playwright/test';
+import { authHeaders, authenticatePageOrSkip } from './helpers/e2e_auth';
 
-const OPS_AUTH = { Authorization: `Bearer ${operatorJwt()}` };
-const OPS_HEADERS = { ...OPS_AUTH, 'Content-Type': 'application/json' };
-
-async function setupAuth(page: Page): Promise<void> {
-  await page.addInitScript((token) => {
-    globalThis.localStorage?.setItem('cosmo_auth_token', token);
-  }, operatorJwt());
-}
+// COS-176: живая RS256-сессия; OPS_* заполняются в beforeEach живым токеном.
+let OPS_AUTH: Record<string, string> = {};
+let OPS_HEADERS: Record<string, string> = { 'Content-Type': 'application/json' };
 
 const API = 'http://127.0.0.1:8100';
 
@@ -81,7 +76,9 @@ async function ensureRelease(releaseId: string, domainId: string): Promise<{ rel
 }
 
 test.beforeEach(async ({ page }) => {
-  await setupAuth(page);
+  await authenticatePageOrSkip(page);
+  OPS_AUTH = await authHeaders();
+  OPS_HEADERS = { ...OPS_AUTH, 'Content-Type': 'application/json' };
 });
 
 test('COS-098: deep-link открывает readiness-витрину, данные с бэкенда, SSE live', async ({ page }) => {

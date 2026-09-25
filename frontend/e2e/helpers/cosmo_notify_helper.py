@@ -5,21 +5,28 @@
 outbox) через тот же async session, что и backend. Обработка — через живой
 backend API (POST /api/v1/notifications/process), как в бою.
 
+COS-176: process-вызов аутентифицируется РЕАЛЬНЫМ login'ом (боевой RS256
+issuer, COS-157/158) — локальный unsigned mint удалён (verifier COS-156 его
+отвергает). Получатель события задаётся `--recipient` (по умолчанию
+`E2E_COSMO_RECIPIENT` или `admin` — principal живого токена).
+
 Команды:
-  publish --type run_failed --aggregate run/run-e2e-1 --title "T" --message "M" [--event-id X] [--severity high]
+  publish --type run_failed --aggregate run/run-e2e-1 --recipient admin --title "T" --message "M" [--event-id X] [--severity high]
   clean                        — очистить notification_events + notification_inbox
-  unread --recipient operator  — количество непрочитанных (прямой SQL)
+  unread [--recipient admin]   — количество непрочитанных (прямой SQL)
   dlq-fixture [--title "T"]    — вставить failed email-строку в DLQ (прямой SQL;
                                  provider стенда всегда accept, поэтому DLQ через
                                  продакшн-путь на стенде недостижима)
 
-Recipient V1: 'operator' — fixed contract (AlertHUD + SSE stream).
+Recipient: principal.user_id (sub) живого e2e-токена; AlertHUD + SSE-стрим
+фронта читают inbox того же principal.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -33,24 +40,42 @@ from orchestrator.cosmo.db.session import get_sessionmaker, get_sync_url  # noqa
 from orchestrator.cosmo.notifications.manager import NotificationManager  # noqa: E402
 
 
-def _mint_jwt(sub: str, roles: list[str], is_admin: bool = False) -> str:
-    """COS-092: COS-085 закрыл opaque-bearer — только JWT (`ey...payload...`).
-    Подпись на deps-слое не проверяется (COS-031), поэтому e2e минтит
-    локальный unsigned JWT — честный credential для стенда."""
-    import base64
+def _login_token() -> str:
+    """COS-176: реальный login (боевой RS256 issuer) вместо локального unsigned токена.
 
-    def b64(obj: dict) -> str:
-        return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+    Helper — часть e2e-контура против живого стенда; verifier COS-156 требует
+    крипто-подпись, поэтому POST /process идёт с токеном живого dev-admin
+    (OpenBao-seeded COS-175).
+    """
+    email = os.getenv("E2E_COSMO_EMAIL", "admin@cosmoport.local")
+    password = os.getenv("E2E_COSMO_PASSWORD", "cosmo-admin-dev")
+    base = os.getenv("E2E_COSMO_API_URL", "http://localhost:8100").rstrip("/")
+    req = urllib.request.Request(
+        f"{base}/api/v1/auth/login",
+        data=json.dumps({"email": email, "password": password}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    token = str(body.get("access_token") or "")
+    if not token:
+        raise RuntimeError("login response has no access_token")
+    return token
 
-    claims: dict = {"sub": sub, "roles": roles}
-    if is_admin:
-        claims["is_admin"] = True
-    return f"{b64({'alg': 'none', 'typ': 'JWT'})}.{b64(claims)}.e2e"
+
+def _resolve_recipients(raw: str) -> list[str]:
+    """Recipient'ы события: явный список → env E2E_COSMO_RECIPIENT → 'admin'."""
+    recipients = [r.strip() for r in (raw or "").split(",") if r.strip()]
+    if recipients:
+        return recipients
+    return [os.getenv("E2E_COSMO_RECIPIENT", "admin")]
 
 
 async def _publish(args: argparse.Namespace) -> None:
     event_type = args.type
     aggregate_type, _, aggregate_id = args.aggregate.partition("/")
+    recipients = _resolve_recipients(args.recipient)
     mgr = NotificationManager()
     async with get_sessionmaker()() as session:
         row, created = await mgr.record_event(
@@ -62,7 +87,7 @@ async def _publish(args: argparse.Namespace) -> None:
             title=args.title,
             message=args.message,
             severity=args.severity,
-            explicit_recipients=["operator"],
+            explicit_recipients=recipients,
         )
         await session.commit()
     if not created:
@@ -71,16 +96,14 @@ async def _publish(args: argparse.Namespace) -> None:
     # Process через живой backend — production путь fanout.
     # POST /process идемпотентен (UNIQUE(event_id, recipient, channel)),
     # поэтому retry безопасен: SSE-коннекты могут конкурировать за uvicorn.
+    token = _login_token()
     last_err: Exception | None = None
     for attempt in range(4):
         try:
             req = urllib.request.Request(
                 "http://localhost:8100/api/v1/notifications/process", method="POST"
             )
-            req.add_header(
-                "Authorization",
-                "Bearer " + _mint_jwt("e2e-ops", ["admin_sec"], is_admin=True),
-            )
+            req.add_header("Authorization", f"Bearer {token}")
             with urllib.request.urlopen(req, timeout=15) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             _wait_inbox_row(row.event_id)
@@ -228,6 +251,7 @@ def main() -> int:
     pp = sub.add_parser("publish")
     pp.add_argument("--type", required=True)
     pp.add_argument("--aggregate", required=True)
+    pp.add_argument("--recipient", default="", help="recipient id(s), comma-separated; default env E2E_COSMO_RECIPIENT or admin")
     pp.add_argument("--title", default="")
     pp.add_argument("--message", default="")
     pp.add_argument("--event-id", default=None)
@@ -241,7 +265,7 @@ def main() -> int:
     pd.set_defaults(func=_dlq_fixture)
 
     pu = sub.add_parser("unread")
-    pu.add_argument("--recipient", default="operator")
+    pu.add_argument("--recipient", default=os.getenv("E2E_COSMO_RECIPIENT", "admin"))
     pu.set_defaults(func=_unread)
 
     args = p.parse_args()

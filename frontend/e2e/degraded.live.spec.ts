@@ -14,6 +14,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { execSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { authenticatePageOrSkip, e2eRecipient } from './helpers/e2e_auth';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,7 +70,9 @@ test.skip(!DEGRADED_ENABLED, 'Set COSMO_E2E_DEGRADED=1 to run the live degraded 
 test.describe('COS-064+: live degraded SSE (PG docker stop/start)', () => {
   let pgStoppedByTest = false;
 
-  test.beforeEach(() => {
+  test.beforeEach(async ({ page }) => {
+    // COS-176: живая RS256-сессия (skip при недоступном auth-контуре).
+    await authenticatePageOrSkip(page);
     helper('clean');
   });
 
@@ -114,9 +117,10 @@ test.describe('COS-064+: live degraded SSE (PG docker stop/start)', () => {
 
     // 4. Событие после recovery — доставлено ровно один раз
     helper(
-      'publish --type run_failed --aggregate run/run-degraded-1 ' +
-        '--title "After PG recovery" --message "single delivery" ' +
-        '--event-id evt-e2e-degraded-recovery',
+      `publish --type run_failed --aggregate run/run-degraded-1 ` +
+        `--recipient ${await e2eRecipient()} ` +
+        `--title "After PG recovery" --message "single delivery" ` +
+        `--event-id evt-e2e-degraded-recovery`,
     );
 
     const cards = page.getByTestId('notification-card').filter({ hasText: 'After PG recovery' });
