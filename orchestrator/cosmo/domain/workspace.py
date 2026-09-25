@@ -85,6 +85,17 @@ def validate_head_sha(sha: str) -> str:
     return sha
 
 
+def validate_ref(ref: str) -> str:
+    """COS-177: ref deep-link — commit SHA (полный или >=7-hex префикс).
+
+    Отдельно от validate_head_sha: 400 называет именно ref (не head_sha),
+    ref не привязан к CAS-семантике головы ветки — это authority snapshot'а.
+    """
+    if not ref or not _SHA_RE.match(ref):
+        _reject(ref, "ref (commit sha, >=7 hex)")
+    return ref
+
+
 def validate_tree_path(path: str) -> str:
     """Путь файла/каталога в репо: относительный, без traversal.
 

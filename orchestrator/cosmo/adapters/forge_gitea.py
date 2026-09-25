@@ -77,6 +77,20 @@ _MAX_COMPARE_FILES = 500
 _MAX_COMPARE_BLOB_BYTES = 2 * 1024 * 1024  # 2 MiB на текстовый blob
 
 
+def _is_missing_ref_error(exc: requests.HTTPError) -> bool:
+    """COS-177: Gitea-квирк — неизвестный ref в /commits?sha=... → 500
+    "object does not exist" (не 404). Отличаем от настоящей 500 по телу:
+    контракт деградации (ref не существует → 404) не должен подменяться 502.
+    """
+    resp = exc.response
+    if resp is None or resp.status_code != 500:
+        return False
+    try:
+        return "object does not exist" in (resp.text or "")
+    except Exception:  # noqa: BLE001 — тело ответа может быть недоступно
+        return False
+
+
 @dataclass
 class _SnapshotChange:
     """Внутреннее представление различия snapshot-ов (до чтения блобов)."""
@@ -1033,10 +1047,21 @@ class GiteaForgeAdapter:
         Использует COS-116-проекцию list_commits_history (branch=...),
         не затеняя канонический list_commits. Пусто/не найдено →
         LookupError (роут честно отдаёт 404).
+
+        COS-177: Gitea 1.22.6 на неизвестный ref в /commits?sha=... отдаёт
+        500 "object does not exist" (квирк) — нормализуем в LookupError,
+        чтобы честная деградация 404 не подменялась 502.
         """
         if not ref:
             raise ValueError("ref is required")
-        commits = self.list_commits_history(owner, repo, branch=ref, limit=1)
+        try:
+            commits = self.list_commits_history(owner, repo, branch=ref, limit=1)
+        except requests.HTTPError as exc:
+            if _is_missing_ref_error(exc):
+                raise LookupError(
+                    f"Ref {ref!r} not found in {owner}/{repo}"
+                ) from exc
+            raise
         if not commits:
             raise LookupError(f"Ref {ref!r} not found in {owner}/{repo}")
         return commits[0]["sha"]

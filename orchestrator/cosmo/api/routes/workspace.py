@@ -10,9 +10,10 @@ prettyk-ide ``src/workspace/types.ts``). Роуты:
     ownership-цепочке app.domain_id → principal.
   - GET /api/v1/repos/tree — плоское рекурсивное дерево на head_sha
     (CAS-ready: клиент фиксирует голову; head_sha сверяется с веткой —
-    расхождение → 409, честный CAS).
+    расхождение → 409, честный CAS) или на произвольном commit ref
+    (COS-177: immutable snapshot, ref — authority, CAS не применяется).
   - GET /api/v1/repos/file — blob + base_blob_sha (база черновика для
-    3-way merge).
+    3-way merge); ref-режим (COS-177) — blob на коммите ref.
   - POST /api/v1/repos/workspace/commit — CAS-коммит (COS-107, legacy).
   - POST /api/v1/repos/workspace/commits — атомарный multi-file коммит
     create/update/delete одной транзакцией + pre-flight gate (COS-124).
@@ -109,6 +110,7 @@ from orchestrator.cosmo.domain.workspace import (
     WorkspaceTreeResponse,
     validate_branch,
     validate_head_sha,
+    validate_ref,
     validate_repo,
     validate_tree_path,
 )
@@ -158,12 +160,14 @@ async def _binding_for_repo(
 def _validate_or_400(**kwargs: tuple[str, str]) -> None:
     """Guard-функции DTO при ручном вызове → WorkspaceContractError → 400."""
     from orchestrator.cosmo.domain.workspace import (
-        validate_branch, validate_head_sha, validate_repo, validate_tree_path,
+        validate_branch, validate_head_sha, validate_ref, validate_repo,
+        validate_tree_path,
     )
     validators = {
         "repo": validate_repo,
         "branch": validate_branch,
         "head_sha": validate_head_sha,
+        "ref": validate_ref,
         "path": validate_tree_path,
     }
     try:
@@ -246,29 +250,50 @@ async def workspace_bootstrap(
 @router.get("/tree", response_model=WorkspaceTreeResponse)
 async def workspace_tree(
     repo: str = Query(..., description="Repository full name 'owner/repo'"),
-    branch: str = Query(..., description="Branch name"),
-    head_sha: str = Query(..., alias="head_sha", description="CAS head sha"),
+    branch: str = Query("", description="Branch name (CAS mode; ignored when ref is given)"),
+    head_sha: str = Query("", alias="head_sha", description="CAS head sha (CAS mode; ignored when ref is given)"),
+    ref: str = Query("", description="Immutable snapshot: commit sha (full or >=7-hex prefix); ref wins over head_sha"),
     db: AsyncSession = Depends(get_db),
     principal: PrincipalContext = Depends(require_principal()),
 ) -> WorkspaceTreeResponse:
-    """Плоское рекурсивное дерево на head_sha (CAS-ready).
+    """Плоское рекурсивное дерево: CAS-режим (head_sha) или snapshot (ref).
 
-    head_sha обязателен и сверяется с веткой: не совпадает → 409
-    (ветка уехала — re-bootstrap). Пустое дерево честно пусто.
+    CAS-режим (ref пуст): head_sha обязателен и сверяется с веткой:
+    не совпадает → 409 (ветка уехала — re-bootstrap).
+    Ref-режим (COS-177): чтение на коммите ref, CAS-сверка не выполняется
+    (ref — authority, FR-004 §2); при ref+head_sha приоритет у ref.
+    Несуществующий ref → 404, битый формат → 400. Пустое дерево честно пусто.
     """
-    _validate_or_400(repo=repo, branch=branch, head_sha=head_sha)
+    _validate_or_400(repo=repo, branch=branch, ref=ref)
+    if not ref:
+        # CAS-режим: пара обязательна, формат — до forge (400 раньше 5xx)
+        if not branch or not head_sha:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="branch and head_sha are required when ref is not provided",
+            )
+        _validate_or_400(head_sha=head_sha)
 
     await _binding_for_repo(db, repo, principal, None)
 
     from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
+    what = f"tree of {repo}"
     try:
         adapter = build_adapter()
-        owner, name = await _check_head(adapter, repo, branch, head_sha)
-        tree = adapter.get_tree(owner, name, ref=head_sha)
+        if ref:
+            # ref-режим: immutable snapshot, CAS не применяется
+            owner, _, name = repo.partition("/")
+            resolved_sha = adapter.resolve_ref(owner, name, ref)
+            tree = adapter.get_tree_by_sha(owner, name, resolved_sha, recursive=True)
+            what = f"tree of {repo}@{ref[:8]} (ref)"
+        else:
+            owner, name = await _check_head(adapter, repo, branch, head_sha)
+            tree = adapter.get_tree(owner, name, ref=head_sha)
+            what = f"tree of {repo}@{head_sha[:8]}"
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise forge_http_error(exc, f"tree of {repo}@{head_sha[:8]}") from exc
+        raise forge_http_error(exc, what) from exc
 
     return WorkspaceTreeResponse(
         entries=[TreeEntry(path=e.path, kind=_entry_kind(e.type)) for e in tree],
@@ -278,33 +303,58 @@ async def workspace_tree(
 @router.get("/file", response_model=WorkspaceBlobResponse)
 async def workspace_file(
     repo: str = Query(..., description="Repository full name 'owner/repo'"),
-    branch: str = Query(..., description="Branch name"),
+    branch: str = Query("", description="Branch name (CAS mode; ignored when ref is given)"),
     path: str = Query(..., description="File path"),
-    head_sha: str = Query(..., alias="head_sha", description="CAS head sha"),
+    head_sha: str = Query("", alias="head_sha", description="CAS head sha (CAS mode; ignored when ref is given)"),
+    ref: str = Query("", description="Immutable snapshot: commit sha (full or >=7-hex prefix); ref wins over head_sha"),
     db: AsyncSession = Depends(get_db),
     principal: PrincipalContext = Depends(require_principal()),
 ) -> WorkspaceBlobResponse:
-    """Blob файла на head_sha + base_blob_sha (база CAS-записи, 3-way)."""
-    _validate_or_400(repo=repo, branch=branch, head_sha=head_sha, path=path)
+    """Blob файла: CAS-режим (head_sha + base_blob_sha) или snapshot (ref).
+
+    CAS-режим (ref пуст): как раньше — base_blob_sha база 3-way черновика.
+    Ref-режим (COS-177): содержимое на коммите ref; sha/base_blob_sha —
+    blob sha этого коммита (не головы ветки), CAS не применяется.
+    """
+    _validate_or_400(repo=repo, branch=branch, ref=ref, path=path)
+    if not ref:
+        # CAS-режим: пара обязательна, формат — до forge (400 раньше 5xx)
+        if not branch or not head_sha:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="branch and head_sha are required when ref is not provided",
+            )
+        _validate_or_400(head_sha=head_sha)
 
     await _binding_for_repo(db, repo, principal, None)
 
     from orchestrator.cosmo.api.forge_client import build_adapter, forge_http_error
+    what = f"{path} in {repo}"
     try:
         adapter = build_adapter()
-        owner, name = await _check_head(adapter, repo, branch, head_sha)
-        content, blob_sha = adapter.read_file(owner, name, path, ref=head_sha)
+        if ref:
+            # ref-режим: immutable snapshot, CAS не применяется
+            owner, _, name = repo.partition("/")
+            resolved_sha = adapter.resolve_ref(owner, name, ref)
+            content, blob_sha = adapter.read_file(owner, name, path, ref=resolved_sha)
+            anchor = blob_sha or resolved_sha
+            what = f"{path} in {repo}@{ref[:8]} (ref)"
+        else:
+            owner, name = await _check_head(adapter, repo, branch, head_sha)
+            content, blob_sha = adapter.read_file(owner, name, path, ref=head_sha)
+            anchor = blob_sha or head_sha
+            what = f"{path} in {repo}@{head_sha[:8]}"
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise forge_http_error(exc, f"{path} in {repo}@{head_sha[:8]}") from exc
+        raise forge_http_error(exc, what) from exc
 
     return WorkspaceBlobResponse(
         path=path,
         content=content,
-        sha=blob_sha or head_sha,
+        sha=anchor,
         encoding="utf-8",
-        base_blob_sha=blob_sha or head_sha,
+        base_blob_sha=anchor,
     )
 
 

@@ -11682,7 +11682,7 @@
           "workspace"
         ],
         "summary": "Workspace Tree",
-        "description": "Плоское рекурсивное дерево на head_sha (CAS-ready).\n\nhead_sha обязателен и сверяется с веткой: не совпадает → 409\n(ветка уехала — re-bootstrap). Пустое дерево честно пусто.",
+        "description": "Плоское рекурсивное дерево: CAS-режим (head_sha) или snapshot (ref).\n\nCAS-режим (ref пуст): head_sha обязателен и сверяется с веткой:\nне совпадает → 409 (ветка уехала — re-bootstrap).\nRef-режим (COS-177): чтение на коммите ref, CAS-сверка не выполняется\n(ref — authority, FR-004 §2); при ref+head_sha приоритет у ref.\nНесуществующий ref → 404, битый формат → 400. Пустое дерево честно пусто.",
         "operationId": "workspace_tree_api_v1_repos_tree_get",
         "parameters": [
           {
@@ -11699,24 +11699,38 @@
           {
             "name": "branch",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
-              "description": "Branch name",
+              "description": "Branch name (CAS mode; ignored when ref is given)",
+              "default": "",
               "title": "Branch"
             },
-            "description": "Branch name"
+            "description": "Branch name (CAS mode; ignored when ref is given)"
           },
           {
             "name": "head_sha",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
-              "description": "CAS head sha",
+              "description": "CAS head sha (CAS mode; ignored when ref is given)",
+              "default": "",
               "title": "Head Sha"
             },
-            "description": "CAS head sha"
+            "description": "CAS head sha (CAS mode; ignored when ref is given)"
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Immutable snapshot: commit sha (full or >=7-hex prefix); ref wins over head_sha",
+              "default": "",
+              "title": "Ref"
+            },
+            "description": "Immutable snapshot: commit sha (full or >=7-hex prefix); ref wins over head_sha"
           },
           {
             "name": "Authorization",
@@ -11813,7 +11827,7 @@
           "workspace"
         ],
         "summary": "Workspace File",
-        "description": "Blob файла на head_sha + base_blob_sha (база CAS-записи, 3-way).",
+        "description": "Blob файла: CAS-режим (head_sha + base_blob_sha) или snapshot (ref).\n\nCAS-режим (ref пуст): как раньше — base_blob_sha база 3-way черновика.\nRef-режим (COS-177): содержимое на коммите ref; sha/base_blob_sha —\nblob sha этого коммита (не головы ветки), CAS не применяется.",
         "operationId": "workspace_file_api_v1_repos_file_get",
         "parameters": [
           {
@@ -11830,13 +11844,14 @@
           {
             "name": "branch",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
-              "description": "Branch name",
+              "description": "Branch name (CAS mode; ignored when ref is given)",
+              "default": "",
               "title": "Branch"
             },
-            "description": "Branch name"
+            "description": "Branch name (CAS mode; ignored when ref is given)"
           },
           {
             "name": "path",
@@ -11852,13 +11867,26 @@
           {
             "name": "head_sha",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
-              "description": "CAS head sha",
+              "description": "CAS head sha (CAS mode; ignored when ref is given)",
+              "default": "",
               "title": "Head Sha"
             },
-            "description": "CAS head sha"
+            "description": "CAS head sha (CAS mode; ignored when ref is given)"
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Immutable snapshot: commit sha (full or >=7-hex prefix); ref wins over head_sha",
+              "default": "",
+              "title": "Ref"
+            },
+            "description": "Immutable snapshot: commit sha (full or >=7-hex prefix); ref wins over head_sha"
           },
           {
             "name": "Authorization",
