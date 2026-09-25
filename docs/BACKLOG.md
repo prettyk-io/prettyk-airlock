@@ -4049,19 +4049,20 @@ are accepted; UI is the next product surface.
 
 > **Статус (24.09.2026):** auth-эпик **закрыт полностью** — COS-156 (verifier) → COS-157
 > (issuer, suite gate 3526/16/0) → COS-175 (auth-bootstrap + live-smoke) → COS-158
-> (FE login, e2e 4/4). Весь пласт незакоммичен. Воркер — Flash.
+> (FE login, e2e 4/4). Пласт закоммичен в `dev` и запушен в `origin/dev` + `origin/main`
+> (HEAD `8409d8b`, 5 коммитов). COS-176 — выдана Flash (2026-09-25).
 
 **Очередь Flash:**
 1. ✅ **COS-157-CLOSE** — полный suite gate по auth-коду (закрыто, 24.09.2026).
 2. ✅ **COS-175** — OpenBao auth-bootstrap + сквозной live-smoke (принято, 24.09.2026).
 3. ✅ **COS-158** — FE login surface + session, dev-stub удалён (принято, 24.09.2026).
-4. 🔄 **COS-176** — e2e auth-mint миграция: `alg:none` → реальный login (follow-up приёмки COS-158).
+4. 🔄 **COS-176** — e2e auth-mint миграция: `alg:none` → реальный login (follow-up приёмки COS-158). **Выдана Flash (25.09.2026).**
 
 > **Follow-up (найден при приёмке COS-158):** остальные e2e-спеки (notifications/web-ide/
 > degraded/release-readiness) минтят `alg:none` через `helpers/e2e_auth.ts` — verifier COS-156
 > теперь отвергает их → e2e-линия красная вне login-флоу. Идёт в COS-176.
 
-> Коммит+push пласта — ждёт команды Максима. Кандидаты после auth-линии: grype
+> Коммит+push пласта — **сделано** (5 коммитов, HEAD `8409d8b`, dev + main). Кандидаты после auth-линии: grype
 > follow-up (честный `available=false`), source-SAST (SonarQube/CodeScoring) для
 > SOURCE_AUDIT; серверные IDE follow-up от Vector (SSE resume лог-стрима; typed 409
 > `expected_head_sha`; PTY exec).
@@ -4196,7 +4197,7 @@ are accepted; UI is the next product surface.
 
 ---
 
-#### COS-176 · Flash · e2e auth-mint миграция: `alg:none` → реальный login
+#### COS-176 · 🔄 Flash · e2e auth-mint миграция: `alg:none` → реальный login
 
 > **Зачем:** приёмка COS-158 вскрыла, что e2e-хелпер `frontend/e2e/helpers/e2e_auth.ts` и
 > зависящие от него спеки (notifications / web-ide / degraded / release-readiness) всё ещё
@@ -4225,3 +4226,231 @@ are accepted; UI is the next product surface.
 > **Отчёт обратно:** что заменено в `e2e_auth.ts` (логин vs mint_rs256) и почему; список
 > спейся-потребителей и их статус; grep-доказательство отсутствия `alg:none`; e2e-прогон
 > (числа); блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Что заменено (логин, не mint_rs256) и почему.** `helpers/e2e_auth.ts` переписан на
+  **реальный login** `POST /api/v1/auth/login` (dev-admin `admin@cosmoport.local` /
+  `cosmo-admin-dev`, сидирован COS-175/OpenBao): `fetchSession()` (login + кэш на процесс до
+  `exp-60s`), `authHeaders()`, `e2eRecipient()` (recipient = `principal.user_id` = `sub`
+  живого токена), `authenticatePage(page)` (localStorage-контракт `cosmo_auth_token`,
+  COS-158), `authenticatePageOrSkip(page)` (честный skip, если auth-контур недоступен),
+  `tamperSignature()` (forged-вектор для негатива). `mint_rs256`-вариант отклонён осознанно:
+  приватный ключ issuer'а живёт **только в OpenBao** (`secret/cosmo/jwt-keys`, COS-173/175),
+  дев-ключ `_jwt_testkey` против живого стенда не верифицируется (JWKS стенда — issuer'а),
+  а тянуть приватный ключ из vault в FE-хелпер противоречит контракту. Логин — единственный
+  честный живой credential.
+- **Спеки-потребители и статус** (прогон против живого стенда `:5175 + :8100`):
+  - `login.spec.ts` — **4/4 passed** (не тронут; регрессии нет).
+  - `notifications.spec.ts` — **17/17 passed**: page-сессия и `OPS_AUTH` — живые RS256;
+    `publish` теперь шлёт `--recipient <sub>` (inbox/SSE резолвят получателя из principal,
+    COS-075), `unread` — по тому же recipient. Identity-тест переписан честно под одного
+    seeded-пользователя: живой principal читает свой inbox (200, ≥1), **forged-signature токен
+    отвергнут (401)** на unread-count и inbox.
+  - `release-readiness.spec.ts` — **2/2 passed**: `OPS_AUTH/OPS_HEADERS` заполняются живым
+    токеном в `beforeEach`, seed через API — под Bearer.
+  - `web-ide.spec.ts` — **2 passed + 1 skip**: shell с живой сессией и surface-switching
+    зелёные; tree-тест — задокументированный skip (см. Finding).
+  - `degraded.live.spec.ts` — skip по дизайну (`COSMO_E2E_DEGRADED=1`, останавливает PG);
+    auth-сессия добавлена в `beforeEach`, publish — на recipient живого principal.
+  - `helpers/cosmo_notify_helper.py` (часть e2e-контура) — `_mint_jwt` удалён, process-вызов
+    аутентифицируется реальным логином; добавлен `--recipient` (default
+    `E2E_COSMO_RECIPIENT`/`admin`).
+- **grep-доказательство:** `alg:none` в `frontend/e2e/**` (ts+py) = **0 hits** (literal убран
+  и из комментариев; история описана словами).
+- **e2e-прогон:** `npx playwright test` = **25 passed / 2 skipped / 0 failed** (1.5m);
+  `npm run build` (tsc -b + vite build) = **exit 0**; `npm test` (vitest) = **5 файлов /
+  81 passed / 0 failed**.
+- **Pre-flight стенд-факт (не блокер, но важно):** на старте карточки живой login отдавал
+  **500** — платформенный `prettyk-openbao` (dev-mode, in-memory storage) перезапустился
+  ~45m назад и потерял AppRole `cosmo-app` + `secret/cosmo/*`; `cosmo-api` при этом держал
+  полу-инициализированный vault-клиент (startup проглотил ошибку → 500 вместо 503).
+  Восстановлено по канону COS-173: root-токен из `docker logs`, `approle` enable + policy
+  `cosmo-app` + role, новые role-id/secret-id в `services/.env` (gitignored), seed
+  `auth`+`jwt-keys` (`seed-auth-secrets.py`) + Layer-1 dev-секреты (`database`, `forge/gitea`,
+  `ci/woodpecker`, `minio`), recreate `cosmo-api` → login/JWKS 200, RS256 kid сходится.
+  Фон: dev-mode OpenBao не персистит между рестартами (volume не помогает) — инфра-хрупкость
+  для отдельной карточки/оператора.
+- **Finding (вне COS-176, блокирует только tree-часть web-ide-спека):** FE Web IDE
+  (`api.getRepoTree/getRepoFile`) ходит в `/api/v1/repos/tree|file` **без обязательных
+  CAS-параметров `branch`+`head_sha`** (контракт COS-102/103, HEAD-версия роута требует их
+  `Query(...)`) → живой бэкенд отдаёт 400, дерево/файл не грузятся (пустой `file-tree`).
+  Плюс фикстура `payments/api` отсутствует на текущем стенде (Gitea: только `fc-live/*`,
+  binding в PG не зарегистрирован). Это pre-existing дрейф FE↔BE (не auth), закрыть
+  follow-up-карточкой: интеграция workspace bootstrap/head_sha в `WebIDEShell` + сидирование
+  фикстуры. В спеке зафиксирован явным `test.skip(true, reason)` — не маскировка.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: `alg:none`
+> в `frontend/e2e/**` = 0 hits; живой стенд `/ready` ok; live-login 200 (RS256, 652b). Пруф
+> прогона Flash: playwright **25 passed / 2 skipped / 0 failed** (login 4/4, notifications 17/17,
+> release-readiness 2/2, web-ide 2+1skip); build exit 0; vitest 81/81. Skips документированы
+> (degraded — by design; web-ide tree — FE↔BE дрейф → COS-179). Мелкий follow-up (не карточка):
+> второй seeded-юзер для раздельных inbox-тестов identity.
+
+---
+
+## ✅ DONE — WORKSPACE API REF-READONLY: TREE/FILE ПО ПРОИЗВОЛЬНОМУ COMMIT (FR-004 / PK-DIR-009)
+
+> **Источник:** PK-DIR-009 (2026-09-25) — FR-004 «Hub→IDE deep-link» финализирован Vector'ом.
+> Канон: ссылка несёт `commit={sha}` как authority (immutable snapshot); полный UX деградаций —
+> после IDE-карточки (Vector) и ref-readonly режима workspace API (Airlock).
+> Контракт: `D:\prettyk.io\void-core\friend-requests\004-hub-ide-deeplink-transport.response.md` §3, §7.
+>
+> **Дыра:** чтение workspace (tree/file) — CAS-only: `head_sha` обязателен и сверяется с головой
+> ветки; ветка уехала → 409. Произвольный (старый) коммит прочитать нельзя — а deep-link обязан
+> открывать snapshot finding'а.
+> **Почва уже есть:** compare/gate-scan ходят по произвольным ref (branch/tag/sha) через
+> resolve_ref + get_tree_by_sha — ref-режим для tree/file собирается на этих примитивах.
+>
+> **Владелец:** Luna (выдана 2026-09-25). **Приоритет:** P1 (зависимость FR-004 UX;
+> Hub может строить ссылки уже сейчас).
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-177** | Luna | 6-8h | P1 | FR-004 §7 / PK-DIR-009; IDE-карточка (Vector) — параллельно | ✅ DONE — ref-режим tree/file (snapshot по commit, ref wins), CAS без регрессий, live-smoke зелёный |
+
+#### COS-177 · Luna · Workspace API ref-readonly: tree/file по произвольному commit (immutable snapshot)
+
+> **Исполнено (Luna, 2026-09-25):** в тот же день после planning-захода. Результат и evidence —
+> worker report ниже; план/разбор — `docs/research/2026-09-25-cos-177-ref-readonly-plan.md`.
+
+> **Зачем:** Hub→IDE deep-link несёт `commit=sha` — IDE открывает файл на ревизии finding'а.
+> Сейчас чтение привязано к голове ветки (CAS): после движения ветки старый коммит отдаёт 409.
+> Нужен read-only ref-режим: tree/file по произвольному commit SHA без CAS-привязки к head.
+
+> **Scope:**
+> (1) Ручки чтения workspace (tree/file) получают ref-параметр (commit SHA, полный или
+>     ≥7-hex префикс): чтение идёт на этом коммите, сверка с головой ветки не выполняется
+>     (ref — authority, канон FR-004 §2). CAS-путь по `head_sha` сохраняется без изменений.
+> (2) Если заданы и ref, и head_sha — ref приоритетен, сверка head_sha не выполняется;
+>     ни 500, ни ложный 409.
+> (3) Честная деградация: несуществующий ref → typed 404, битый формат → 400, не 5xx.
+> (4) Read-only by construction: ref-режим не открывает write (draft/commit по-прежнему CAS-only).
+> (5) В file-ответе на ref-режиме `sha`/`base_blob_sha` — blob sha на этом коммите (не head).
+> (6) Контракт: OpenAPI реген (json==yaml==live); TS-типы Web IDE синхронизированы (Vector).
+> (7) Тесты: юнит (валидный commit / префикс / несуществующий / ref+head_sha / битый ref) +
+>     live-smoke: ветка уехала → tree/file по ref читаются (200), по head_sha — 409.
+
+> **Out of scope:** IDE-сторона (парсер commit/line, pristine-режим, notices — карточка Vector);
+> Hub URL-строитель и скрытие ссылки (HUB-018, Arbiter); write-путь и CAS-механика (не трогаем);
+> blame (отдельная BLOCKED-карточка).
+
+> **Acceptance:**
+> - После движения ветки GET tree/file по ref=<старый commit> → 200 с содержимым snapshot'а (не 409).
+> - GET по несуществующему ref → typed 404, битый ref → 400; не 5xx.
+> - CAS-путь (head_sha) не регрессирует: workspace-тесты + suite gate зелёные.
+> - OpenAPI содержит ref-параметр; json == yaml == live.
+> - Live-smoke: файл на старом коммите открывается (curl или Web IDE).
+
+> **Отчёт обратно:** форма ref-параметра и приоритет над head_sha; статусы деградаций;
+> live-smoke (коммит до/после движения ветки); реген OpenAPI; suite gate; блокеры.
+
+**Worker report (Luna, 2026-09-25, БЕЗ приёмки):**
+
+- **ref-параметр:** `ref` — query, optional, форма commit SHA (полный или ≥7-hex префикс);
+  отдельный guard `validate_ref` — 400 называет именно `ref` (не `head_sha`). Чтения
+  `/api/v1/repos/tree|file`.
+- **Приоритет над head_sha:** при заданном `ref` CAS-сверка не выполняется вообще —
+  `branch`/`head_sha` не требуются и игнорируются; `ref`+`head_sha` → ref wins (ни 500,
+  ни ложный 409). Без `ref` CAS-путь прежний: пара branch+head_sha обязательна (иначе 400
+  до forge), mismatch → 409. Оба CAS-параметра стали optional в контракте — это и есть
+  контрактная дельта ref-режима.
+- **Деградации:** несуществующий ref → **404** (не 5xx!), битый формат → **400**, префикс
+  резолвится. Найден и закрыт Gitea-квирк 1.22.6: `/commits?sha=<unknown>` отдаёт **500
+  "object does not exist"** (не 404) — `resolve_ref` нормализует его в `LookupError` (→ 404),
+  настоящие 500 не глотаются (отличаются по телу ответа).
+- **Read-only by construction:** write-DTO (commit/contents/draft/files/branches) `ref` не
+  принимают — инвариант закреплён тестом.
+- **Файл на ref:** `sha`/`baseBlobSha` = blob SHA коммита (не головы), содержимое snapshot'а.
+- **Механика (новых сетевых путей нет):** существующие примитивы COS-125 —
+  `resolve_ref` → `get_tree_by_sha` (tree), `read_file(ref=resolved)` (file).
+- **Тесты:** новый `tests/cosmo/test_workspace_ref_readonly.py` — **20 passed** (матрица
+  tree/file: валидный/префикс/несуществующий/битый/ref+head_sha/CAS-регресс + read-only
+  инвариант + Gitea-квирк-нормализация + OpenAPI json==yaml==live); live-класс — **7 passed**
+  opt-in. Регресс-сет workspace/openapi/forge/transfer — **637 passed / 0 failed** (по ходу
+  пойман и исправлен порядок валидации: 400 раньше forge-билда, чтобы 503 не подменял 400).
+- **Live-smoke (живой стенд, 2026-09-25):** реальный `git push` двух коммитов A→B («ветка
+  уехала»), домен+app-binding под живым RS256-логином (dev-минтинг стенд не принимает после
+  COS-157/175 — фикстура переведена на `POST /api/v1/auth/login`): tree по `ref=A` → **200**
+  (дерево v1), по `head_sha=A` → **409**, по `head_sha=B` → 200; file по `ref=A` → контент v1,
+  blob sha ≠ head; префикс A → 200; несуществующий ref → **404**; `ref`+stale `head_sha` → 200.
+  Прогон против пересобранного `cosmo-api:local` (live `/openapi.json` содержит `ref`).
+- **OpenAPI:** `docs/cosmo-openapi.{json,yaml}` регенерированы из живого `app.openapi()`
+  (153 пути / 205 схем — состав не менялся); дифф = ровно дельта параметров tree/file;
+  json == yaml == live (гвард `test_docs_equal_live_app_schema`). Формат регенерации
+  воспроизводим байт-в-байт.
+- **Suite gate:** **3546 passed / 23 skipped / 0 failed** (471s) — CAS-путь без регрессий.
+- **Не закрыто этой карточкой (не блокер):** FE Web IDE всё ещё ходит в tree/file без CAS-пары
+  и без `ref` (finding COS-176 Flash'а) — контракт теперь позволяет ref-only, FE-связка =
+  отдельный follow-up.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: focused
+> `test_workspace_ref_readonly.py` → **20 passed / 7 skipped** (live opt-in); OpenAPI yaml несёт
+> `ref` на tree и file (2 совпадения); стенд `/ready` ok, live-login 200. Live-smoke Luna:
+> push A→B → tree/file по `ref=A` 200, `head_sha=A` 409, `ref`+stale `head_sha` 200,
+> несуществующий 404; blob sha ≠ head. Suite gate 3546/23/0.
+
+---
+
+## ⬜ READY — FOLLOW-UPS: OPENBAO PERSISTENCE + FE WORKSPACE BOOTSTRAP (COS-176/177)
+
+> **Источник:** приёмки COS-176 (Flash) и COS-177 (Luna), 25.09.2026. Обе — из вскрытых
+> живых фактов: (1) рестарт dev-mode OpenBao сносит AppRole+секреты → ручное восстановление
+> живого стенда; (2) FE Web IDE не передаёт CAS/ref → дерево не грузится (дрейф FE↔BE).
+>
+> **Владелец:** не назначен — диспетч по решению Максима.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-178** | не выдан | 4-8h | P1 | COS-173/175 (приняты) | ⬜ READY |
+| **COS-179** | не выдан | 4-6h | P1 | COS-177 (принят) | ⬜ READY |
+
+#### COS-178 · Инфра: OpenBao persistence — переживание рестарта (dev-mode in-memory)
+
+> **Зачем:** 25.09.2026 живой login отдавал 500 — платформенный `prettyk-openbao` (dev-mode,
+> in-memory storage) рестартнул и потерял AppRole `cosmo-app` + `secret/cosmo/*`; cosmo-api
+> держал полу-инициализированный vault-клиент. Восстановлено вручную по канону COS-173, но
+> следующий рестарт снова всё снесёт (volume не помогает). Любой рестарт = ручное восстановление.
+
+> **Scope:**
+> (1) Платформенный OpenBao переводится на persistent storage backend (file/raft) — AppRole и
+>     `secret/cosmo/*` переживают рестарт контейнера/хоста.
+> (2) Unseal: механика (авто/ручная процедура), поведение cosmo-api в sealed-состоянии —
+>     честный 503, не 500 (startup не должен глотать ошибку vault-клиента).
+> (3) Миграция текущих секретов в persistent backend; повторный seed → PRESERVED.
+> (4) Compose/volume канон + процедура recovery в `SECURITY_MAINTENANCE.md`.
+> (5) Смоук: рестарт `prettyk-openbao` → login/JWKS 200 без ручных шагов.
+
+> **Out of scope:** схема секретов (COS-173/174 приняты); HA-кластер; ротация.
+
+> **Acceptance:**
+> - Рестарт контейнера → AppRole + `secret/cosmo/*` на месте; login/JWKS 200 без ручных шагов.
+> - Sealed → cosmo-api отвечает честным 503 (не 500).
+> - Recovery/unseal задокументированы; повторный seed → PRESERVED.
+
+> **Отчёт обратно:** backend и почему; unseal-механика; миграция; смоук рестарта; доки; блокеры.
+
+#### COS-179 · FE Web IDE: workspace bootstrap + CAS/ref в tree/file (FE↔BE дрейф)
+
+> **Зачем:** Web IDE ходит в `/api/v1/repos/tree|file` без CAS-пары (`branch`+`head_sha`) и без
+> нового `ref` → живой бэкенд 400, дерево пустое (finding приёмки COS-158/176, подтверждён Luna
+> в COS-177). Плюс фикстура `payments/api` не засеяна (Gitea: только `fc-live/*`, binding нет).
+
+> **Scope:**
+> (1) `WebIDEShell` делает workspace bootstrap (repo+branch → head_sha) и передаёт CAS-пару в
+>     tree/file; при commit в deep-link — `ref`-режим (COS-177).
+> (2) Честные деградации: нет bootstrap/сессии → видимое состояние, не молча пустое дерево.
+> (3) Фикстура живого стенда: `payments/api` в Gitea + app-binding в PG (или задокументированный само-сид).
+> (4) e2e web-ide tree-тест: разскипан и зелёный против живого стенда.
+> (5) TS-типы синхронны с OpenAPI (`ref` уже в контракте).
+
+> **Out of scope:** BE ref-режим (COS-177 принят); IDE-карточка Vector (deep-link парсер/notices); auth.
+
+> **Acceptance:**
+> - Живой стенд: Web IDE открывает дерево/файл (bootstrap → CAS), без 400.
+> - ref-путь FE: передача `ref` при наличии commit (совместный smoke с IDE-стороной — когда готова).
+> - e2e web-ide tree-тест зелёный; vitest/tsc/build зелёные.
+
+> **Отчёт обратно:** как встроен bootstrap; параметры; фикстура; e2e-числа; блокеры.
