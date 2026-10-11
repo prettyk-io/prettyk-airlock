@@ -66,6 +66,32 @@ $e2eExit = $LASTEXITCODE
 $sw.Stop()
 
 # ═══════════════════════════════════════════════════════════════════════
+# Phase 1b: Woodpecker run-log chunks (COS-188) — self-skip при оффлайн-стенде
+# ═══════════════════════════════════════════════════════════════════════
+
+$chunksFailed = $false
+$chunksScript = Join-Path $ScriptRoot "smoke-woodpecker-chunks.py"
+$chunksPy = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $chunksPy)) { $chunksPy = "python" }
+
+Write-Host ""
+Write-Host "=== Woodpecker run-log chunks (COS-188) ===" -ForegroundColor Cyan
+if (Test-Path $chunksScript) {
+    # native stderr + EAP=Stop = ложный terminating error (COS-064 урок).
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $chunksPy $chunksScript
+        $chunksCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($chunksCode -eq 1) { $chunksFailed = $true }
+} else {
+    Write-Host "  SKIP: $chunksScript not found" -ForegroundColor Yellow
+}
+
+# ═══════════════════════════════════════════════════════════════════════
 # Phase 2: Report
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -153,4 +179,4 @@ if (-not $SkipStart -and -not $KeepAlive -and $ApiPid) {
     Write-Host "  stopped" -ForegroundColor Green
 }
 
-exit $(if ($report.success) { 0 } else { 1 })
+exit $(if ($report.success -and (-not $chunksFailed)) { 0 } else { 1 })

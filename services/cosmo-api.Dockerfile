@@ -13,20 +13,25 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# ── Scanner tools: trivy + syft (COS-171/172, digest-pinned) ──────────
+# ── Scanner tools: trivy + syft + grype (COS-171/172/183, digest-pinned) ─
 #
 # Сканеры устанавливаются ЕДИНСТВЕННО на этапе сборки образа (никакой сети
 # в runtime). Каждый тарбол проверяется по sha256 перед распаковкой — подмена
 # релиза ловится на сборке, а не на проде.
 #
-# TRIVY_CACHE_DIR — единый во всех трёх точках (правило Boss'а #2):
-#   --download-db-only --cache-dir (build) == ENV == volume в compose.
+# TRIVY_CACHE_DIR / GRYPE_DB_CACHE_DIR — единый во всех трёх точках
+# (правило Boss'а #2): download (build) == ENV == volume в compose.
 ARG TRIVY_VERSION=0.74.0
 ARG TRIVY_SHA256=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
 ARG SYFT_VERSION=1.20.0
 ARG SYFT_SHA256=689e12c5cbf67521ce61b9c126068f9eaabe1223e77971b2fede50033ff6b5cc
+ARG GRYPE_VERSION=0.119.0
+ARG GRYPE_SHA256=3fa2dc4b924621ab65404cf08d0b8438d896d80ab949c9d5a4ca283c36004c9b
+# grype DB (~2.9GB unpacked) держим в образе ТОЛЬКО как seed-tar; распакованную
+# копию удаляем (entrypoint засеет её в volume) — иначе образ пухнет на ~3GB.
 
-ENV TRIVY_CACHE_DIR=/var/lib/trivy
+ENV TRIVY_CACHE_DIR=/var/lib/trivy \
+    GRYPE_DB_CACHE_DIR=/var/lib/grype
 
 RUN set -eux \
  && apt-get update \
@@ -37,12 +42,19 @@ RUN set -eux \
  && curl -fsSL "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" -o /tmp/syft.tgz \
  && echo "${SYFT_SHA256}  /tmp/syft.tgz" | sha256sum -c - \
  && tar -xzf /tmp/syft.tgz -C /usr/local/bin syft \
- && chmod +x /usr/local/bin/trivy /usr/local/bin/syft \
- && rm -f /tmp/trivy.tgz /tmp/syft.tgz \
+ && curl -fsSL "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz" -o /tmp/grype.tgz \
+ && echo "${GRYPE_SHA256}  /tmp/grype.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/grype.tgz -C /usr/local/bin grype \
+ && chmod +x /usr/local/bin/trivy /usr/local/bin/syft /usr/local/bin/grype \
+ && rm -f /tmp/trivy.tgz /tmp/syft.tgz /tmp/grype.tgz \
  && trivy image --download-db-only --cache-dir "${TRIVY_CACHE_DIR}" \
+ && grype db update \
  && mkdir -p /opt \
  && tar -czf /opt/trivy-db-seed.tar.gz -C "${TRIVY_CACHE_DIR}" . \
+ && tar -czf /opt/grype-db-seed.tar.gz -C "${GRYPE_DB_CACHE_DIR}" . \
+ && rm -rf "${GRYPE_DB_CACHE_DIR}" \
  && trivy --version \
+ && grype --version \
  && syft version | head -1
 
 # ── Dependencies layer (cacheable) ────────────────────────────────────

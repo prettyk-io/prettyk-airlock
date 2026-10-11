@@ -1,0 +1,53 @@
+# COS-195 (PK-C-010): dev-профиль — исходники монтируются в контейнеры.
+#
+# Назначение: правка кода НЕ порождает пересборку образа и НЕ плодит <none>.
+#   cosmo-api      — uvicorn --reload по host-монтированию ../orchestrator
+#                    (entrypoint включает reload при COSMO_DEV_RELOAD=1).
+#   cosmo-frontend — Vite dev-сервер (HMR) с host-монтированием ../frontend;
+#                    /api проксируется на cosmo-api:8100 (VITE_API_PROXY).
+#
+# Использование (ПОВЕРХ основного compose; порядок -f важен):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   или: .\services\scripts\cosmo-start.ps1 -Dev [-Full]
+#
+# Release/CI этот файл НЕ используют: релиз — immutable-теги (build-release.ps1).
+#
+# Пересборка нужна ТОЛЬКО при смене Dockerfile / requirements.txt / entrypoint.sh.
+
+services:
+  cosmo-api:
+    volumes:
+      # Исходники с хоста поверх baked-копии образа: правка = reload, не rebuild.
+      # (rw: python пишет __pycache__ — gitignored; проверено.)
+      - ../orchestrator:/app/orchestrator
+      - ../alembic:/app/alembic
+      - ../alembic.ini:/app/alembic.ini
+    environment:
+      # entrypoint.sh: uvicorn --reload --reload-dir /app/orchestrator
+      COSMO_DEV_RELOAD: "1"
+
+  cosmo-frontend:
+    # Dev-сервер вместо baked-nginx: node:22-alpine + Vite HMR.
+    # Vite слушает :80 ВНУТРИ контейнера — канонический Caddy-апстрим
+    # (cosmo-frontend:80) остаётся рабочим; host-порт 5174 прежний.
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm ci --no-audit --no-fund && npm run dev -- --port 80"
+    environment:
+      # vite.config.ts: /api -> cosmo-api:8100 (внутри cosmo-net, НЕ 127.0.0.1).
+      VITE_API_PROXY: "http://cosmo-api:8100"
+    volumes:
+      - ../frontend:/app
+      # Linux node_modules в volume: host-модули (Windows-бинарники) не тащим.
+      - cosmo_frontend_node_modules:/app/node_modules
+    # !override: nginx-healthcheck (curl) -> wget для node-образа; порт :80.
+    healthcheck: !override
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      # npm ci на первом старте (named volume пуст) — до ~2 мин.
+      start_period: 120s
+
+volumes:
+  cosmo_frontend_node_modules:

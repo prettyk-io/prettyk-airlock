@@ -1,20 +1,23 @@
 # PrettyK Platform — OpenBao standalone (dev-контур)
 #
-# Канон: D:\prettyk.io\nexus-core\OPENBAO-PLATFORM.md (§4 dev-топология).
+# Канон: D:\prettyk.io\void-core\OPENBAO-PLATFORM.md (§4 dev-топология).
 # Один shared OpenBao на платформу; per-product инстансы запрещены.
 # Container: prettyk-openbao · Network: pk-infra (external) · Volume: prettyk_openbao.
 #
+# COS-178: persistent storage (raft) + static auto-unseal — AppRole cosmo-app
+# и secret/cosmo/* переживают рестарт контейнера/хоста без ручных шагов.
+# Unseal key (32 байта) — файл ВНЕ git: services/.openbao/unseal.key
+# (создаётся и поддерживается services/scripts/openbao-bootstrap.ps1).
+#
 # Порт 8200 — только localhost (127.0.0.1), для диагностики и GUI; наружу не публикуется.
-# AppRole cosmo-app (rw secret/cosmo/*) конфигурируется bootstrap-скриптом
-# (services/scripts/openbao-bootstrap.ps1); role-id/secret-id — в services/.env (gitignored).
 #
 # Запуск:
 #   docker network create pk-infra   # один раз
-#   docker compose -f services/docker-compose.openbao.yml up -d
+#   powershell -File services/scripts/openbao-bootstrap.ps1   # up + init + AppRole + seed
 
 services:
   openbao:
-    image: openbao/openbao:2.2
+    image: openbao/openbao:2.6.3
     container_name: prettyk-openbao
     restart: unless-stopped
     ports:
@@ -22,16 +25,17 @@ services:
     cap_add:
       - IPC_LOCK
     environment:
-      # Dev mode: unsealed with generated root token (bootstrap only).
-      # 2.2.2 игнорирует VAULT_DEV_ROOT_TOKEN_ID — реальный token из docker logs.
-      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-      VAULT_ADDR: http://0.0.0.0:8200
+      # CLI/healthcheck внутри контейнера: listener — plain HTTP на 0.0.0.0:8200.
+      BAO_ADDR: http://127.0.0.1:8200
     volumes:
-      - prettyk_openbao:/vault/data
+      - prettyk_openbao:/openbao/file
+      - ./openbao:/openbao/config:ro
+      - ./.openbao:/openbao/secrets:ro
+    command: ["server", "-config=/openbao/config/openbao.hcl"]
     networks:
       - pk-infra
     healthcheck:
-      test: ["CMD", "vault", "status"]
+      test: ["CMD", "bao", "status"]
       interval: 10s
       timeout: 3s
       retries: 5

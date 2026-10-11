@@ -10,8 +10,11 @@ x-registry-common: &registry-common
   networks:
     - cosmo-net
 
+# COS-199: distribution:3.1.0 — alpine/busybox-образ (curl отсутствует).
+# Проба обязана использовать доступный busybox-wget, иначе ложный unhealthy
+# при фактически работающем registry (проверено: /v2/ = 200, wget rc=0).
 x-registry-health: &registry-health
-  test: ["CMD", "curl", "-sf", "http://localhost:5000/v2/"]
+  test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5000/v2/"]
   interval: 15s
   timeout: 5s
   retries: 3

@@ -106,9 +106,12 @@ services:
       # COS-063: skip install wizard, activate /api/v1 (healthcheck depends on it).
       # Admin user created idempotently in cosmo-start.ps1 (dev creds via .env, rotate for prod).
       GITEA__security__INSTALL_LOCK: "true"
+      # COS-188: clone-URL должен резолвиться из контейнеров контура
+      # (woodpecker-agent клонирует из cosmo-net; localhost:3000 изнутри
+      # контейнера — сам агент, не Gitea). Хостовый UI остаётся на :3100.
+      GITEA__server__ROOT_URL: http://cosmo-gitea:3000
       # COS-096: default ALLOWED_HOST_LIST=external blocks RFC-private hosts,
-      # включая cosmo-api:8100 — webhook'и на ПУ молча не доставляются.
-      # private = docker-сеть; для prod сузить до явного CIDR при freeze.
+      # пишущий cosmo-api:8100 и webhook'и на них не проходят; private = docker-сеть.
       GITEA__webhook__ALLOWED_HOST_LIST: "private"
     volumes:
       - cosmo_gitea:/data
@@ -165,6 +168,9 @@ services:
       WOODPECKER_SERVER: passthrough:///cosmo-woodpecker:9000
       WOODPECKER_AGENT_SECRET: ${COSMO_WOODPECKER_AGENT_SECRET:-dev-agent-secret-change-me}
       WOODPECKER_MAX_WORKFLOWS: "4"
+      # COS-188: шаговые контейнеры — в сети контура, иначе clone-plugin не
+      # резолвит cosmo-gitea ('Could not resolve host', exit 128).
+      WOODPECKER_BACKEND_DOCKER_NETWORK: "cosmo-net"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # COS-063: deliberately NO persisted agent.conf — after server DB wipe the
@@ -182,7 +188,7 @@ services:
     build:
       context: ..
       dockerfile: services/cosmo-api.Dockerfile
-    image: cosmo-api:local
+    image: cosmo-api:${COSMO_API_TAG:-local}
     container_name: cosmo-api
     restart: unless-stopped
     ports:
@@ -199,12 +205,20 @@ services:
       PK_GITEA_WEBHOOK_SECRET: ${COSMO_GITEA_WEBHOOK_SECRET:-dev-webhook-secret-change-me}
       PK_PUBLIC_API_URL: ${COSMO_PUBLIC_API_URL:-http://cosmo-api:8100}
       PK_WOODPECKER_URL: http://cosmo-woodpecker:8000
+      # SAST-STEP-1: живой execution-контур (run → batch → Woodpecker submit →
+      # evidence/capture hooks). Opt-in по дизайну COS-097; на стенде нужен
+      # для live-прогонов source-SAST (seed-sast-fixture.py). Выключить: убрать строку.
+      COSMO_EXECUTOR_ENABLED: "1"
+      # COS-188: WP API-токен (JWT, выпускает seed-woodpecker-fixture.py в .env) —
+      # SSE-логи прогонов и opt-in executor ходят в Woodpecker авторизованно.
+      COSMO_WOODPECKER_TOKEN: ${COSMO_WOODPECKER_TOKEN:-}
       PK_MINIO_URL: http://cosmo-minio:9000
       PK_MINIO_ACCESS_KEY: ${COSMO_MINIO_USER:-cosmo}
       PK_MINIO_SECRET_KEY: ${COSMO_MINIO_PASSWORD:-cosmo-minio-dev}
-      # COS-171/172: scanner tools (trivy/syft) + точечный insecure-allow.
-      # TRIVY_CACHE_DIR единый: build --cache-dir == ENV == volume ниже.
+      # COS-171/172/183: scanner tools (trivy/syft/grype) + точечный insecure-allow.
+      # TRIVY_CACHE_DIR / GRYPE_DB_CACHE_DIR — единые: build == ENV == volume ниже.
       TRIVY_CACHE_DIR: /var/lib/trivy
+      GRYPE_DB_CACHE_DIR: /var/lib/grype
       # Insecure ТОЛЬКО через allowlist (registry_policy). Никакого глобального
       # TRIVY_INSECURE / SYFT_REGISTRY_INSECURE_USE_HTTP.
       INSECURE_REGISTRY_HOSTS: cosmo-registry-zr:5000
@@ -216,8 +230,9 @@ services:
       VAULT_APPROLE_ROLE_ID: ${VAULT_APPROLE_ROLE_ID:-}
       VAULT_APPROLE_SECRET_ID: ${VAULT_APPROLE_SECRET_ID:-}
     volumes:
-      # Офлайн trivy DB: seed из образа при первом старте (entrypoint).
+      # Офлайн DB сканеров: seed из образа при первом старте (entrypoint).
       - cosmo_trivy_cache:${TRIVY_CACHE_DIR:-/var/lib/trivy}
+      - cosmo_grype_cache:${GRYPE_DB_CACHE_DIR:-/var/lib/grype}
     networks:
       - default
       - pk-infra
@@ -237,7 +252,7 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-    image: cosmo-frontend:local
+    image: cosmo-frontend:${COSMO_FRONTEND_TAG:-local}
     container_name: cosmo-frontend
     restart: unless-stopped
     ports:
@@ -284,6 +299,40 @@ services:
       retries: 5
       start_period: 10s
 
+  # -- PTY sandbox (COS-189 §4-5 / PTY-SANDBOX-1; default-off profile "pty") --
+  # Ephemeral-контейнер на сессию: владеет docker.sock, создаёт изолированные
+  # сессии (allowlist-инструменты, network none, ro-rootfs, лимиты, TTL).
+  # Без `--profile pty` сервис не поднимается и стенд не затрагивается.
+  pty-sandbox:
+    profiles: ["pty"]
+    build:
+      context: ./pty-sandbox/service
+      dockerfile: Dockerfile
+    image: cosmo-pty-sandbox:local
+    container_name: pty-sandbox
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8190:8190"
+    environment:
+      PTY_SANDBOX_IMAGE: "pty-sandbox-base:local"
+      PTY_SANDBOX_IDLE_TTL_S: "900"
+      PTY_SANDBOX_HARD_TTL_S: "3600"
+      PTY_SANDBOX_MAX_SESSIONS: "4"
+      PTY_SANDBOX_AUDIT_LOG: "/var/log/pty-sandbox/audit.jsonl"
+      PTY_SANDBOX_MAX_DELIVERY_MB: "${PTY_SANDBOX_MAX_DELIVERY_MB:-32}"
+      PTY_SANDBOX_MAX_DELIVERY_FILES: "${PTY_SANDBOX_MAX_DELIVERY_FILES:-2000}"
+      PTY_SANDBOX_MAX_UNPACKED_MB: "${PTY_SANDBOX_MAX_UNPACKED_MB:-48}"
+      PTY_SANDBOX_DEBUG: "${PTY_SANDBOX_DEBUG:-0}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - pty_sandbox_audit:/var/log/pty-sandbox
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8190/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 # в”Ђв”Ђ Volumes в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 volumes:
@@ -295,6 +344,8 @@ volumes:
   cosmo_caddy_data:
   cosmo_caddy_config:
   cosmo_trivy_cache:
+  cosmo_grype_cache:
+  pty_sandbox_audit:
 
 # в”Ђв”Ђ Network в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 

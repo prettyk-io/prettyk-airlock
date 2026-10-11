@@ -25,6 +25,18 @@ if [ ! -d "$TRIVY_CACHE_DIR/db" ] || [ -z "$(ls -A "$TRIVY_CACHE_DIR/db" 2>/dev/
     fi
 fi
 
+# COS-183: seed grype offline DB (по образцу trivy, COS-171/172).
+GRYPE_DB_CACHE_DIR="${GRYPE_DB_CACHE_DIR:-/var/lib/grype}"
+if [ -z "$(ls -A "$GRYPE_DB_CACHE_DIR" 2>/dev/null)" ]; then
+    if [ -f /opt/grype-db-seed.tar.gz ]; then
+        echo "[entrypoint] Seeding grype offline DB -> ${GRYPE_DB_CACHE_DIR}"
+        mkdir -p "$GRYPE_DB_CACHE_DIR"
+        tar -xzf /opt/grype-db-seed.tar.gz -C "$GRYPE_DB_CACHE_DIR"
+    else
+        echo "[entrypoint] WARN: no grype DB seed and DB absent (grype will be 'unavailable')"
+    fi
+fi
+
 echo "[entrypoint] Checking DB state..."
 DB_STATE=$(python - <<'PYEOF'
 import os
@@ -68,4 +80,11 @@ case "$DB_STATE" in
 esac
 
 echo "[entrypoint] Starting Cosmo API..."
+# COS-195 (PK-C-010): dev-профиль (docker-compose.dev.yml) монтирует исходники
+# и включает hot-reload. Release/CI работают без COSMO_DEV_RELOAD.
+if [ "${COSMO_DEV_RELOAD:-0}" = "1" ]; then
+    echo "[entrypoint] COSMO_DEV_RELOAD=1 -> uvicorn --reload (dev profile)"
+    exec uvicorn orchestrator.cosmo.api.main:app --host 0.0.0.0 --port 8100 \
+        --reload --reload-dir /app/orchestrator
+fi
 exec uvicorn orchestrator.cosmo.api.main:app --host 0.0.0.0 --port 8100

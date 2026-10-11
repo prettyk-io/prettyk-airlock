@@ -1,0 +1,79 @@
+# SAST-STAND-4: SonarQube CE — source-SAST-хост стенда Airlock (SAST-эпик).
+#
+# Зеркало compose-канона Keeper (prettyk-secops/services/docker-compose.sonarqube.yml):
+# CE + PostgreSQL, UI :9000, СВОЯ сеть (cosmo-net не трогаем; pk-net запрещён каноном).
+#
+# Опциональный профиль стенда: это ОТДЕЛЬНЫЙ compose-файл — обычный `up`
+# (cosmo-start.ps1 / docker-compose.yml) его НЕ поднимает. Канон companion-файлов:
+# openbao / registry / test-pg.
+#
+#   Запуск:  docker compose -f services/docker-compose.sonarqube.yml up -d
+#   Первый boot: 2-5 мин, затем http://127.0.0.1:9000/ (admin/admin, dev).
+#   Стоп:    docker compose -f services/docker-compose.sonarqube.yml down
+#            (volumes сохраняются)
+#
+# Токен сканера сидируется в OpenBao (secret/cosmo/sast), не в plaintext:
+#   python services/scripts/seed-sonar-stand.py
+#
+# Ресурсы: ~4 GB (WSL2-бюджет; mem_reservation 2 GB).
+# Канон-доки: services/scripts/SECURITY_MAINTENANCE.md §2.6.
+
+services:
+  sonarqube:
+    image: sonarqube:community
+    container_name: cosmo-sonarqube
+    # SAST-MEM: WSL2 16GB — CE получает 4GB (зеркало канона Keeper).
+    mem_limit: 4096m
+    mem_reservation: 2048m
+    depends_on:
+      sonarqube-db:
+        condition: service_healthy
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonarqube-db:5432/sonar
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: sonar
+      # Docker Desktop / WSL2: bootstrap check Elasticsearch иногда падает на vm.max_map_count.
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    volumes:
+      - cosmo_sonarqube_data:/opt/sonarqube/data
+      - cosmo_sonarqube_extensions:/opt/sonarqube/extensions
+      - cosmo_sonarqube_logs:/opt/sonarqube/logs
+      - cosmo_sonarqube_temp:/opt/sonarqube/temp
+    ports:
+      - "${SONAR_PORT:-9000}:9000"
+    networks:
+      - sonar-net
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
+
+  sonarqube-db:
+    image: postgres:16-alpine
+    container_name: cosmo-sonarqube-db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: sonar
+      POSTGRES_DB: sonar
+    volumes:
+      - cosmo_sonarqube_postgres:/var/lib/postgresql/data
+    networks:
+      - sonar-net
+    restart: unless-stopped
+
+volumes:
+  cosmo_sonarqube_data:
+  cosmo_sonarqube_extensions:
+  cosmo_sonarqube_logs:
+  cosmo_sonarqube_temp:
+  cosmo_sonarqube_postgres:
+
+networks:
+  sonar-net:
+    name: cosmo-sonar-net

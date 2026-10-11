@@ -1,0 +1,23 @@
+#!/bin/sh
+# PTY-SANDBOX-1: allowlist-энтрипоинт сессии.
+#
+# Сессия стартует ТОЛЬКО объявленный инструмент из /etc/sandbox/allowlist;
+# свободный shell недоступен (sh в allowlist не входит, логин-шелл = nologin).
+# Это второй рубеж: первый — валидация tool в sandbox-сервисе (аудит deny).
+set -eu
+
+ALLOWLIST_FILE="${SANDBOX_ALLOWLIST_FILE:-/etc/sandbox/allowlist}"
+
+tool="${1:-}"
+if [ -z "$tool" ]; then
+    echo "sandbox: no tool requested (allowlist entrypoint)" >&2
+    exit 64
+fi
+shift
+
+if ! grep -qxF -- "$tool" "$ALLOWLIST_FILE"; then
+    echo "sandbox: tool '$tool' is not in allowlist" >&2
+    exit 77
+fi
+
+exec "$tool" "$@"

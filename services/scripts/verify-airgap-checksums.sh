@@ -11,6 +11,10 @@
 #   3. both: оба режима
 #        verify-airgap-checksums.sh /path/to/bundle --loaded
 #
+# COS-195 (PK-C-010): cosmo-api/cosmo-frontend — immutable-теги (git-<sha>).
+# Bundle-mode сверяет их по manifest.json; running-mode берёт все загруженные
+# теги cosmo-* динамически (имена не статичны).
+#
 # Для каждого образа сверяет:
 #   - digest из manifest.json (эталон)
 #   - фактический digest из docker image inspect (loaded)
@@ -194,7 +198,7 @@ fi
 if [ "$CHECK_LOADED" = true ]; then
     echo "[loaded] Checking Docker image integrity..."
 
-    # Список всех образов Cosmo (из compose + build)
+    # Внешние образы (pull)
     ALL_IMAGES=(
         "postgres:16-alpine"
         "valkey/valkey:8-alpine"
@@ -204,9 +208,19 @@ if [ "$CHECK_LOADED" = true ]; then
         "woodpeckerci/woodpecker-server:v3.5"
         "woodpeckerci/woodpecker-agent:v3.5"
         "caddy:2.9-alpine"
-        "cosmo-api:local"
-        "cosmo-frontend:local"
     )
+
+    # COS-195 (PK-C-010): build-образы Cosmo носят immutable-теги (git-<sha>) —
+    # имена не статичны; берём все загруженные теги cosmo-api/cosmo-frontend.
+    COSMO_LOADED=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+        | grep -E '^cosmo-(api|frontend):' || true)
+    if [ -z "$COSMO_LOADED" ]; then
+        echo "  WARN: cosmo-api/cosmo-frontend не загружены (bundle-режим: verify-airgap-checksums.sh <bundle> --loaded)"
+    else
+        while IFS= read -r img; do
+            ALL_IMAGES+=("$img")
+        done <<< "$COSMO_LOADED"
+    fi
 
     echo ""
     for IMG in "${ALL_IMAGES[@]}"; do

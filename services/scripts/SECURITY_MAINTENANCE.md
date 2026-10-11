@@ -105,6 +105,93 @@ docker compose up -d cosmo-api cosmo-gitea cosmo-woodpecker
 Invoke-BaoWrite -Path "database" -Key "password" -Value $oldPgPassword
 ```
 
+### 2.5. OpenBao: storage backend, auto-unseal и recovery (COS-178)
+
+> **Что изменилось:** платформенный `prettyk-openbao` переведён с dev-режима
+> (in-memory: рестарт сносил AppRole + `secret/cosmo/*`) на **persistent storage
+> `raft`** + **static auto-unseal**. Любой рестарт контейнера/хоста больше не
+> требует ручного восстановления.
+
+**Артефакты (все gitignored):**
+
+| Что | Где | Примечание |
+|---|---|---|
+| Unseal key (32 байта) | `services/.openbao/unseal.key` | static auto-unseal; вне git; при потере — re-bootstrap |
+| Init material (root token + recovery key) | `services/.openbao/init.json` | root token — только для bootstrap/recovery (канон §3) |
+| Данные (raft) | docker volume `prettyk_openbao` | переживает рестарт контейнера и хоста |
+| Конфиг | `services/openbao/openbao.hcl` | raft + seal static + listener |
+| Bootstrap-скрипт | `services/scripts/openbao-bootstrap.ps1` | идемпотентен: up → init → AppRole → seed |
+
+**Штатный рестарт (ручных шагов не требуется):**
+
+```powershell
+docker restart prettyk-openbao
+# ~15s: static auto-unseal поднимает сервер сам
+docker exec -e BAO_ADDR=http://127.0.0.1:8200 prettyk-openbao bao status   # Sealed=false
+curl http://localhost:8100/.well-known/jwks.json                          # 200
+```
+
+**Sealed-поведение:** пока vault запечатан, `cosmo-api` отвечает **честным 503**
+(login/JWKS; не 500). Восстановление — рестарт контейнера (auto-unseal) либо
+`bao operator unseal` недоступен по дизайну static seal — seal снимается
+только ключом конфига.
+
+**Полный re-bootstrap (потеря unseal key или желаемый сброс):**
+
+```powershell
+docker rm -f prettyk-openbao
+docker volume rm prettyk_openbao          # ВНИМАНИЕ: уничтожает все секреты
+Remove-Item -Recurse services\.openbao    # unseal key + init material
+.\services\scripts\openbao-bootstrap.ps1  # с нуля: init → AppRole → seed
+docker compose -f services/docker-compose.yml up -d cosmo-api
+```
+
+**Ротация AppRole secret-id (канон §3: при каждом деплое):**
+
+```powershell
+.\services\scripts\openbao-bootstrap.ps1 -RotateSecretId
+docker compose -f services/docker-compose.yml up -d cosmo-api   # подхватить новый secret-id
+```
+
+**Recovery при потере root token** (vault инициализирован, `init.json` утерян):
+recovery key из офлайн-копии → `bao operator generate-root` (recovery-процедура
+OpenBao); если recovery key тоже утерян — полный re-bootstrap с потерей секретов.
+
+**Бэкап (план, канон §7):** raft snapshot — `bao operator raft snapshot save`;
+в dev-контуре — по потребности; в prod — ежедневный snapshot в S3/MinIO.
+
+**Прод-профиль:** KMS/HSM auto-unseal (или Shamir 5/3 с офлайн-носителем);
+static seal — только dev-контур.
+
+### 2.6. SonarQube CE: сервис стенда + токен сканера (SAST-STAND-4)
+
+Source-SAST-хост стенда Airlock (SAST-эпик, канон `docs/research/2026-09-25-cos-190-source-sast-design.md`):
+SonarQube Community + PostgreSQL, UI `:9000`, **своя сеть** `cosmo-sonar-net`
+(`cosmo-net`/`pk-net` не трогаются). Опциональный профиль — отдельный compose-файл
+(обычный `up` стенда его не поднимает; канон companion-файлов: openbao/registry/test-pg).
+
+```powershell
+# Поднять (первый boot 2-5 мин, ~4 GB; WSL2-бюджет учтён)
+docker compose -f services/docker-compose.sonarqube.yml up -d
+
+# Идемпотентный сид: токен сканера → OpenBao, проект owner__repo, профили PrettyK
+# (AppRole из services/.env; повторный запуск → PRESERVED)
+python services/scripts/seed-sonar-stand.py
+
+# Погасить (volumes сохраняются)
+docker compose -f services/docker-compose.sonarqube.yml down
+```
+
+- **Токен сканера** (`prettyk-airlock`) — ТОЛЬКО в OpenBao `secret/cosmo/sast` (kv-v2,
+  AppRole `cosmo-app`); в репо/логах — маска (`squ_xx...`). Сид сам валидирует токен из
+  секретницы и перевыпускает невалидный (revoke+generate); ручная ротация — снять токен в UI
+  и повторить сид.
+- **UI-доступ (dev):** `admin` / `COSMO_SONAR_ADMIN_PASSWORD` (default `admin`);
+  в prod — свои креды через секретницу.
+- **Конвенция projectKey v1:** `owner__repo` (CE без branch-analysis; branch-ключи — при плагине).
+- **Границы:** кирпич/ингейт/гейт source-SAST — карточки SAST-эпика (STEP-1 → INGEST-2 → GATE-3);
+  этот сервис — только хост.
+
 ---
 
 ## 3. Верификация целостности airgap-бандла

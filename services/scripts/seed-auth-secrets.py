@@ -31,6 +31,9 @@ Env (AppRole; совпадает с энв cosmo-api в docker-compose.yml):
   VAULT_APPROLE_SECRET_ID
   COSMO_AUTH_ADMIN_EMAIL   (default admin@cosmoport.local)
   COSMO_AUTH_ADMIN_PASSWORD(default cosmo-admin-dev — ТОЛЬКО dev-контур)
+  COSMO_AUTH_VIEWER_EMAIL  (default viewer@cosmoport.local — COS-187)
+  COSMO_AUTH_VIEWER_PASSWORD(default cosmo-viewer-dev — ТОЛЬКО dev-контур)
+  COSMO_AUTH_VIEWER_SUB    (default viewer)
 """
 from __future__ import annotations
 
@@ -56,6 +59,11 @@ DEFAULT_EMAIL = "admin@cosmoport.local"
 DEFAULT_PASSWORD = "cosmo-admin-dev"  # dev-контур; prod — через env/оператора
 DEFAULT_SUB = "admin"
 DEFAULT_ROLES = ["admin_sec"]
+# COS-187: второй seeded-пользователь (отдельный principal; inbox-разделение e2e).
+DEFAULT_VIEWER_EMAIL = "viewer@cosmoport.local"
+DEFAULT_VIEWER_PASSWORD = "cosmo-viewer-dev"  # dev-контур
+DEFAULT_VIEWER_SUB = "viewer"
+DEFAULT_VIEWER_ROLES = ["user"]
 DEFAULT_ISSUERS = ["cosmoport"]
 DEFAULT_AUDIENCE = "cosmo-api"
 
@@ -182,17 +190,55 @@ def main() -> int:
 
         cur_hash = hash_password(password)
 
+    # ── COS-187: второй seeded-пользователь (отдельный principal/inbox) ──
+    viewer_email = os.getenv("COSMO_AUTH_VIEWER_EMAIL", DEFAULT_VIEWER_EMAIL).strip()
+    viewer_sub = os.getenv("COSMO_AUTH_VIEWER_SUB", DEFAULT_VIEWER_SUB).strip()
+    viewer_password = os.getenv("COSMO_AUTH_VIEWER_PASSWORD", DEFAULT_VIEWER_PASSWORD)
+
+    existing_users = existing_auth.get("users") if isinstance(existing_auth.get("users"), list) else []
+    existing_viewer = next(
+        (
+            u
+            for u in existing_users
+            if isinstance(u, dict) and str(u.get("email") or "").strip() == viewer_email
+        ),
+        None,
+    )
+    viewer_preserved = False
+    if existing_viewer and _is_valid_hash(str(existing_viewer.get("password_hash") or "")):
+        # Идемпотентность: повторный сид не трогает viewer-креды.
+        viewer_hash = str(existing_viewer["password_hash"])
+        viewer_sub = str(existing_viewer.get("sub") or viewer_sub).strip()
+        viewer_preserved = True
+    else:
+        from orchestrator.cosmo.security.credentials import hash_password as _hash
+
+        viewer_hash = _hash(viewer_password)
+
+    viewer_record = {
+        "email": viewer_email,
+        "password_hash": viewer_hash,
+        "sub": viewer_sub,
+        "roles": DEFAULT_VIEWER_ROLES,
+        "is_admin": False,
+    }
+
     auth_data = {
         "email": email,
         "password_hash": cur_hash,
         "sub": sub,
         "roles": DEFAULT_ROLES,
         "is_admin": True,
+        "users": [viewer_record],
     }
     client.write_secret(AUTH, auth_data)
     print(
         f"[auth] {'PRESERVED (existing hash)' if preserved else 'SEEDED (new PBKDF2 hash)'} "
         f"| email={email} sub={sub} roles={DEFAULT_ROLES} is_admin=True"
+    )
+    print(
+        f"[auth:viewer] {'PRESERVED (existing hash)' if viewer_preserved else 'SEEDED (new PBKDF2 hash)'} "
+        f"| email={viewer_email} sub={viewer_sub} roles={DEFAULT_VIEWER_ROLES} is_admin=False"
     )
 
     print(

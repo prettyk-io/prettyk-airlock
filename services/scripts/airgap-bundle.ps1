@@ -19,18 +19,23 @@ param(
     [string]$OutDir = "bundle-out"
 )
 
-$ErrorActionPreference = "Stop"
+# COS-064/COS-183: PS 5.1 + native stderr (docker build/pull/save) при EAP=Stop
+# даёт ложный terminating error на здоровом прогрессе; вердикт — по $LASTEXITCODE
+# (явные проверки на каждом шаге ниже).
+$ErrorActionPreference = "Continue"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $ServicesDir = Join-Path $RepoRoot "services"
 $BundleWork = Join-Path $RepoRoot $OutDir
 $BundleName = "cosmoport2-v$Version-airgap"
 
-# COS-171/172: scanner tools (digest-pinned; ДОЛЖНЫ совпадать с ARG в
+# COS-171/172/183: scanner tools (digest-pinned; ДОЛЖНЫ совпадать с ARG в
 # services/cosmo-api.Dockerfile).
 $TrivyVersion = "0.74.0"
 $TrivySha256  = "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
 $SyftVersion  = "1.20.0"
 $SyftSha256   = "689e12c5cbf67521ce61b9c126068f9eaabe1223e77971b2fede50033ff6b5cc"
+$GrypeVersion = "0.119.0"
+$GrypeSha256  = "3fa2dc4b924621ab65404cf08d0b8438d896d80ab949c9d5a4ca283c36004c9b"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Карта образов
@@ -40,7 +45,7 @@ $SyftSha256   = "689e12c5cbf67521ce61b9c126068f9eaabe1223e77971b2fede50033ff6b5c
 $PullImages = @(
     @{ Name = "postgres";              Tag = "16-alpine" },
     @{ Name = "valkey/valkey";         Tag = "8-alpine" },
-    @{ Name = "openbao/openbao";       Tag = "2.2" },
+    @{ Name = "openbao/openbao";       Tag = "2.6.3" },
     @{ Name = "minio/minio";           Tag = "RELEASE.2025-03-12T18-04-18Z" },
     @{ Name = "gitea/gitea";           Tag = "1.22.6" },
     @{ Name = "woodpeckerci/woodpecker-server"; Tag = "v3.5" },
@@ -48,10 +53,15 @@ $PullImages = @(
     @{ Name = "caddy";                 Tag = "2.9-alpine" }
 )
 
-# Build-образы (локальная сборка)
+# COS-195 (PK-C-010): immutable-тег релиза (git sha) вместо переиспользуемого
+# `local` — каждый бандл несёт уникальные образы; прошлые сборки не теряют имена.
+$ReleaseTag = "git-" + ((git -C $RepoRoot rev-parse --short=12 HEAD 2>$null | Out-String).Trim())
+if ($ReleaseTag -eq "git-") { throw "[bundle] git rev-parse failed: immutable tag requires a git repository" }
+
+# Build-образы (локальная сборка; контексты — от RepoRoot, куда скрипт делает Push-Location)
 $BuildImages = @(
-    @{ Name = "cosmo-api";      Tag = "local"; Dockerfile = "services/cosmo-api.Dockerfile";      Context = ".." },
-    @{ Name = "cosmo-frontend"; Tag = "local"; Dockerfile = "frontend/Dockerfile";                 Context = "../frontend" }
+    @{ Name = "cosmo-api";      Tag = $ReleaseTag; Dockerfile = "services/cosmo-api.Dockerfile"; Context = "." },
+    @{ Name = "cosmo-frontend"; Tag = $ReleaseTag; Dockerfile = "frontend/Dockerfile";           Context = "frontend" }
 )
 
 # Лицензии
@@ -96,7 +106,16 @@ foreach ($img in $PullImages) {
     $full = "$($img.Name):$($img.Tag)"
     Write-Host "  pull $full"
     docker pull $full
-    if ($LASTEXITCODE -ne 0) { throw "pull failed: $full" }
+    if ($LASTEXITCODE -ne 0) {
+        # COS-183: образ может быть недоступен в registry (напр. minio/minio
+        # снят с Docker Hub) — fallback на уже имеющийся локальный образ.
+        docker image inspect $full *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "    pull failed; using local image"
+        } else {
+            throw "pull failed and no local image: $full"
+        }
+    }
 
     $digest = docker image inspect $full --format '{{index .RepoDigests 0}}' 2>$null
     if (-not $digest) { $digest = $full }
@@ -126,6 +145,16 @@ Copy-Item "$ServicesDir\Caddyfile"           "$BundleWork\compose\" -Force
 Copy-Item "$ServicesDir\entrypoint.sh"       "$BundleWork\compose\" -Force
 Copy-Item "$ServicesDir\cosmo-api.Dockerfile" "$BundleWork\compose\" -Force
 
+# COS-195 (PK-C-010): в бандле фиксируем immutable-теги. Compose в репо
+# параметризован ${COSMO_API_TAG:-local}/${COSMO_FRONTEND_TAG:-local}; airgap-
+# машина не имеет .env — байкаем тег прямо в копию compose.
+$composeCopy = Join-Path $BundleWork "compose\docker-compose.yml"
+$composeText = [IO.File]::ReadAllText($composeCopy)
+$composeText = $composeText.Replace('cosmo-api:${COSMO_API_TAG:-local}', "cosmo-api:$ReleaseTag")
+$composeText = $composeText.Replace('cosmo-frontend:${COSMO_FRONTEND_TAG:-local}', "cosmo-frontend:$ReleaseTag")
+[IO.File]::WriteAllText($composeCopy, $composeText, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "  compose: baked immutable tags ($ReleaseTag)"
+
 # 6. Копировать install/verify скрипты
 Copy-Item "$ServicesDir\scripts\install.ps1"        "$BundleWork\scripts\" -Force -ErrorAction SilentlyContinue
 Copy-Item "$ServicesDir\scripts\install.sh"         "$BundleWork\scripts\" -Force -ErrorAction SilentlyContinue
@@ -138,7 +167,8 @@ New-Item -ItemType Directory -Path "$BundleWork\tools" -Force | Out-Null
 # Digest-pinned binaries (для host-side airgap scan; в образ уже зашиты).
 $Tools = @(
     @{ url = "https://github.com/aquasecurity/trivy/releases/download/v$TrivyVersion/trivy_$TrivyVersion`_Linux-64bit.tar.gz"; file = "trivy_$TrivyVersion`_Linux-64bit.tar.gz"; sha = $TrivySha256 },
-    @{ url = "https://github.com/anchore/syft/releases/download/v$SyftVersion/syft_$SyftVersion`_linux_amd64.tar.gz"; file = "syft_$SyftVersion`_linux_amd64.tar.gz"; sha = $SyftSha256 }
+    @{ url = "https://github.com/anchore/syft/releases/download/v$SyftVersion/syft_$SyftVersion`_linux_amd64.tar.gz"; file = "syft_$SyftVersion`_linux_amd64.tar.gz"; sha = $SyftSha256 },
+    @{ url = "https://github.com/anchore/grype/releases/download/v$GrypeVersion/grype_$GrypeVersion`_linux_amd64.tar.gz"; file = "grype_$GrypeVersion`_linux_amd64.tar.gz"; sha = $GrypeSha256 }
 )
 foreach ($t in $Tools) {
     Write-Host "  fetch $($t.file)"
@@ -148,12 +178,14 @@ foreach ($t in $Tools) {
     if ($actual -ne $t.sha) { throw "sha256 mismatch: $($t.file) got=$actual want=$($t.sha)" }
 }
 
-# Отдельный артефакт (правило #6): offline vuln DB snapshot из уже
-# собранного cosmo-api:local (там DB скачана на этапе image-build).
-$snapCid = docker create --name cosmo-bundle-trivy-snap cosmo-api:local
+# Отдельные артефакты (правило #6): offline vuln DB snapshots из уже
+# собранного cosmo-api:$ReleaseTag (там DB скачаны на этапе image-build).
+$snapCid = docker create --name cosmo-bundle-tools-snap "cosmo-api:$ReleaseTag"
 try {
     docker cp "${snapCid}:/opt/trivy-db-seed.tar.gz" "$BundleWork\tools\trivy-db-$TrivyVersion.tar.gz"
-    if ($LASTEXITCODE -ne 0) { throw "trivy DB snapshot extract failed (is cosmo-api:local built?)" }
+    if ($LASTEXITCODE -ne 0) { throw "trivy DB snapshot extract failed (is cosmo-api:$ReleaseTag built?)" }
+    docker cp "${snapCid}:/opt/grype-db-seed.tar.gz" "$BundleWork\tools\grype-db-$GrypeVersion.tar.gz"
+    if ($LASTEXITCODE -ne 0) { throw "grype DB snapshot extract failed (is cosmo-api:$ReleaseTag built?)" }
 } finally {
     docker rm $snapCid | Out-Null
 }
@@ -252,7 +284,9 @@ $manifest = @{
     tools = @(
         @{ name = "trivy"; version = $TrivyVersion; file = "tools/trivy_$TrivyVersion`_Linux-64bit.tar.gz"; sha256 = $TrivySha256 },
         @{ name = "syft"; version = $SyftVersion; file = "tools/syft_$SyftVersion`_linux_amd64.tar.gz"; sha256 = $SyftSha256 },
-        @{ name = "trivy-offline-db"; version = $TrivyVersion; file = "tools/trivy-db-$TrivyVersion.tar.gz"; note = "extract into TRIVY_CACHE_DIR volume; no network at install" }
+        @{ name = "grype"; version = $GrypeVersion; file = "tools/grype_$GrypeVersion`_linux_amd64.tar.gz"; sha256 = $GrypeSha256 },
+        @{ name = "trivy-offline-db"; version = $TrivyVersion; file = "tools/trivy-db-$TrivyVersion.tar.gz"; note = "extract into TRIVY_CACHE_DIR volume; no network at install" },
+        @{ name = "grype-offline-db"; version = $GrypeVersion; file = "tools/grype-db-$GrypeVersion.tar.gz"; note = "extract into GRYPE_DB_CACHE_DIR volume; no network at install" }
     )
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path "$BundleWork\manifest.json" -Encoding UTF8
@@ -265,7 +299,12 @@ try {
         $rel = $_.FullName.Substring($BundleWork.Length + 1).Replace('\', '/')
         "$hash  $rel"
     }
-    $checksums | Set-Content -Path "$BundleWork\checksums.sha256" -Encoding ASCII
+    # LF-разделители: бандл верифицируется на Linux (${line:66} в verify-bundle.sh).
+    [System.IO.File]::WriteAllText(
+        "$BundleWork\checksums.sha256",
+        (($checksums -join "`n") + "`n"),
+        (New-Object System.Text.ASCIIEncoding)
+    )
 } finally {
     Pop-Location
 }
