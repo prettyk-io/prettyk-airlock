@@ -208,7 +208,7 @@ describe('COS-024: Deep-Linking', () => {
     // Diff toggle button shows ⌘D keyboard shortcut
     expect(screen.getByText('Diff (⌘D)')).toBeTruthy();
     // .wire gutter hint visible
-    expect(screen.getByText('▶ Click gutter to run step')).toBeTruthy();
+    expect(screen.getByText('▶ Gutter: draft save (runner не подключён)')).toBeTruthy();
     // Commit & Push is visible
     expect(screen.getByText('Commit & Push')).toBeTruthy();
   });

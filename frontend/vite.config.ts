@@ -16,7 +16,9 @@ export default defineConfig({
     strictPort: true,
     host: true,
     proxy: {
-      '/api': 'http://127.0.0.1:8100',
+      // COS-195: dev-профиль проксирует /api на cosmo-api внутри cosmo-net
+      // (VITE_API_PROXY); локальный host-dev — прежний 127.0.0.1:8100.
+      '/api': process.env.VITE_API_PROXY || 'http://127.0.0.1:8100',
     },
   },
   test: {

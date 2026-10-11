@@ -467,6 +467,14 @@ export interface Build {
   started_at?: string;
   finished_at?: string;
   initiator?: string;
+  /** COS-196: прогон (runs.id), исполняющий сборку. */
+  run_id?: string;
+  /** COS-196: id записей Evidence Ledger по прогону сборки. */
+  evidence_refs?: string[];
+  /** COS-196: реальные логи исполнения (или пусто — честно). */
+  build_logs?: string;
+  /** COS-196: честные метаданные (failure_reason, logs_error, artifact_note...). */
+  meta?: Record<string, unknown>;
 }
 
 export interface Deployment {
@@ -534,11 +542,24 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     let errDetail = `${res.status} ${res.statusText}`;
+    let envelope: { code: string; message: string; details: Record<string, unknown> } | null = null;
     try {
       const json = await res.json();
-      if (json && json.detail) errDetail = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+      // COS-186: typed-конверт COS-058 — live-форма {"error": {...}} (COS-181),
+      // backward-compatible также {"detail": {"error": {...}}}.
+      envelope = parseCosmoErrorEnvelope(json);
+      const detail = json && typeof json === 'object' ? (json as { detail?: unknown }).detail : undefined;
+      if (envelope) errDetail = envelope.message;
+      else if (detail !== undefined) errDetail = typeof detail === 'string' ? detail : JSON.stringify(detail);
     } catch {
-      // ignore
+      // ignore (non-JSON body)
+    }
+    if (envelope) {
+      throw new CosmoApiError(errDetail, {
+        status: res.status,
+        code: envelope.code,
+        details: envelope.details,
+      });
     }
     throw new Error(errDetail);
   }
@@ -546,6 +567,113 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     return undefined as unknown as T;
   }
   return res.json();
+}
+
+// ── COS-186: typed-ошибки (конверт COS-058) ─────────────────────────────
+
+/** Typed-ошибка API: несёт machine-readable code/details (напр. WORKSPACE_CONFLICT). */
+export class CosmoApiError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly details: Record<string, unknown> | null;
+
+  constructor(
+    message: string,
+    opts: { status: number; code?: string | null; details?: Record<string, unknown> | null }
+  ) {
+    super(message);
+    this.name = 'CosmoApiError';
+    this.status = opts.status;
+    this.code = opts.code ?? null;
+    this.details = opts.details ?? null;
+  }
+}
+
+export type WorkspaceConflictKind = 'concurrent' | 'exists' | 'missing';
+
+/** details typed-409 WORKSPACE_CONFLICT (COS-181 / IDE-CORE-005). */
+export interface WorkspaceConflictDetails {
+  kind: WorkspaceConflictKind;
+  expected_sha: string | null;
+  actual_sha: string | null;
+  paths: string[];
+}
+
+/**
+ * Разбор typed-конверта COS-058 из тела ответа.
+ *
+ * Live-форма COS-181: `{"error": {code, message, details}}` (top-level).
+ * Совместимо и с `{"detail": {"error": {...}}}` (FastAPI-wrapping).
+ * null — не typed-конверт (plain detail/ошибка).
+ */
+export function parseCosmoErrorEnvelope(
+  payload: unknown
+): { code: string; message: string; details: Record<string, unknown> } | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const body = payload as Record<string, unknown>;
+  const nested =
+    body.detail && typeof body.detail === 'object'
+      ? (body.detail as Record<string, unknown>).error
+      : undefined;
+  const env = body.error ?? nested;
+  if (!env || typeof env !== 'object') return null;
+  const code = (env as { code?: unknown }).code;
+  if (typeof code !== 'string' || !code) return null;
+  const message = (env as { message?: unknown }).message;
+  const details = (env as { details?: unknown }).details;
+  return {
+    code,
+    message: typeof message === 'string' ? message : code,
+    details: details && typeof details === 'object' ? (details as Record<string, unknown>) : {},
+  };
+}
+
+// ── COS-179: workspace bootstrap + CAS/ref-чтение (FE↔BE дрейф COS-102/103/177) ──
+
+export type WorkspaceCapability = 'read' | 'draft' | 'commit' | 'run';
+
+/** Ответ GET /api/v1/repos/workspace/bootstrap (COS-102). */
+export interface WorkspaceBootstrap {
+  repo: string;
+  branch: string;
+  headSha: string;
+  capabilities: WorkspaceCapability[];
+  authorization: 'allow' | 'deny';
+}
+
+/** Элемент плоского дерева (Gitea tree); kind — 'file' | 'directory'. */
+export interface WorkspaceTreeEntry {
+  path: string;
+  kind: 'file' | 'directory';
+  status?: string | null;
+}
+
+/** Блоб файла на зафиксированной ревизии (CAS head_sha или ref). */
+export interface WorkspaceBlob {
+  path: string;
+  content: string;
+  sha: string;
+  encoding: string;
+  baseBlobSha: string;
+}
+
+export interface WorkspaceTreeQuery {
+  branch?: string;
+  headSha?: string;
+  /** COS-177: immutable snapshot — ref приоритетен над branch/head_sha. */
+  ref?: string;
+}
+
+function workspaceReadQuery(repo: string, opts: WorkspaceTreeQuery): string {
+  const q = new URLSearchParams({ repo });
+  if (opts.ref) {
+    // ref-режим: branch/head_sha не нужны (BE игнорирует CAS-пару).
+    q.set('ref', opts.ref);
+  } else {
+    if (opts.branch) q.set('branch', opts.branch);
+    if (opts.headSha) q.set('head_sha', opts.headSha);
+  }
+  return q.toString();
 }
 
 export const api = {
@@ -639,24 +767,79 @@ export const api = {
     apiFetch<GateDecisionRecord[]>(`/api/v1/gates/trail/runs/${encodeURIComponent(runId)}`),
 
   // Repos & Web IDE files
-  getRepoTree: (repo: string) =>
-    apiFetch<Array<{ name: string; path: string; kind: 'file' | 'dir'; size?: number; children?: unknown[] }>>(
-      `/api/v1/repos/tree?repo=${encodeURIComponent(repo)}`
+  /** COS-179: открыть workspace (repo+branch → headSha). branch пуст → default. */
+  openWorkspace: (repo: string, branch?: string) => {
+    const q = new URLSearchParams({ repo });
+    if (branch) q.set('branch', branch);
+    return apiFetch<WorkspaceBootstrap>(`/api/v1/repos/workspace/bootstrap?${q.toString()}`);
+  },
+  /** COS-179: плоское дерево — CAS-режим (branch+headSha) или snapshot (ref). */
+  getRepoTree: (repo: string, opts: WorkspaceTreeQuery = {}) =>
+    apiFetch<{ entries: WorkspaceTreeEntry[] }>(
+      `/api/v1/repos/tree?${workspaceReadQuery(repo, opts)}`
     ),
-  getRepoFile: (repo: string, path: string) =>
-    apiFetch<{ repo: string; path: string; content: string; sha: string }>(
-      `/api/v1/repos/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`
+  /** COS-179: блоб файла — CAS-режим (branch+headSha) или snapshot (ref). */
+  getRepoFile: (repo: string, path: string, opts: WorkspaceTreeQuery = {}) =>
+    apiFetch<WorkspaceBlob>(
+      `/api/v1/repos/file?${workspaceReadQuery(repo, opts)}&path=${encodeURIComponent(path)}`
     ),
-  saveRepoFile: (data: { repo: string; path: string; content: string; message?: string }) =>
-    apiFetch<{ repo: string; path: string; content: string; sha: string }>('/api/v1/repos/file', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-  commitAndPush: (data: { repo: string; branch?: string; message: string; files: Array<{ path: string; content: string }> }) =>
-    apiFetch<{ ok: boolean; commit_hash: string; branch: string; repo: string; message: string }>('/api/v1/repos/commit', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+  /**
+   * COS-182: серверный черновик файла (COS-110) — канонический save-path
+   * вместо мёртвого `PUT /api/v1/repos/file` (на бэке только GET → 405).
+   */
+  saveWorkspaceDraft: (data: {
+    repo: string;
+    branch: string;
+    path: string;
+    content: string;
+    baseBlobSha?: string;
+  }) =>
+    apiFetch<{ path: string; content: string; baseBlobSha?: string | null; updatedAt?: string | null }>(
+      '/api/v1/repos/workspace/draft',
+      { method: 'PUT', body: JSON.stringify(data) }
+    ),
+  /** COS-182: прочитать серверный черновик (для верификации save-path). */
+  getWorkspaceDraft: (repo: string, branch: string, path: string) => {
+    const q = new URLSearchParams({ repo, branch, path });
+    return apiFetch<{ path: string; content: string; baseBlobSha?: string | null; updatedAt?: string | null }>(
+      `/api/v1/repos/workspace/draft?${q.toString()}`
+    );
+  },
+  /** COS-191: удалить серверный черновик (Сбросить → к repo-версии). */
+  deleteWorkspaceDraft: (repo: string, branch: string, path: string) => {
+    const q = new URLSearchParams({ repo, branch, path });
+    return apiFetch<void>(`/api/v1/repos/workspace/draft?${q.toString()}`, { method: 'DELETE' });
+  },
+  /**
+   * COS-179/182/186: канонический атомарный commit workspace (COS-124 + typed 409
+   * COS-181). Plural-ручка `/workspace/commits` — единственная, отдающая
+   * `WORKSPACE_CONFLICT` (kind concurrent|exists|missing + expected/actual sha +
+   * conflicting paths); legacy singular `/workspace/commit` — plain 409.
+   */
+  commitWorkspace: (data: {
+    repo: string;
+    branch: string;
+    message: string;
+    changes: Array<{ path: string; content: string; action?: 'create' | 'update' | 'delete' }>;
+    expectedHeadSha?: string;
+  }) =>
+    apiFetch<{ sha: string; htmlUrl: string; authoredAt: string; filesChanged: number }>(
+      '/api/v1/repos/workspace/commits',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          repo: data.repo,
+          branch: data.branch,
+          message: data.message,
+          fileChanges: data.changes.map((c) => ({
+            path: c.path,
+            content: c.content,
+            action: c.action ?? 'update',
+          })),
+          ...(data.expectedHeadSha ? { expectedHeadSha: data.expectedHeadSha } : {}),
+        }),
+      }
+    ),
   commitAndRun: (data: { repo: string; branch?: string; message: string; plan_id: string; project_id?: string; files: Array<{ path: string; content: string }> }) =>
     apiFetch<{ ok: boolean; commit_hash: string; branch: string; repo: string; message: string; run_id: string }>('/api/v1/repos/commit-and-run', {
       method: 'POST',
@@ -699,6 +882,14 @@ export const api = {
     const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
     return apiFetch<Build[]>(`/api/v1/builds${q}`);
   },
+
+  /** COS-198: детали сборки (честный статус, логи, digest, evidence). */
+  getBuild: (buildId: string) =>
+    apiFetch<Build>(`/api/v1/builds/${encodeURIComponent(buildId)}`),
+
+  /** COS-198: прерывание сборки (отменяет её прогон). */
+  abortBuild: (buildId: string) =>
+    apiFetch<Build>(`/api/v1/builds/${encodeURIComponent(buildId)}/abort`, { method: 'POST' }),
 
   // ── SAN-017: Deployments API ─────────────────────────────────────
   getAppDeployments: (appId: string) =>

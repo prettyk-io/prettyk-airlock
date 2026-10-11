@@ -1,6 +1,6 @@
 ﻿// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { CosmoThemeProvider } from './theme';
 import { ProjectsOverview } from './station/views/ProjectsOverview';
 import { Applications } from './station/views/Applications';
@@ -499,7 +499,7 @@ describe('COS-022: Control Station Core Views', () => {
     expect(screen.getByText('Commit & Push')).toBeTruthy();
     expect(screen.getByText('Commit & Run')).toBeTruthy();
     expect(screen.getByText('Terminal & Pipeline Logs')).toBeTruthy();
-    expect(screen.getByText('▶ Click gutter to run step')).toBeTruthy();
+    expect(screen.getByText('▶ Gutter: draft save (runner не подключён)')).toBeTruthy();
 
     // Toggle Diff View via button
     fireEvent.click(screen.getByText('Diff (⌘D)'));
@@ -752,6 +752,57 @@ describe('COS-022: Control Station Core Views', () => {
     fireEvent.click(createBtns[0]);
     expect(screen.getByText('Создать новую сборку')).toBeTruthy();
     expect(screen.getByText('Запустить сборку')).toBeTruthy();
+  });
+
+  it('COS-198: BuildsRegistry — детали сборки: digest, реальные логи, evidence', async () => {
+    const digest = 'sha256:' + 'ab'.repeat(32);
+    const buildRow = {
+      id: 'bld-1',
+      app_id: 'app-payments',
+      title: 'Demo build',
+      commit_sha: 'a1b2c3d4e5f6',
+      branch: 'main',
+      status: 'success',
+      artifacts: [`build-demo:1.0.0@${digest}`],
+      started_at: '2026-10-11T00:00:00',
+      finished_at: '2026-10-11T00:00:30',
+      initiator: 'dev_user',
+      run_id: 'run-bld-1',
+      evidence_refs: ['e1', 'e2'],
+      build_logs: `+ docker push\nbuild-demo:1.0.0@${digest}`,
+      meta: {},
+    };
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/v1/builds/bld-1')) {
+        return Promise.resolve(new Response(JSON.stringify(buildRow), { status: 200 }));
+      }
+      if (url.includes('/api/v1/builds')) {
+        return Promise.resolve(new Response(JSON.stringify([buildRow]), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    });
+
+    render(
+      <CosmoThemeProvider>
+        <BuildsRegistry />
+      </CosmoThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Demo build')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('Demo build'));
+
+    // Детали: digest-ссылка, прогон, evidence, реальные логи — из ответа API.
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => {
+      expect(within(dialog).getByText(`build-demo:1.0.0@${digest}`)).toBeTruthy();
+    });
+    expect(within(dialog).getByText('run-bld-1')).toBeTruthy();
+    expect(within(dialog).getByText('e1')).toBeTruthy();
+    expect(within(dialog).getByText('Логи исполнения')).toBeTruthy();
+    expect(within(dialog).getByText(/docker push/)).toBeTruthy();
   });
 
   it('SAN-005: DeploymentsRegistry — рендерит заголовок, фильтры и модалку отката (честный EmptyState)', async () => {

@@ -1,5 +1,7 @@
 /**
  * SAN-017: BuildsRegistry — Global Build History Table (Live API Wired).
+ * COS-198: детали сборки — честный статус, реальные логи (или честное
+ * «недоступно»), digest-ссылка, evidence-след; прерывание активной сборки.
  *
  * Fetches builds from GET /api/v1/builds. No mocks — honest EmptyState on empty/failure.
  */
@@ -8,7 +10,7 @@ import {
   Box, Typography, Button, Chip, Paper, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, TextField, MenuItem,
   IconButton, Tooltip, Dialog, DialogTitle, DialogContent,
-  DialogActions, Select, Skeleton, Alert,
+  DialogActions, Select, Skeleton, Alert, Divider,
 } from '@mui/material';
 import {
   Build, Add, ContentCopy, Refresh,
@@ -25,6 +27,12 @@ const statusMeta: Record<string, { color: string; label: string }> = {
   pending: { color: '#9CA3AF', label: 'pending' },
   aborted: { color: '#F59E0B', label: 'aborted' },
 };
+
+/** COS-198: честная строка метаданных (или undefined, если её нет). */
+function metaString(build: BuildRecord | null, key: string): string | undefined {
+  const value = build?.meta?.[key];
+  return typeof value === 'string' && value ? value : undefined;
+}
 
 interface BuildsRegistryProps {
 }
@@ -48,6 +56,13 @@ export function BuildsRegistry({}: BuildsRegistryProps) {
   const [createTitle, setCreateTitle] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // COS-198: детали сборки
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsBuild, setDetailsBuild] = useState<BuildRecord | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [aborting, setAborting] = useState(false);
+
   const fetchBuilds = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -62,6 +77,44 @@ export function BuildsRegistry({}: BuildsRegistryProps) {
   }, []);
 
   useEffect(() => { fetchBuilds(); }, [fetchBuilds]);
+
+  // COS-198: лёгкий поллинг — активные сборки должны честно доходить
+  // до терминала без ручного Refresh.
+  const hasActive = builds.some((b) => b.status === 'pending' || b.status === 'running');
+  useEffect(() => {
+    if (!hasActive) return;
+    const t = setInterval(() => { void fetchBuilds(); }, 5000);
+    return () => clearInterval(t);
+  }, [hasActive, fetchBuilds]);
+
+  const openDetails = useCallback(async (record: BuildRecord) => {
+    setDetailsOpen(true);
+    setDetailsBuild(record);
+    setDetailsError(null);
+    setDetailsLoading(true);
+    try {
+      const full = await api.getBuild(record.id);
+      setDetailsBuild(full);
+    } catch (err: unknown) {
+      setDetailsError((err as Error)?.message || 'Ошибка загрузки деталей сборки');
+    } finally {
+      setDetailsLoading(false);
+    }
+  }, []);
+
+  const handleAbort = useCallback(async () => {
+    if (!detailsBuild) return;
+    setAborting(true);
+    try {
+      const aborted = await api.abortBuild(detailsBuild.id);
+      setDetailsBuild(aborted);
+      await fetchBuilds();
+    } catch (err: unknown) {
+      setDetailsError((err as Error)?.message || 'Ошибка прерывания сборки');
+    } finally {
+      setAborting(false);
+    }
+  }, [detailsBuild, fetchBuilds]);
 
   const filtered = useMemo(() => {
     let list = builds;
@@ -194,7 +247,8 @@ export function BuildsRegistry({}: BuildsRegistryProps) {
                 {filtered.map((b) => {
                   const meta = statusMeta[b.status] ?? statusMeta.pending;
                   return (
-                    <TableRow key={b.id} hover>
+                    <TableRow key={b.id} hover onClick={() => void openDetails(b)}
+                      sx={{ cursor: 'pointer' }}>
                       <TableCell sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 11 }}>{b.id}</TableCell>
                       <TableCell sx={{ fontSize: 12, fontWeight: 500 }}>{b.title || b.id}</TableCell>
                       <TableCell sx={{ fontSize: 12 }}>{b.app_name ?? b.app_id}</TableCell>
@@ -248,6 +302,139 @@ export function BuildsRegistry({}: BuildsRegistryProps) {
               sx={{ textTransform: 'none', fontWeight: 600 }}>
               {submitting ? 'Создание...' : 'Запустить сборку'}
             </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* COS-198: Build Details — честные данные исполнения */}
+        <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} maxWidth="md" fullWidth>
+          <DialogTitle sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Build sx={{ color: 'primary.main' }} />
+            Сборка {detailsBuild?.id ?? ''}
+            {detailsBuild && (
+              <Chip label={(statusMeta[detailsBuild.status] ?? statusMeta.pending).label}
+                size="small" variant="outlined"
+                sx={{
+                  ml: 1, fontSize: 11,
+                  borderColor: (statusMeta[detailsBuild.status] ?? statusMeta.pending).color,
+                  color: (statusMeta[detailsBuild.status] ?? statusMeta.pending).color,
+                }} />
+            )}
+          </DialogTitle>
+          <DialogContent dividers>
+            {detailsError && <Alert severity="error" sx={{ mb: 2 }}>{detailsError}</Alert>}
+            {detailsLoading && !detailsBuild?.build_logs && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
+                {[1, 2, 3].map((i) => <Skeleton key={i} variant="rectangular" height={28} sx={{ borderRadius: 1 }} />)}
+              </Box>
+            )}
+            {detailsBuild && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                {metaString(detailsBuild, 'failure_reason') && (
+                  <Alert severity="error">
+                    Провал: {metaString(detailsBuild, 'failure_reason')}
+                  </Alert>
+                )}
+                {metaString(detailsBuild, 'logs_error') && (
+                  <Alert severity="warning">
+                    Логи недоступны: {metaString(detailsBuild, 'logs_error')}
+                  </Alert>
+                )}
+                {metaString(detailsBuild, 'artifact_note') && (
+                  <Alert severity="info">{metaString(detailsBuild, 'artifact_note')}</Alert>
+                )}
+
+                <Box sx={{ display: 'grid', gridTemplateColumns: '140px 1fr 140px 1fr', gap: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Название</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>{detailsBuild.title || '—'}</Typography>
+                  <Typography variant="caption" color="text.secondary">Приложение</Typography>
+                  <Typography variant="body2">{detailsBuild.app_name ?? detailsBuild.app_id}</Typography>
+
+                  <Typography variant="caption" color="text.secondary">Ветка</Typography>
+                  <Typography variant="body2"><Chip label={detailsBuild.branch} size="small" variant="outlined" sx={{ fontSize: 10, height: 20 }} /></Typography>
+                  <Typography variant="caption" color="text.secondary">Коммит</Typography>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+                    {detailsBuild.commit_sha}
+                    <IconButton size="small" sx={{ p: 0, ml: 0.5 }} onClick={() => handleCopySha(detailsBuild.commit_sha)}>
+                      <ContentCopy sx={{ fontSize: 11 }} />
+                    </IconButton>
+                  </Typography>
+
+                  <Typography variant="caption" color="text.secondary">Инициатор</Typography>
+                  <Typography variant="body2">{detailsBuild.initiator || '—'}</Typography>
+                  <Typography variant="caption" color="text.secondary">Прогон</Typography>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12 }}>{detailsBuild.run_id || '—'}</Typography>
+
+                  <Typography variant="caption" color="text.secondary">Начало</Typography>
+                  <Typography variant="body2">
+                    {detailsBuild.started_at ? new Date(detailsBuild.started_at).toLocaleString('ru-RU') : '—'}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">Финиш</Typography>
+                  <Typography variant="body2">
+                    {detailsBuild.finished_at ? new Date(detailsBuild.finished_at).toLocaleString('ru-RU') : '—'}
+                  </Typography>
+                </Box>
+
+                <Divider />
+
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Артефакты (digest-ссылка)</Typography>
+                  {(detailsBuild.artifacts?.length ?? 0) === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      {detailsBuild.status === 'success'
+                        ? 'Успех без зафиксированного артефакта — см. примечание выше.'
+                        : 'Нет (провал/отмена не оставляют артефактов).'}
+                    </Typography>
+                  ) : (
+                    detailsBuild.artifacts?.map((a) => (
+                      <Typography key={a} variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12 }}>{a}</Typography>
+                    ))
+                  )}
+                </Box>
+
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Evidence-след ({detailsBuild.evidence_refs?.length ?? 0})</Typography>
+                  {(detailsBuild.evidence_refs?.length ?? 0) === 0 ? (
+                    <Typography variant="body2" color="text.secondary">Записей ещё нет.</Typography>
+                  ) : (
+                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                      {detailsBuild.evidence_refs?.map((e) => (
+                        <Chip key={e} label={e} size="small" variant="outlined" sx={{ fontFamily: 'monospace', fontSize: 10 }} />
+                      ))}
+                    </Box>
+                  )}
+                </Box>
+
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Логи исполнения</Typography>
+                  {detailsBuild.build_logs ? (
+                    <Box component="pre" sx={{
+                      fontFamily: 'monospace', fontSize: 11, whiteSpace: 'pre-wrap',
+                      maxHeight: 280, overflow: 'auto', bgcolor: 'action.hover',
+                      borderRadius: 1, p: 1, m: 0,
+                    }}>
+                      {detailsBuild.build_logs}
+                    </Box>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      {metaString(detailsBuild, 'logs_error')
+                        ? 'Логи недоступны (причина выше).'
+                        : (detailsBuild.status === 'pending' || detailsBuild.status === 'running')
+                          ? 'Исполнение ещё не оставило логов.'
+                          : 'Логов нет.'}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ p: 2 }}>
+            {(detailsBuild?.status === 'pending' || detailsBuild?.status === 'running') && (
+              <Button color="warning" onClick={handleAbort} disabled={aborting}
+                sx={{ textTransform: 'none', fontWeight: 600 }}>
+                {aborting ? 'Прерывание...' : 'Прервать сборку'}
+              </Button>
+            )}
+            <Button onClick={() => setDetailsOpen(false)} sx={{ textTransform: 'none' }}>Закрыть</Button>
           </DialogActions>
         </Dialog>
       </Box>

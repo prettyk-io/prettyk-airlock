@@ -18,6 +18,7 @@ import {
   e2eRecipient,
   fetchSession,
   tamperSignature,
+  viewerCredentials,
 } from './helpers/e2e_auth';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,12 +54,14 @@ function publish(opts: {
   message?: string;
   severity?: string;
   eventId?: string;
+  /** COS-187: recipient события (default — principal живого admin-токена). */
+  recipient?: string;
 }): string {
   eventCounter += 1;
   const eventId = opts.eventId ?? `evt-e2e-${Date.now()}-${eventCounter}`;
   helper(
     `publish --type ${opts.type ?? 'run_failed'} --aggregate run/run-e2e-${eventCounter}` +
-      ` --recipient ${RECIPIENT}` +
+      ` --recipient ${opts.recipient ?? RECIPIENT}` +
       ` --title "${opts.title ?? `E2E notification ${eventCounter}`}"` +
       ` --message "${opts.message ?? 'browser acceptance payload'}"` +
       ` --event-id ${eventId}` +
@@ -333,10 +336,45 @@ test('COS-075/176: real principal reads own inbox; forged-signature token reject
   });
   expect(forgedInbox.status()).toBe(401);
 
-  // COS-176 (честная граница): раздельные inbox'ы ДВУХ засеянных principals
-  // требуют второго пользователя — dev-стенд сидирует одного admin (COS-175),
-  // follow-up на multi-user seed. Здесь доказано главное: живой principal
-  // изолирован, а forged identity не получает ничего.
+  // COS-176: живой principal изолирован, forged identity не получает ничего.
+  // Раздельные inbox'ы двух principals — отдельный тест COS-187 ниже.
+});
+
+test('COS-187: два seeded-principal — раздельные inbox (A не видит B)', async ({ request }) => {
+  const adminAuth = await authHeaders();
+  const adminRecipient = await e2eRecipient();
+  const viewerAuth = await authHeaders(viewerCredentials());
+  const viewerRecipient = await e2eRecipient(viewerCredentials());
+  expect(viewerRecipient).not.toBe(adminRecipient);
+
+  // B получает своё событие: A его не видит.
+  publish({ title: 'For viewer only', recipient: viewerRecipient });
+  const viewerCount = await request.get('/api/v1/notifications/inbox/unread-count', {
+    headers: viewerAuth,
+  });
+  expect(viewerCount.status()).toBe(200);
+  expect(((await viewerCount.json()) as { unread: number }).unread).toBe(1);
+
+  const adminCount = await request.get('/api/v1/notifications/inbox/unread-count', {
+    headers: adminAuth,
+  });
+  expect(((await adminCount.json()) as { unread: number }).unread).toBe(0);
+
+  // A получает своё: B по-прежнему видит только своё.
+  publish({ title: 'For admin only', recipient: adminRecipient });
+  const adminCount2 = await request.get('/api/v1/notifications/inbox/unread-count', {
+    headers: adminAuth,
+  });
+  expect(((await adminCount2.json()) as { unread: number }).unread).toBe(1);
+
+  const viewerCount2 = await request.get('/api/v1/notifications/inbox/unread-count', {
+    headers: viewerAuth,
+  });
+  expect(((await viewerCount2.json()) as { unread: number }).unread).toBe(1);
+
+  const viewerInbox = await request.get('/api/v1/notifications/inbox', { headers: viewerAuth });
+  const titles = ((await viewerInbox.json()) as Array<{ title: string }>).map((i) => i.title);
+  expect(titles).toEqual(['For viewer only']);
 });
 
 test('COS-075: stream rejects invalid ticket (401, no recipient fallback)', async ({ request }) => {

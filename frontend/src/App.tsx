@@ -39,6 +39,7 @@ export function App() {
               repo={state.ide.repo}
               file={state.ide.file}
               line={state.ide.line}
+              commit={state.ide.commit}
               onNavigateToStation={setStationContext}
             />
           )}

@@ -20,6 +20,8 @@ export interface IDEContext {
   repo?: string;
   file?: string;
   line?: number;
+  /** COS-179 / FR-004: immutable snapshot — commit SHA (ref-режим чтения). */
+  commit?: string;
 }
 
 export interface StationContext {
@@ -42,12 +44,13 @@ export function parseParams(): DeepLinkState {
   const file = p.get('file') || undefined;
   const rawLine = p.get('line');
   const line = rawLine ? parseInt(rawLine, 10) || undefined : undefined;
+  const commit = p.get('commit') || undefined;
   const view = p.get('view') || undefined;
   const run_id = p.get('run_id') || undefined;
 
   return {
     surface: surface === 'ide' ? 'ide' : 'station',
-    ide: { repo, file, line },
+    ide: { repo, file, line, commit },
     station: { view, run_id },
   };
 }
@@ -59,6 +62,7 @@ function pushUrl(state: DeepLinkState) {
   if (state.ide.repo) p.set('repo', state.ide.repo);
   if (state.ide.file) p.set('file', state.ide.file);
   if (state.ide.line) p.set('line', String(state.ide.line));
+  if (state.ide.commit) p.set('commit', state.ide.commit);
   if (state.station.view) p.set('view', state.station.view);
   if (state.station.run_id) p.set('run_id', state.station.run_id);
 
@@ -74,6 +78,7 @@ export function buildLink(params: Partial<DeepLinkState> & { surface: CosmoSurfa
   if (params.ide?.repo) p.set('repo', params.ide.repo);
   if (params.ide?.file) p.set('file', params.ide.file);
   if (params.ide?.line) p.set('line', String(params.ide.line));
+  if (params.ide?.commit) p.set('commit', params.ide.commit);
   if (params.station?.view) p.set('view', params.station.view);
   if (params.station?.run_id) p.set('run_id', params.station.run_id);
   return `${window.location.pathname}?${p.toString()}`;

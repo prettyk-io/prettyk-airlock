@@ -45,6 +45,8 @@ const deploymentStatusMeta: Record<string, { color: string; label: string }> = {
   running: { color: '#3B82F6', label: 'running' },
   pending: { color: '#9CA3AF', label: 'pending' },
   deleted: { color: '#F59E0B', label: 'deleted' },
+  // COS-204: декларативный деплой (без материализации) — не «active».
+  declarative: { color: '#64748B', label: 'declarative' },
 };
 
 const zoneLabels: Record<string, { label: string; color: string }> = {

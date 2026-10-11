@@ -16,9 +16,17 @@ import { test, type Page } from '@playwright/test';
 
 export const E2E_EMAIL = process.env.E2E_COSMO_EMAIL ?? 'admin@cosmoport.local';
 export const E2E_PASSWORD = process.env.E2E_COSMO_PASSWORD ?? 'cosmo-admin-dev';
+// COS-187: второй seeded-пользователь (отдельный principal/inbox).
+export const E2E_VIEWER_EMAIL = process.env.E2E_COSMO_VIEWER_EMAIL ?? 'viewer@cosmoport.local';
+export const E2E_VIEWER_PASSWORD = process.env.E2E_COSMO_VIEWER_PASSWORD ?? 'cosmo-viewer-dev';
 export const API_BASE_URL = (
   process.env.E2E_COSMO_API_URL ?? 'http://127.0.0.1:8100'
 ).replace(/\/+$/, '');
+
+/** Креды второго principal'а (viewer) для раздельных inbox-проверок. */
+export function viewerCredentials(): { email: string; password: string } {
+  return { email: E2E_VIEWER_EMAIL, password: E2E_VIEWER_PASSWORD };
+}
 
 /** Живой auth-контур недоступен (backend down / login отверг / не seeded). */
 export class E2eAuthUnavailableError extends Error {}
@@ -31,7 +39,14 @@ export interface E2eSession {
   expiresAt: number;
 }
 
-let cached: E2eSession | null = null;
+type E2eCredentials = { email?: string; password?: string };
+
+// COS-187: кэш сессий per-principal (два seeded-юзера в одной e2e-линии).
+const sessions = new Map<string, E2eSession>();
+
+function sessionKey(credentials?: E2eCredentials): string {
+  return credentials?.email ?? E2E_EMAIL;
+}
 
 function decodePayload(token: string): Record<string, unknown> {
   const part = token.split('.')[1] ?? '';
@@ -44,7 +59,7 @@ function decodePayload(token: string): Record<string, unknown> {
   }
 }
 
-async function login(credentials?: { email?: string; password?: string }): Promise<E2eSession> {
+async function login(credentials?: E2eCredentials): Promise<E2eSession> {
   const email = credentials?.email ?? E2E_EMAIL;
   const password = credentials?.password ?? E2E_PASSWORD;
 
@@ -77,35 +92,38 @@ async function login(credentials?: { email?: string; password?: string }): Promi
   };
 }
 
-/** Реальная сессия; login кэшируется на процесс до истечения exp. */
-export async function fetchSession(credentials?: {
-  email?: string;
-  password?: string;
-}): Promise<E2eSession> {
+/** Реальная сессия; login кэшируется per-email до истечения exp (COS-187). */
+export async function fetchSession(credentials?: E2eCredentials): Promise<E2eSession> {
+  const key = sessionKey(credentials);
+  const cached = sessions.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached;
-  cached = await login(credentials);
-  return cached;
+  const session = await login(credentials);
+  sessions.set(key, session);
+  return session;
 }
 
 /** Сброс кэша (негативный тест login / смена кредов). */
 export function resetSessionCache(): void {
-  cached = null;
+  sessions.clear();
 }
 
 /** Bearer headers для API-запросов (Playwright request / global fetch). */
-export async function authHeaders(): Promise<Record<string, string>> {
-  const session = await fetchSession();
+export async function authHeaders(credentials?: E2eCredentials): Promise<Record<string, string>> {
+  const session = await fetchSession(credentials);
   return { Authorization: `Bearer ${session.token}` };
 }
 
-/** Recipient уведомлений = principal.user_id живого токена (переопределяем env). */
-export async function e2eRecipient(): Promise<string> {
-  return process.env.E2E_COSMO_RECIPIENT ?? (await fetchSession()).sub;
+/** Recipient уведомлений = principal.user_id живого токена (env override — default-юзеру). */
+export async function e2eRecipient(credentials?: E2eCredentials): Promise<string> {
+  if (!credentials && process.env.E2E_COSMO_RECIPIENT) {
+    return process.env.E2E_COSMO_RECIPIENT;
+  }
+  return (await fetchSession(credentials)).sub;
 }
 
 /** Засеять FE-сессию (localStorage-контракт COS-158) до навигации. */
-export async function authenticatePage(page: Page): Promise<E2eSession> {
-  const session = await fetchSession();
+export async function authenticatePage(page: Page, credentials?: E2eCredentials): Promise<E2eSession> {
+  const session = await fetchSession(credentials);
   await page.addInitScript((token) => {
     globalThis.localStorage?.setItem('cosmo_auth_token', token);
   }, session.token);
@@ -116,9 +134,12 @@ export async function authenticatePage(page: Page): Promise<E2eSession> {
  * Честный skip, если живой auth-контур недоступен (стенд не поднят):
  * acceptance COS-176 допускает skip вместо фейкового green.
  */
-export async function authenticatePageOrSkip(page: Page): Promise<E2eSession | null> {
+export async function authenticatePageOrSkip(
+  page: Page,
+  credentials?: E2eCredentials,
+): Promise<E2eSession | null> {
   try {
-    return await authenticatePage(page);
+    return await authenticatePage(page, credentials);
   } catch (err) {
     test.skip(
       true,

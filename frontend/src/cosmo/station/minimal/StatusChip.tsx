@@ -12,6 +12,7 @@ const statusMap: Record<string, { color: ChipProps['color']; label: string }> = 
   running:    { color: 'primary', label: 'Running' },
   pending:    { color: 'default', label: 'Pending' },
   deployed:   { color: 'success', label: 'Deployed' },
+  declarative:{ color: 'default', label: 'Declarative' },
   validating: { color: 'warning', label: 'Validating' },
   draft:      { color: 'default', label: 'Draft' },
   aborted:    { color: 'warning', label: 'Aborted' },
