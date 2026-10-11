@@ -6433,7 +6433,7 @@
           "sse"
         ],
         "summary": "Stream Run Logs",
-        "description": "COS-109: SSE stream of Woodpecker step logs (step_start, log_chunk, step_finish, run_finish).\n\nКлиент Web IDE получает живой лог шага за шагом. При завершении прогона\nсоединение закрывается. Формат чанков совместим с xterm.js.\n\nTicket-аутентификация — аналог COS-079 для существующих SSE-эндпоинтов.",
+        "description": "COS-109 + COS-180: SSE stream of Woodpecker step logs (step_start, log_chunk, step_finish, run_finish).\n\nКлиент Web IDE получает живой лог шага за шагом. При завершении прогона\nсоединение закрывается. Формат чанков совместим с xterm.js.\nCOS-180: события несут SSE ``id``; reconnect с ``last_event_id`` (query\nсильнее заголовка Last-Event-ID) получает недоставленное из backlog без\nдублей уже отданных строк лога.\n\nTicket-аутентификация — аналог COS-079 для существующих SSE-эндпоинтов.",
         "operationId": "stream_run_logs_api_v1_runs__run_id__logs_stream_get",
         "parameters": [
           {
@@ -13960,7 +13960,7 @@
           "workspace"
         ],
         "summary": "Workspace Commits Create",
-        "description": "Атомарный multi-file коммит (COS-124).\n\nПорядок:\n  1. Pre-flight quality gate: секреты/запрещённые паттерны → 422 с\n     violations, коммит в forge не летит;\n  2. Ghost-check binding приложения → 404;\n  3. Ветка должна существовать → 404;\n  4. CAS-состояние файлов: create только для отсутствующих, update/delete\n     только для существующих → 409 (конкурентный коммит);\n  5. Bulk Contents API одной транзакцией → sha/htmlUrl/authoredAt/filesChanged.",
+        "description": "Атомарный multi-file коммит (COS-124 + COS-181).\n\nПорядок:\n  1. Pre-flight quality gate: секреты/запрещённые паттерны → 422 с\n     violations, коммит в forge не летит;\n  2. Ghost-check binding приложения → 404;\n  3. Ветка должна существовать → 404;\n  3b. expected_head_sha (COS-181): расхождение с головой ветки →\n     typed 409 WORKSPACE_CONFLICT до любых чтений/записей файлов;\n  4. CAS-состояние файлов: create только для отсутствующих, update/delete\n     только для существующих → typed 409 WORKSPACE_CONFLICT\n     (kind exists|missing, conflicting paths);\n  5. Bulk Contents API одной транзакцией → sha/htmlUrl/authoredAt/filesChanged.",
         "operationId": "workspace_commits_create_api_v1_repos_workspace_commits_post",
         "parameters": [
           {
@@ -18317,13 +18317,332 @@
         }
       }
     },
+    "/api/v1/builds": {
+      "get": {
+        "tags": [
+          "builds"
+        ],
+        "summary": "List Builds",
+        "description": "COS-196: сводный реестр сборок (клиентская поверхность Control Station).\n\nЖивой ответ вместо 404/405: фильтры app_id/project_id/status/branch.\nВидимость: не-админ — свой домен (единый резолв COS-067/083); админ —\nсводная картина по КИТС (паттерн projects.py). Активные сборки сверяются\nс прогоном (bounded, best-effort).",
+        "operationId": "list_builds_api_v1_builds_get",
+        "parameters": [
+          {
+            "name": "app_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Фильтр по приложению",
+              "title": "App Id"
+            },
+            "description": "Фильтр по приложению"
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Фильтр по проекту (LR-001)",
+              "title": "Project Id"
+            },
+            "description": "Фильтр по проекту (LR-001)"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Фильтр по статусу",
+              "title": "Status"
+            },
+            "description": "Фильтр по статусу"
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Фильтр по ветке",
+              "title": "Branch"
+            },
+            "description": "Фильтр по ветке"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "X-Cosmo-Domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Domain"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Cosmo-Zone",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Zone"
+            }
+          },
+          {
+            "name": "session_token",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Build"
+                  },
+                  "title": "Response List Builds Api V1 Builds Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "builds"
+        ],
+        "summary": "Create Build",
+        "description": "COS-196: запуск сборки из клиента (Control Station) — реальное исполнение.\n\nПринимает то, что шлёт UI: ``{app_id, title, branch, commit_sha}``.",
+        "operationId": "create_build_api_v1_builds_post",
+        "parameters": [
+          {
+            "name": "domain_id_query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain Id Query"
+            }
+          },
+          {
+            "name": "X-Cosmo-Domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Domain"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-Cosmo-Zone",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmo-Zone"
+            }
+          },
+          {
+            "name": "session_token",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBuildRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Build"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/apps/{app_id}/builds": {
       "get": {
         "tags": [
           "builds"
         ],
         "summary": "List App Builds",
-        "description": "Список сборок конкретного приложения.",
+        "description": "Список сборок конкретного приложения (SAN-012 + честный статус COS-196).",
         "operationId": "list_app_builds_api_v1_apps__app_id__builds_get",
         "parameters": [
           {
@@ -18491,7 +18810,7 @@
           "builds"
         ],
         "summary": "Trigger App Build",
-        "description": "Запуск новой сборки приложения с фиксацией commit SHA.\n\nCOS-083: write требует capability build:run (не просто principal).",
+        "description": "SAN-012 + COS-196: запуск сборки приложения — реальное исполнение.\n\nCOS-083: write требует capability build:run (не просто principal).\nCOS-196: за триггером — реальный прогон (runs-контур), не заглушка.",
         "operationId": "trigger_app_build_api_v1_apps__app_id__builds_post",
         "parameters": [
           {
@@ -18624,7 +18943,7 @@
           "builds"
         ],
         "summary": "Get Build Details",
-        "description": "Получить детальную информацию о сборке.",
+        "description": "COS-196: детали сборки — честный статус, реальные логи, digest, evidence.",
         "operationId": "get_build_details_api_v1_builds__build_id__get",
         "parameters": [
           {
@@ -18731,7 +19050,7 @@
           "builds"
         ],
         "summary": "Abort Build",
-        "description": "Прервать выполняющуюся сборку.\n\nCOS-083: write требует capability build:run.",
+        "description": "COS-196: прерывание сборки = отмена её прогона (канон runs cancel).\n\nCOS-083: write требует capability build:run.",
         "operationId": "abort_build_api_v1_builds__build_id__abort_post",
         "parameters": [
           {
@@ -19022,7 +19341,7 @@
           "deployments"
         ],
         "summary": "Create Deployment",
-        "description": "Создать новое развертывание сборки в указанную зону.\n\nCOS-083: write требует capability deploy:manage.",
+        "description": "Создать запись развертывания сборки в указанную зону.\n\nCOS-204: generic-путь **декларативный** — он не материализует развёртывание\n(нет pull/run/healthy), поэтому статус `declarative`, а не мгновенный `success`;\nреальный endpoint не выдумывается (`custom_url` — только если задан явно),\n`finished_at` не проставляется. Реальное развёртывание — принятый release-deploy\n(materialize). Витрина показывает `declarative` как таковой, не «активный».\n\nCOS-083: write требует capability deploy:manage.",
         "operationId": "create_deployment_api_v1_apps__app_id__deploys_post",
         "parameters": [
           {
@@ -19262,7 +19581,7 @@
           "deployments"
         ],
         "summary": "Rollback Deployment",
-        "description": "Инициировать откат развертывания (Rollback).\n\nCOS-083: write требует capability deploy:manage.",
+        "description": "Инициировать откат развертывания (Rollback).\n\nCOS-204: откат применим только к материализованным деплоям (`success`/`failed`);\nдля декларативных/незрелых записей — честный **409** (откатывать нечего, реального\nразвёртывания нет).\n\nCOS-083: write требует capability deploy:manage.",
         "operationId": "rollback_deployment_api_v1_deploys__id__rollback_post",
         "parameters": [
           {
@@ -22289,7 +22608,7 @@
           "auth"
         ],
         "summary": "Login",
-        "description": "Self-managed логин: проверка креденшелов → подписанный RS256 access-токен.",
+        "description": "Self-managed логин: проверка креденшелов → подписанный RS256 access-токен.\n\nCOS-187: поддерживается несколько пользователей — основная запись +\noptional ``users``-список в ``secret/cosmo/auth``. Email ищется точным\nсовпадением; пароль всегда сверяется с PBKDF2-хэшем (для отсутствующего\nemail — с хэшем первой записи, чтобы не давать timing-оракул на перебор\nадресов).",
         "operationId": "login_api_v1_auth_login_post",
         "requestBody": {
           "content": {
@@ -22961,9 +23280,9 @@
           },
           "image": {
             "type": "string",
-            "minLength": 1,
             "title": "Image",
-            "description": "Docker-образ (например sonarsource/sonar-scanner-cli:latest)"
+            "description": "Docker-образ (например sonarsource/sonar-scanner-cli:latest); docker_build-специализация несёт образ шага сама (docker:24-cli)",
+            "default": ""
           },
           "timeout_s": {
             "type": "integer",
@@ -22983,12 +23302,129 @@
             "type": "object",
             "title": "Outputs",
             "description": "Выходные артефакты (пути, форматы)"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type",
+            "description": "Специализация шага (docker_build — build + push по канону COS-162)"
+          },
+          "image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Name",
+            "description": "Имя образа docker_build-шага (slug)"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version",
+            "description": "Версия образа docker_build-шага (строгий semver)"
+          },
+          "dockerfile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dockerfile",
+            "description": "Путь к Dockerfile (docker_build)"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context",
+            "description": "Build-контекст (docker_build)"
+          },
+          "registry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registry",
+            "description": "Endpoint registry зоны, host:port (docker_build)"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository",
+            "description": "Repository в registry (docker_build)"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace",
+            "description": "Namespace/зона registry (docker_build)"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target",
+            "description": "Build stage (docker_build)"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform",
+            "description": "Платформа сборки (docker_build)"
           }
         },
         "type": "object",
-        "required": [
-          "image"
-        ],
         "title": "BrickDefinition",
         "description": "Рантайм-определение Brick: executor, образ, таймауты, inputs/outputs."
       },
@@ -23012,6 +23448,12 @@
             "title": "Domain Id",
             "description": "ID КИТС-домена",
             "default": "default"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "Человекочитаемое название сборки",
+            "default": ""
           },
           "commit_sha": {
             "type": "string",
@@ -23079,6 +23521,50 @@
             "title": "Initiator User Id",
             "description": "ID пользователя или агента, инициировавшего сборку",
             "default": "system"
+          },
+          "initiator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initiator",
+            "description": "COS-196: клиентский алиас инициатора (initiator_user_id)"
+          },
+          "app_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Name",
+            "description": "COS-196: человекочитаемое имя приложения (enrichment для витрины)"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id",
+            "description": "COS-196: прогон (runs.id), исполняющий сборку"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence Refs",
+            "description": "COS-196: id durable-записей Evidence Ledger по прогону сборки"
           },
           "build_logs": {
             "anyOf": [
@@ -23553,6 +24039,42 @@
           "type"
         ],
         "title": "CreateBatchRequest"
+      },
+      "CreateBuildRequest": {
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "App Id",
+            "description": "ID приложения"
+          },
+          "commit_sha": {
+            "type": "string",
+            "minLength": 7,
+            "title": "Commit Sha",
+            "description": "Git commit SHA"
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Branch",
+            "description": "Ветка репозитория",
+            "default": "main"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "Название сборки",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "app_id",
+          "commit_sha"
+        ],
+        "title": "CreateBuildRequest",
+        "description": "COS-196: контракт клиента (Control Station) — то, что шлёт UI."
       },
       "CreateDeploymentRequest": {
         "properties": {
@@ -24179,7 +24701,8 @@
               "success",
               "failed",
               "deleted",
-              "rollback"
+              "rollback",
+              "declarative"
             ],
             "title": "Status",
             "description": "Текущий статус развертывания",
@@ -24652,6 +25175,20 @@
         ],
         "title": "EvidenceAttestationSubject",
         "description": "Субъект аттестации: артефакт, о котором собран конверт."
+      },
+      "FindingRef": {
+        "properties": {
+          "severity": {
+            "type": "string",
+            "title": "Severity",
+            "description": "Канон gate engine: Critical|High|Medium|Low|Info",
+            "default": ""
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "FindingRef",
+        "description": "COS-193: типизированная находка прогона (носитель ``runs.findings_refs``).\n\nЕдиный контракт с мостом COS-101/104: dict-находки сканеров (severity +\nпроизвольные поля: rule/path/line/cwe_ids/message/...). Extras сохраняются\n(не отбрасываются), severity нормализуется мостом к канону gate-движка\n(Critical|High|Medium|Low|Info). Пустая строка — legacy-запись до нормализации."
       },
       "FindingsIngestRequest": {
         "properties": {
@@ -27745,11 +28282,18 @@
           },
           "findings": {
             "items": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/FindingRef"
+                },
+                {
+                  "type": "string"
+                }
+              ]
             },
             "type": "array",
             "title": "Findings",
-            "description": "ID находок (findings)"
+            "description": "Находки прогона (COS-193): типизированные dict-находки канона COS-101/104; строка — legacy-ID-находка до выравнивания носителя"
           },
           "evidence_ledger_ref": {
             "anyOf": [
@@ -30181,6 +30725,17 @@
             "type": "array",
             "minItems": 1,
             "title": "Filechanges"
+          },
+          "expectedHeadSha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedheadsha"
           }
         },
         "additionalProperties": false,
@@ -30719,6 +31274,17 @@
               "delete"
             ],
             "title": "Action"
+          },
+          "baseBlobSha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseblobsha"
           }
         },
         "additionalProperties": false,
@@ -30728,7 +31294,7 @@
           "action"
         ],
         "title": "WorkspaceFileChange",
-        "description": "Одно файловое изменение атомарного коммита.\n\ncreate/update — content обязателен (строка, возможно пустая);\ndelete — content должен быть None (контент не передаётся)."
+        "description": "Одно файловое изменение атомарного коммита.\n\ncreate/update — content обязателен (строка, возможно пустая);\ndelete — content должен быть None (контент не передаётся).\nbase_blob_sha (COS-185) — optional файловая база клиента: при конфликте\nуезжает в typed 409 WORKSPACE_CONFLICT как expected_sha файлового уровня."
       },
       "WorkspaceFileCreateRequest": {
         "properties": {

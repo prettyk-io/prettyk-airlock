@@ -2974,7 +2974,7 @@ are accepted; UI is the next product surface.
 
 > **Контекст (PO):** auth-линия (COS-157 → COS-158) заблокирована: issuer
 > (Better Auth) обязан брать signing-ключи из боевого OpenBao. Канон
-> `D:\prettyk.io\nexus-core\OPENBAO-PLATFORM.md`: один shared OpenBao на
+> `D:\prettyk.io\void-core\OPENBAO-PLATFORM.md`: один shared OpenBao на
 > платформу, per-product инстансы запрещены. В Cosmo Compose всё ещё стоит
 > `cosmo-openbao`; платформенный OpenBao не поднят (PK-C-005 был на Buddy,
 > Buddy исключён — ведёт Flash). Cosmo-адаптер уже готов (COS-105
@@ -4400,12 +4400,12 @@ are accepted; UI is the next product surface.
 > живых фактов: (1) рестарт dev-mode OpenBao сносит AppRole+секреты → ручное восстановление
 > живого стенда; (2) FE Web IDE не передаёт CAS/ref → дерево не грузится (дрейф FE↔BE).
 >
-> **Владелец:** не назначен — диспетч по решению Максима.
+> **Выданы 25.09.2026:** COS-178 → Buddy (Platform), COS-179 → Flash (Airlock).
 
 | ID | Кто | h | Приоритет | Зависимость | Результат |
 |---|---|---:|---|---|---|
-| **COS-178** | не выдан | 4-8h | P1 | COS-173/175 (приняты) | ⬜ READY |
-| **COS-179** | не выдан | 4-6h | P1 | COS-177 (принят) | ⬜ READY |
+| **COS-178** | Buddy | 4-8h | P1 | COS-173/175 (приняты) | ✅ DONE — raft + static auto-unseal (2.6.3); рестарт без ручных шагов; sealed → 503 |
+| **COS-179** | Flash | 4-6h | P1 | COS-177 (принят) | ✅ DONE — bootstrap→CAS + ref-режим; e2e 27/1/0; фикстура; legacy переведён |
 
 #### COS-178 · Инфра: OpenBao persistence — переживание рестарта (dev-mode in-memory)
 
@@ -4432,6 +4432,46 @@ are accepted; UI is the next product surface.
 
 > **Отчёт обратно:** backend и почему; unseal-механика; миграция; смоук рестарта; доки; блокеры.
 
+> **Исполнение (Buddy, 2026-09-25):** ✅ закрыто, живой смоук пройден.
+>
+> **Backend и почему:** `raft` (persistent) + `seal "static"` (auto-unseal без KMS).
+> - `file`-backend отклонён: deprecated с v2.7.0 (warning живьём на 2.6.3);
+> - static seal доступен с OpenBao ≥2.5 → образ `openbao/openbao:2.2` → **2.6.3**
+>   (канон обновлён: `OPENBAO-PLATFORM.md` §4/§7); миграции storage нет — инстанс
+>   был пуст (dev in-memory сброшен рестартом);
+> - unseal key: `services/.openbao/unseal.key` (32B, gitignored); init material
+>   (root token + recovery key): `services/.openbao/init.json` (gitignored). Прод — KMS/HSM (канон §7).
+>
+> **Артефакты:** `services/docker-compose.openbao.yml` (2.6.3, raft, static seal, BAO_ADDR, healthcheck);
+> `services/openbao/openbao.hcl`; `services/openbao/cosmo-app-policy.hcl`;
+> `services/scripts/openbao-bootstrap.ps1` (идемпотентный: unseal key → up → init →
+> kv-v2/approle/policy/role → AppRole creds в `.env` (PRESERVED при валидности) →
+> seed 4 секретов + `seed-auth-secrets.py`); `.gitignore` (+`services/.openbao/`).
+>
+> **API (sealed → честный 503):** `infra/vault.py` — `VaultUnavailableError`, lazy-auth
+> (`_ensure_token`: vault, оживший после старта API, подхватывается без рестарта),
+> 503-детект в `authenticate`/read/write; `routes/auth.py` — `VaultError → 503`
+> (login/JWKS); `startup.py` — «auth deferred», не «bootstrap skipped».
+>
+> **Смоук (живой, 25.09):**
+> - bootstrap с нуля: init → AppRole → 6 секретов; `login → 200`, `jwks → 200`;
+> - **рестарт контейнера → Sealed=false автоматически; login/JWKS 200 без ручных шагов** (×3, вкл. пересоздание);
+> - **seal → login/JWKS 503** (честный, не 500) → рестарт → 200 (self-heal);
+> - повторный bootstrap: всё `PRESERVED` (secret-id, 4 секрета, jwt-keys kid стабилен, auth).
+>
+> **Тесты:** `test_vault.py + test_auth_login.py + test_api_routes.py` = **36 passed / 4 skipped**
+> (live-gated); +5 новых (sealed→VaultUnavailableError; lazy-auth; sealed→503 login/JWKS).
+> Suite gate: **3559 passed / 23 skipped / 0 failed** (368s, `pytest orchestrator/tests/cosmo/ -q`).
+> `SECURITY_MAINTENANCE.md` §2.5 — процедуры unseal/recovery/rotate/re-bootstrap.
+>
+> **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта (Airlock-эффекты). Независимая
+> проверка: образ 2.6.3 + raft/static в compose (grep); `services/.openbao/` gitignored;
+> focused `test_vault.py + test_auth_login.py` (+SSE resume) — 35 passed / 4 skipped; живой
+> стенд: `/ready` ok, login 200 (RS256) — после COS-178 без ручных шагов. Платформенная
+> приёмка (Keeper, слой секретов) — вне окна Cosmo, отмечено в статусе линии.
+
 #### COS-179 · FE Web IDE: workspace bootstrap + CAS/ref в tree/file (FE↔BE дрейф)
 
 > **Зачем:** Web IDE ходит в `/api/v1/repos/tree|file` без CAS-пары (`branch`+`head_sha`) и без
@@ -4445,6 +4485,8 @@ are accepted; UI is the next product surface.
 > (3) Фикстура живого стенда: `payments/api` в Gitea + app-binding в PG (или задокументированный само-сид).
 > (4) e2e web-ide tree-тест: разскипан и зелёный против живого стенда.
 > (5) TS-типы синхронны с OpenAPI (`ref` уже в контракте).
+> (6) Вердикт Cosmo по legacy-двойнику (запрос Vector): мёртвый `POST /repos/commit` в `station/api.ts`
+>     (никем не вызывается) — зачистить; живой `commit-and-run` не трогать до выноса IDE в `prettyk-ide`.
 
 > **Out of scope:** BE ref-режим (COS-177 принят); IDE-карточка Vector (deep-link парсер/notices); auth.
 
@@ -4454,3 +4496,2368 @@ are accepted; UI is the next product surface.
 > - e2e web-ide tree-тест зелёный; vitest/tsc/build зелёные.
 
 > **Отчёт обратно:** как встроен bootstrap; параметры; фикстура; e2e-числа; блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Bootstrap (пункт 1).** `WebIDEShell` при mount и смене `repo` делает
+  `GET /api/v1/repos/workspace/bootstrap?repo=…` (branch пуст → default из forge) → в state
+  ложатся `branch`/`headSha`; CAS-пара уходит в `GET /tree|file`
+  (`?repo=&branch=&head_sha=`); после bootstrap файл перечитывается (обновляются blob sha/base,
+  `commitBranch` синхронизируется с веткой воркспейса). Смена `repo`/`ref` сбрасывает
+  workspace-контекст.
+- **ref-режим (COS-177, FR-004).** `commit` из deep-link протянут end-to-end:
+  `DeepLinker.parseParams/IDEContext.commit` → `App` → prop `commit` в `WebIDEShell`; при
+  наличии — tree/file читаются **ref-only** (`branch`/`head_sha` не шлются), в шапке виден
+  `snapshot <sha7>`, запись закрыта by construction: Save / Commit & Push / Commit & Run
+  disabled (+ честное сообщение при попытке), `commit-and-run` не тронут.
+- **Честные деградации (пункт 2).** Ошибка bootstrap/дерева → видимый `tree-error`
+  (не молча пустое дерево) и снятие спиннера; пустое дерево → `tree-empty`; ошибка файла →
+  fallback-контент + `status-message` + `[ERROR]` в терминале (sha/base сбрасываются).
+- **Форматы/типы (пункт 5).** Tree-ответ теперь `{entries:[{path,kind}]}` — FE маппит во
+  вложенное дерево (`buildTree`, экспорт для тестов); file — `{path,content,sha,encoding,baseBlobSha}`;
+  TS-типы `WorkspaceBootstrap/WorkspaceTreeEntry/WorkspaceBlob/WorkspaceTreeQuery` синхронны
+  контракту (camelCase `headSha`/`baseBlobSha`).
+- **Legacy-двойник (пункт 6) — важная поправка к premise.** `api.commitAndPush`
+  (`POST /repos/commit`) **вызывался** UI (`handleCommitAndPush` ← модалка Commit & Push +
+  палитра), т.е. «никем не вызывается» не подтвердилось. Сделана зачистка без потери фичи:
+  метод удалён, модалка переведена на канонический `POST /api/v1/repos/workspace/commit`
+  (COS-107/124) с CAS (`baseBlobSha` из загруженного blob; `expectedHeadSha` — при совпадении
+  ветки модалки и workspace; 409 честно всплывает), после успеха — re-bootstrap (head двинулся).
+  `git grep commitAndPush` в `frontend/src` = 0; `commit-and-run` не тронут (бэкенд-роут
+  `POST /repos/commit` тоже не тронут — вне scope).
+- **Фикстура (пункт 3).** Новый идемпотентный self-seed `services/scripts/seed-webide-fixture.py`
+  (реальный RS256 login, без dev-минтинга): Gitea org `payments` + repo `api` (auto_init,
+  `scenarios/auth.wire`) + app-binding `webide-api` в первом домене (или создаёт `dom-webide`).
+  Живой прогон: `branch=main`, `head_sha=39b0a69a7b87…`, `tree_entries=3`.
+- **e2e (пункт 4).** Tree-тест разскипнут: `web-ide.spec.ts` — **4/4 passed** (shell,
+  tree bootstrap→CAS, ref-snapshot read-only, surface switching). Полная линия
+  `npx playwright test` = **27 passed / 1 skipped (degraded by design) / 0 failed**.
+- **Проверки:** vitest = **5 файлов / 86 passed** (WebIDEShell 15: +4 новых — bootstrap→CAS,
+  ref-режим/read-only, видимая ошибка дерева, `buildTree`; +1 commit-путь в `/workspace/commit`);
+  `tsc -b` = 0; `npm run build` (tsc -b && vite build) = **exit 0**.
+- **Finding (вне scope COS-179):** `api.saveRepoFile` (`PUT /api/v1/repos/file`) — на бэкенде
+  есть только `GET /file`; живая проверка даёт **405 Method Not Allowed**. Save-кнопка и
+  gutter-run `.wire`-шагов ходят этим мёртвым путём → нужен follow-up (перевести на
+  workspace-commit/draft/files или снять кнопку).
+- **Контекст:** во время работы Buddy вёл COS-178 — стенд флапал окнами (login 503,
+  `prettyk-openbao` пересоздавался на persistent backend); live-прогоны выполнены после
+  восстановления login. Файлы Buddy/Luna не трогал.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка:
+> `git grep commitAndPush` в `frontend/src` = 0; живой стенд login 200. Пруфы Flash:
+> playwright 27/1/0 (web-ide 4/4, включая tree bootstrap→CAS и ref-snapshot read-only);
+> vitest 86 passed; tsc 0; build exit 0; фикстура `payments/api` (head `39b0a69a…`).
+> Legacy-поправка зачтена: `commitAndPush` вызывался UI — переведён на канонический
+> workspace-commit без потери фичи. Finding `saveRepoFile` 405 → COS-182.
+
+---
+
+## ⬜ READY — IDE CONTRACT FOLLOW-UPS: TYPED 409 COMMIT + SAVE-PATH (COS-181/182)
+
+> **Источник:** inbox Vector (2026-09-25, §7 «Серверный follow-up»): IDE-клиент (`prettyk-ide`)
+> уже построил resume/merge-машинерию (IDE-CORE-017/019); серверные половины — зона Airlock.
+> Оба follow-up — «нарежь карточку сам» (мандат Vector), клиент не блокируется.
+>
+> **Выданы 25.09.2026:** COS-180 → Luna (✅ DONE), COS-181 → Luna (✅ DONE), COS-182 → Flash (✅ DONE).
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-180** | Luna | 4-6h | P1 | COS-088 (принят), COS-109 | ✅ DONE — SSE id + backlog replay: реконнект без потерь/дублей, gap→resync, live-smoke 12/12 |
+| **COS-181** | Luna | 3-4h | P1 | COS-124 (принят) | ✅ DONE — typed 409 (kind/expected/actual/paths), stale→409 до записей, live 10/10 |
+| **COS-182** | Flash | 4-6h | P1 | finding COS-179 | ✅ DONE — Save→draft (COS-110), gutter-run честно wired, e2e 29/1/0 |
+
+#### COS-180 · SSE resume логов прогона: event id + backlog replay
+
+> **Зачем:** IDE-клиент (IDE-CORE-017: `Last-Event-ID` resume + dedupe + resync) готов, но
+> серверный лог-стрим `_run_logs_stream` (COS-109) не эмитит SSE `id` и не делает backlog-replay —
+> resume по id работает вхолостую. Распространить паттерн COS-088 (Valkey sse_backlog) на логи.
+
+> **Scope:**
+> (1) Лог-стрим эмитит SSE `id` (монотонный event cursor).
+> (2) Replay по `Last-Event-ID` на реконнекте из Valkey backlog — как в run/domain/notification
+>     стримах (COS-088): пропущенные события приходят, обработанные не дублируются.
+> (3) Тесты: unit (курсор, replay-порядок, дедуп) + live (реконнект посреди прогона → пропуск
+>     без потерь и дублей).
+> (4) Совместимость: существующие потребители лог-стрима не регрессируют.
+
+> **Out of scope:** клиентская часть (Vector, готова); PTY epic; run/domain/notification стримы (COS-088).
+
+> **Acceptance:**
+> - Реконнект с `Last-Event-ID` получает пропущенные лог-события в порядке, без дублей; события несут `id`.
+> - Suite gate без регрессий; live-смоук реконнекта проведён.
+
+> **Отчёт обратно:** форма id/курсора; механизм replay и TTL; live-смоук (сценарий реконнекта);
+> тесты (числа); блокеры.
+
+**Worker report (Luna, 2026-09-25, БЕЗ приёмки):**
+
+- **Форма id/курсора:** каждое data-событие (`step_start`/`log_chunk`/`step_finish`/`run_finish`)
+  публикуется в backlog (**kind `runlog`**, key = run_id) и несёт SSE `id` == XADD-id (инвариант
+  COS-088); первым в стриме идёт `stream_backlog`-флаг (mode `valkey|memory`, без id). Отдельный
+  kind — иначе replay логов смешался бы с run-событиями на общем ключе.
+- **Replay и TTL:** на реконнекте с `last_event_id` (query сильнее заголовка) читается всё
+  удержанное окно backlog (новый `sse_backlog.read_window`); last-id найден → недоставленный
+  хвост реплеится с исходными id, из окна восстанавливаются курсоры (batch, step) — состояние
+  шага + счётчик доставленных строк. Live-loop после реконнекта догоняет только новые строки →
+  **без дублей и потерь**. TTL/лимиты как COS-088: sliding TTL 900 c, MAXLEN ≈2000 на run-ключ.
+  Gap (last-id вне окна) / backlog недоступен → `resync`-событие (не тишина); свежий коннект —
+  прежний полный catch-up. Честная граница: при вытеснении записей ДО last-id возможен повторный
+  догон части логов (счётчик занижен) — потерь нет; вне окна непрерывность не подтверждается.
+- **`run_finish`:** на реконнекте не дублируется, если уже лежит в backlog (replay его доставит,
+  повторная эмиссия подавлена); свежий коннект к терминальному прогону эмитит его с id.
+- **Совместимость:** payload'ы/xterm-формат не менялись (только SSE-конверт получил `id`);
+  COS-109-тесты обновлены под флаг; `error`-диагностики остаются без id (не replay-able).
+- **Тесты:** новый `tests/cosmo/test_sse_logs_resume.py` — **9 passed** (флаг+уникальные id,
+  replay без дублей, порядок replay, gap→resync, backlog-unavailable→resync, no-dup run_finish,
+  восстановление курсоров, compat-catch-up); `test_sse_logs_stream.py` — 11 passed (обновлён);
+  SSE-контур (`sse/notification/logs`) — **320 passed / 0 failed**.
+- **Live-смоук (живой HTTP SSE + живой Valkey backlog):** **12/12 PASS** — conn1 (last_id=A) →
+  флаг + `X-Cosmo-Backlog: valkey`, replay нет; «офлайн»-событие B → conn2 (last_id=A) →
+  **реплей B ровно один раз с исходным id**, повторной отдачи A нет; conn3 (last_id=B) →
+  повторного B нет; conn4 (битый last-id) → **resync reason=gap** по проводу.
+  Скрипт: `D:\Infra\Temp\opencode\cos180_live_smoke.py` (временный артефакт, не в репо).
+- **Стенд-факт (не блокер, вне карточки):** login отдавал **500** — `prettyk-openbao` (dev-mode,
+  in-memory) снова потерял секреты (зона COS-178/Buddy); для смоука `ot1`-тикет посеян напрямую
+  в Valkey в формате `sse_tickets` (валидация на сервере реальная, GETDEL).
+- **OpenAPI:** реген из живого `app.openapi()` (дифф = дельта описания лог-эндпоинта;
+  json==yaml==live — контракт-гвард COS-177 поймал рассинхрон, это его работа). Граница живой
+  проверки: на стенде нет активированных Woodpecker-пайплайнов (Woodpecker DB пуста) — деривация
+  чанков из реального пайплайна не воспроизводилась (покрыта unit-тестами); по проводу проверены
+  id/replay/дедуп/gap.
+- **Suite gate:** **3559 passed / 23 skipped / 0 failed** (370 s). **Блокеры:** нет.
+  Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: focused
+> `test_sse_logs_resume.py` + vault/auth — 35 passed / 4 skipped (вкл. 9 resume); живой стенд
+> ok. Пруфы Luna: SSE-контур 320 passed; live-smoke 12/12 (реальный HTTP SSE + Valkey: реплей
+> ровно раз с исходным id, gap→resync); TTL 900s / MAXLEN ~2000; `run_finish` без дублей.
+> Стенд-факт login 500 — закрыт COS-178 (проверено живьём: login 200).
+
+#### COS-181 · Typed 409 + `expected_head_sha` на multi-file commit (merge-loop)
+
+> **Зачем:** IDE merge-loop (IDE-CORE-019) ждёт branch-head conflict. Атомарный
+> `POST /workspace/commits` (COS-124) не принимает явный `expected_head_sha`; 409 — plain-string
+> (клиент парсит строки шаблонов). Нужен явный optimistic concurrency + структурированный конфликт.
+
+> **Scope:**
+> (1) Optional `expected_head_sha` в multi-file commit-запрос + precondition: несовпадение с головой
+>     ветки → 409 до любых записей.
+> (2) 409 structured: код `WORKSPACE_CONFLICT` + `expected_sha` / `actual_sha` (machine-readable;
+>     не три plain-string шаблона).
+> (3) Обратная совместимость: без `expected_head_sha` — прежнее поведение (per-file CAS).
+> (4) Тесты: устаревший head → структурированный 409; актуальный → успех; совместимость без поля.
+> (5) OpenAPI реген (json==yaml==live).
+
+> **Out of scope:** клиентский merge (Vector — досинхронизируется после); legacy `POST /workspace/commit`
+> (COS-107) не трогаем.
+
+> **Acceptance:**
+> - Commit с устаревшим `expected_head_sha` → 409 `WORKSPACE_CONFLICT` с `expected_sha`/`actual_sha`.
+> - Commit с актуальным → успех; без поля → прежнее поведение.
+> - OpenAPI обновлён; suite gate зелёный.
+
+> **Отчёт обратно:** форма структуры 409; тесты; реген; блокеры.
+
+**Worker report (Luna, 2026-09-25, БЕЗ приёмки):**
+
+- **Форма структуры 409** (единый error-контракт COS-058, `transfer_error_handler` разворачивает):
+  `{"error": {"code": "WORKSPACE_CONFLICT", "message": <human>, "details": {"kind":
+  "concurrent|exists|missing", "expected_sha": <sha|null>, "actual_sha": <sha|null>,
+  "paths": [<conflicting path>]}}}`. `kind` — словарь клиентского `WorkspaceConflictKind`
+  (IDE-CORE-005): `concurrent` — branch-level (head/forge), `exists`/`missing` — файловые;
+  `paths` для branch-level пусто.
+- **Precondition:** `WorkspaceCommitRequest.expectedHeadSha` (optional; полный sha или ≥7-hex
+  префикс): расхождение с головой ветки → typed 409 **до любых чтений/записей файлов**
+  (живой пруф: файл-зонд не создан, голова ветки не сдвинулась).
+- **Plain-string шаблоны закрыты все три:** create-exists (`kind=exists`, `actual_sha` = blob sha),
+  update/delete-missing (`kind=missing`), forge-конфликт (`kind=concurrent`, `actual_sha` — свежий
+  best-effort re-fetch головы; недоступность forge не маскирует конфликт).
+- **Совместимость без поля:** precondition не применяется, per-file CAS работает как раньше
+  (форма 409 меняется на typed — цель карточки); текущий IDE-клиент (string-matching
+  `parseCommitConflict`) на новую форму даёт fallback `kind=concurrent` (refresh+retry),
+  досинк запланирован (примечание IDE-CORE-019).
+- **Границы:** per-file `base_blob_sha` в запросе COS-124 нет → в файловых конфликтах
+  `expected_sha=null` (будущий шаг клиента); legacy `POST /workspace/commit` (COS-107) не тронут.
+- **Тесты:** новый `tests/cosmo/test_workspace_commit_conflict.py` — **20 passed** (stale→typed 409
+  без файловой работы; fresh полный/префикс→201; без поля — per-file CAS typed; forge→concurrent
+  со свежим actual; битый sha→422; DTO; форма конверта); `test_workspace_commits_api.py` — 4
+  assertion'а обновлены под typed-форму (30 passed); регресс-сет workspace/openapi/sse/forge —
+  **807 passed / 0 failed**.
+- **Реген:** `docs/cosmo-openapi.{json,yaml}` из живого `app.openapi()` — `expectedHeadSha`
+  в схеме запроса; json==yaml==live.
+- **Live-smoke (живой стенд, реальный login+HTTP, read-only):** **10/10 PASS** — bootstrap
+  `payments/api` → stale `expectedHeadSha` → typed 409 (`code/kind/expected/actual/paths/message`),
+  файл-зонд **не создан** (404), голова **не сдвинулась**, битый sha → 422.
+  Скрипт: `D:\Infra\Temp\opencode\cos181_live_smoke.py` (временный артефакт, не в репо).
+- **Для досинка (Vector):** форма выше — стабильный контракт; переход клиента на structured 409
+  не требует новых BE-изменений.
+- **Suite gate:** **3574 passed / 23 skipped / 0 failed** (393 s). **Блокеры:** нет.
+  Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: focused
+> `test_workspace_commit_conflict.py` + `test_transfer_sbom.py` — 49 passed; `expectedHeadSha`
+> в OpenAPI (yaml/json, 2 места); стенд login 200. Пруфы Luna: typed-конверт по канону COS-058
+> (kind/expected/actual/paths), stale → 409 до записей (файл-зонд не создан), live-smoke 10/10,
+> регресс-сет 807/0. Для досинка Vector: форма стабильна; серверных изменений не требует.
+
+#### COS-182 · FE Web IDE: save-path — мёртвый `PUT /repos/file` (405), Save-кнопка и gutter-run
+
+> **Зачем:** finding приёмки COS-179: `api.saveRepoFile` (`PUT /api/v1/repos/file`) — живая
+> проверка 405 (на бэке только GET). Save-кнопка и gutter-run `.wire`-шагов ходят мёртвым
+> путём (нельзя молча уверенно «сохранять»).
+
+> **Scope:**
+> (1) Разобрать оба мёртвых пути (Save-кнопка, gutter-run `.wire`) и перевести на живые
+>     канонические ручки (workspace commit/draft/files — по факту контракта).
+> (2) Новых BE-ручек не создавать; если неизбежен новый контракт — стоп и эскалация
+>     (BE-поверхность workspace занята COS-181).
+> (3) Честная деградация: ни один путь не завершается «успехом» при мёртвом вызове.
+> (4) Тесты: FE-путь (vitest) + применимый e2e; tsc/build.
+
+> **Out of scope:** workspace commits (COS-181, Luna); ref-режим (COS-177); новый whole-file
+> save API; commit-and-run.
+
+> **Acceptance:**
+> - Save-кнопка и gutter-run не дают 405 и не врут об успехе (реальный результат либо явная ошибка).
+> - Живой прогон против стенда; vitest/tsc/build зелёные.
+
+> **Отчёт обратно:** какие пути на что переведены; почему без BE; тесты; блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Save-кнопка → серверный черновик.** `handleSaveFile` больше не зовёт мёртвый
+  `PUT /api/v1/repos/file`: новый `api.saveWorkspaceDraft` → `PUT /api/v1/repos/workspace/draft`
+  (COS-110: `{repo, branch, path, content, baseBlobSha?}` → 201). Семантика честная —
+  «Черновик сохранён на сервере» (WIP в Valkey, TTL 7d), `localStorage`-черновик очищается,
+  `originalCode = saved.content`; ошибка → «Не сохранено: …» + `[ERROR]` в терминале
+  (никакого ложного успеха). Мёртвый `api.saveRepoFile` удалён — `git grep saveRepoFile` = 0.
+- **Gutter-run `.wire` — честный и наконец подключённый.** Обнаружено, что `handleRunStep`
+  вообще не был wired к Monaco (dead function) и звал тот же мёртвый сохранение-путь.
+  Теперь: глифы ▶ реально подключены (`editor.onMouseDown` → `MouseTargetType.GUTTER_GLYPH_MARGIN
+  = 2`, через ref без runtime-импорта monaco); клик сохраняет серверный черновик и явно
+  пишет `[RUNNER] Шаг не исполнен: серверный runner .wire в Airlock не подключён
+  (PTY epic в бэклоге)`; ложный `[SUCCESS] ✅ Step completed` удалён. Hover глифа и hint в
+  таб-баре переписаны честно («runner не подключён — сохранит черновик»).
+- **Почему без BE (пункт 2).** Канонический контракт черновика уже существует (COS-110,
+  Valkey; 503 при недоступности) — новых ручек не создавал, BE-поверхность COS-181 не тронута.
+- **Честные деградации (пункт 3).** Snapshot-ref → «только чтение» (без записи); нет
+  workspace-сессии → «сохранение недоступно»; Valkey 503 → «Не сохранено: …» (тест).
+- **Тесты (пункт 4).** `WebIDEShell.test.tsx` — **17 passed** (+4: Save→draft с точным body и
+  проверкой, что `PUT /repos/file` не дёргается; 503 → честная ошибка без «сохранено»;
+  честный gutter-hint; прежние 15 без регрессий). Контур `npm test` = **5 файлов / 88 passed**;
+  `tsc -b` = 0; `npm run build` exit 0.
+- **e2e (live, пункт «живой прогон»).** `web-ide.spec.ts` +2: (1) реальная правка Monaco →
+  Save → 201 + **чтение черновика с сервера через `GET /workspace/draft`** (контент совпал),
+  ноль `PUT /repos/file`, гигиена `DELETE`; (2) клик по `.cosmo-gutter-run-icon` → видимый
+  честный лог про отсутствие runner'а, `Step L… completed` отсутствует, статус «Шаг не исполнен
+  (runner недоступен) — черновик сохранён». Полная линия `npx playwright test` =
+  **29 passed / 1 skipped (degraded by design) / 0 failed**.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка:
+> `git grep saveRepoFile` в `frontend/src` = 0; стенд login 200. Пруфы Flash: Save → серверный
+> draft (COS-110) с чтением черновика обратно (e2e live +2); gutter-run честно wired, ложный
+> `[SUCCESS]` удалён; vitest 88, tsc 0, build 0; playwright 29/1/0. Попутный подъём dead
+> function — зачтён. Мёртвых путей записи не осталось.
+
+> **Кандидат (не нарезан):** PTY epic — интерактивный runner exec (P2/P3 security epic,
+> wire-протокол `runnerTty` согласуется при подъёме контура).
+
+---
+
+## ⬜ READY — SUPPLY-CHAIN: GRYPE-ВИЗОР (COS-183)
+
+> **Источник:** остаточный follow-up build+deploy («честный `available=false` → боевой grype»);
+> после боевых trivy (COS-171) и syft (COS-172). Пара к SBOM-инвентарю (COS-155).
+>
+> **Выдан:** COS-183 → Buddy (✅ DONE).
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-183** | Buddy | 4-6h | P2 | COS-171/172 (приняты), COS-155 | ✅ DONE — grype 0.119.0 + offline DB; available=true (6 vulns); бандл 24/24 checksums |
+
+#### COS-183 · Инфра: боевой grype-визор вместо честного `available=false`
+
+> **Зачем:** `generate_vuln_report` (grype-визор) в образе отсутствует → `vuln_summary.available=false`
+> + reason. Боевой grype даёт реальный vuln-отчёт по SBOM; закрывает последний «честный заглушечный»
+> маркер supply-chain контура.
+
+> **Scope:**
+> (1) grype-бинарь в образ `cosmo-api` (детерминированная версия, digest-pin где возможно — как COS-171/172).
+> (2) Offline DB: предзагрузка + airgap-канон (0 внешних запросов в рантайме).
+> (3) Реальный прогон: grype по SBOM/образу → vuln-отчёт; `available=true` с реальными данными
+>     (findings > 0 или честно пусто, но не заглушка).
+> (4) Airgap-бандл: grype + DB.
+> (5) Тесты: focused (бинарь/DB есть/нет → маркер) + live opt-in (self-skip оффлайн).
+>     Негатив: нет бинаря/DB → честный `available=false` (не фейк).
+
+> **Out of scope:** trivy/syft (приняты COS-171/172); source-SAST; promotion.
+
+> **Acceptance:**
+> - Внутри контейнера `grype version`; vuln-отчёт с `available=true` и реальными данными.
+> - Airgap-бандл несёт grype + DB; негатив честный; suite gate без регрессий.
+
+> **Отчёт обратно:** версия/digest; DB; прогон (числа); негатив; состав бандла; блокеры.
+
+> **Исполнение (Buddy, 2026-09-25):** ✅ закрыто — grype боевой, `available=true` с живыми данными.
+>
+> **Версия/digest:** grype **0.119.0** (linux_amd64), sha256 `3fa2dc4b…04c9b` — сверен фактически при скачивании и зашит ARG в `services/cosmo-api.Dockerfile` (сборка падает при несовпадении; релиз anchore/grype v0.119.0).
+>
+> **DB (offline):** `grype db update` на этапе сборки → `/var/lib/grype` (schema v6, ~2.9GB unpacked; seed-tar **510MB** в образе `/opt/grype-db-seed.tar.gz`); распакованную копию из образа удаляем (`rm -rf`) — образ 2.7GB вместо 5.8GB; entrypoint засевает DB в volume `cosmo_grype_cache` при первом старте (идемпотентно). Рантайм-канон: `GRYPE_DB_AUTO_UPDATE=false` + `GRYPE_DB_VALIDATE_AGE=false` (уже в `transfer/sbom.py`) + `GRYPE_DB_CACHE_DIR=/var/lib/grype` (ENV образа == compose == volume). Проверено: скан с **отключённой сетью** — идентичный JSON.
+>
+> **Прогон (живой, контейнер cosmo-api):** `grype --version` → `grype 0.119.0`; прод-функция `generate_vuln_report` на игрушечном SBOM (requests 2.19.0) → `source=grype`, **5 matches**; прод-функция `generate_sbom_inventory` (target=site-packages, реальные 4642 компонента syft) → `vuln_summary.available=true, total=6` (medium=5, low=1; первый: `GHSA-wf93-45jw-7689` pip 25.0.1 → fixed 26.1.2).
+>
+> **Негатив:** без бинаря → `source="none"`, `available=false` + reason (focused `test_transfer_sbom.py::TestGrypeReport`, вкл. новый env-inherit кейс); live-тест `test_grype_scan_live.py` — self-skip, когда grype/DB нет (на хосте без grype — skip; в контейнере — runs).
+>
+> **Бандл:** `cosmoport2-v0.2.0-airgap.tar.gz` (**1851.7 MB**) — несёт `tools/grype_0.119.0_linux_amd64.tar.gz` (29MB) + `tools/grype-db-0.119.0.tar.gz` (486MB) + manifest-записи `grype`/`grype-offline-db`; verify-bundle: **checksums 24/24 OK** (grype-файлы совпали с pin). Попутно починены дефекты сборки/верификации: (1) PS 5.1 EAP=Stop + native stderr убивал сборку на здоровом `docker build` → EAP=Continue + $LASTEXITCODE (урок COS-064); (2) контексты build-образов (`..`) не соответствовали layout — `cosmo-api` собирался из `D:\` (латентный баг; исправлено на `.`/`frontend`); (3) `minio/minio` снят с Docker Hub (`pull access denied`) → fallback на локальный образ; (4) checksums.sha256 писался CRLF → `verify-bundle.sh` на Linux видел 25 MISSING → теперь LF (+strip `\r` в верификаторе); (5) `openbao/openbao` в бандле обновлён 2.2 → 2.6.3 (синхронизация с COS-178).
+> **Хвост (не из диффа):** compose-чек verify-bundle.sh («любые http://») — всегда-FAIL на текущем compose (внутренние docker-URL в env/healthcheck); не менял (критерий — политика PO), кандидат в отдельную карточку.
+>
+> **Тесты:** `test_transfer_sbom + test_sbom_inventory + test_api_routes + test_build_modes` = **100 passed**; полный cosmo-сьют = **3575 passed / 24 skipped / 0 failed** (347s).
+> **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: `docker exec
+> cosmo-api grype --version` → 0.119.0; focused (workspace-conflict + transfer-sbom) — 49 passed;
+> стенд login 200. Пруфы Buddy: прод-функции на реальном SBOM → `available=true` (6 vulns);
+> offline-скан идентичен (airgap); бандл 1851.7MB, checksums 24/24; попутно вычищено 5 дефектов
+> бандл-процесса (в т.ч. латентный контекст сборки `cosmo-api` из `D:\`). Хвост verify-bundle
+> («любые http://») → COS-184.
+
+---
+
+## ⬜ READY — WAVE 3: BUNDLE-VERIFY + COMMIT-CONFLICT FOLLOW-UPS (COS-184/185/186)
+
+> **Источник:** приёмки COS-181/182/183 (25.09.2026). Все три — прямые продолжения принятого:
+> честность бандл-верификации; точные файловые конфликты merge-loop; typed 409 в собственном FE.
+>
+> **Выданы 25.09.2026:** COS-184 → Buddy (✅ DONE), COS-185 → Luna (✅ DONE), COS-186 → Flash (✅ DONE).
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-184** | Buddy | 2-3h | P2 | COS-183 (принят) | ✅ DONE — структурный whitelist (loopback+docker-имена); 24/24; негативы ловятся |
+| **COS-185** | Luna | 3-4h | P2 | COS-181 (принят) | ✅ DONE — per-file `base_blob_sha` → `expected_sha` файловых конфликтов, live-smoke 13/13 |
+| **COS-186** | Flash | 3-4h | P2 | COS-181/179 (приняты) | ✅ DONE — typed-конверт в FE, kind-aware UX + refresh/retry, live-e2e конфликта |
+
+#### COS-184 · Bundle-verify: честный compose-чек (внутренние http:// не фейлят)
+
+> **Зачем:** compose-чек `verify-bundle.sh` («любые http://») — предсуществующий всегда-FAIL на
+> текущем compose: внутренние docker-URL (env/healthcheck) легитимны, но триггерят чек. Ложный
+> FAIL обесценивает верификацию бандла.
+
+> **Scope:**
+> (1) Честный критерий: внутренние docker-URL (сервисные хосты/healthcheck) не считаются
+>     нарушением; внешние незаявленные `http://` — считаются (или задокументированный whitelist).
+> (2) verify-bundle на текущем бандле — зелёный там, где должен; красный на реальном нарушении.
+> (3) Попутно (одна строка, та же зона services): `nexus-core` → `void-core` в
+>     `services/docker-compose.openbao.yml` (канон-ссылка; permission-хвост Cosmo).
+> (4) Смоук: verify на актуальном compose + негативный кейс (реальное внешнее http:// ловится).
+
+> **Out of scope:** сборка бандла (COS-183 принят); compose-содержимое по существу.
+
+> **Acceptance:** verify-bundle на текущем compose не даёт ложных FAIL; реальное внешнее
+> `http://` по-прежнему ловится; ссылка void-core поправлена.
+
+> **Отчёт обратно:** критерий; whitelist (если есть); смоук; блокеры.
+
+> **Исполнение (Buddy, 2026-09-25):** ✅ закрыто.
+>
+> **Критерий:** структурный whitelist без явного списка — внутренними считаются
+> loopback (`localhost`/`127.0.0.1`/`0.0.0.0`/`host.docker.internal`) и docker-сервисные
+> имена БЕЗ точки в host (`cosmo-*`, `prettyk-*` — по RFC hostname). Нарушение —
+> `http(s)://` на host с точкой (внешний домен) + строки `pip install|npm install`.
+> При FAIL печатается список найденных хостов (диагностика).
+>
+> **Смоук (распакованный бандл, bundle-out):**
+> - позитив (текущий compose; хосты: `localhost`×6, `cosmo-*`×7, `prettyk-openbao`×1) →
+>   **Matched: 24, Failed: 0, integrity OK**;
+> - негатив-1 `# probe https://evil.example.com/x` → **FAIL «compose references external hosts: evil.example.com»**; строка убрана;
+> - негатив-2 `# pip install requests` → **FAIL «runtime install commands (pip/npm)»**; строка убрана;
+> - после — повторный позитив чистый; бандл пересобран с новым скриптом, финальный verify
+>   на каноническом артефакте — **24/24, integrity OK** (exit 0).
+>
+> **nexus-core → void-core:** уже исправлено в COS-178 (при перезаписи `docker-compose.openbao.yml`);
+> проверено — `nexus-core` в `services/` отсутствует, канон-ссылка ведёт на
+> `D:\prettyk.io\void-core\OPENBAO-PLATFORM.md`.
+>
+> **Файлы:** `services/scripts/verify-bundle.sh` (только compose-чек; checksums/CRLF-фикс — из COS-183).
+> Python-код не затронут; смежный прогон `-k "sbom or bundle"` = **173 passed / 1 skipped**.
+> **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: прогон
+> `-k "sbom or bundle"` — **173 passed / 1 skipped**; живых `nexus-core` в репо нет (только
+> исторические записи бэклога). Пруфы Buddy: структурный whitelist (loopback + docker-имена
+> без точки), позитив 24/24 integrity OK, оба негатива FAIL, финальный verify на пересобранном
+> бандле 24/24. Ложный always-FAIL устранён.
+
+#### COS-185 · Per-file `base_blob_sha` в multi-file commit (точные файловые конфликты)
+
+> **Зачем:** follow-up COS-181: в конфликтах `exists`/`missing` `expected_sha=null` — в запросе
+> multi-file commit (COS-124) нет per-file базы. Merge-loop для точного 3-way хочет видеть
+> ожидаемую файловую базу (IDE-CORE-005 упоминает `base_blob_sha`).
+
+> **Scope:**
+> (1) Optional per-file `base_blob_sha` в multi-file commit-запросе (валидация формата).
+> (2) При конфликте `exists`/`missing` — `expected_sha` = переданная база (не null); без неё —
+>     прежнее поведение (null).
+> (3) Совместимость: старые клиенты не ломаются; legacy `POST /workspace/commit` не трогаем.
+> (4) Тесты: конфликт с базой → `expected_sha` в конверте; без базы → null; OpenAPI реген.
+
+> **Out of scope:** клиентский merge (Vector, досинк IDE-CORE-019); branch-level CAS (COS-181).
+
+> **Acceptance:** файловый конфликт с переданной базой несёт `expected_sha`; без базы — как
+> раньше; OpenAPI обновлён; suite gate зелёный.
+
+> **Отчёт обратно:** форма поля; конверт; тесты; реген; блокеры.
+
+**Worker report (Luna, 2026-09-25, БЕЗ приёмки):**
+
+- **Форма поля:** `WorkspaceFileChange.baseBlobSha` — optional, полный sha или ≥7-hex префикс
+  (`validate_head_sha`, `""`→None); зеркало legacy `WorkspaceContentsFileChange` (COS-107) —
+  имена/семантика совпадают. Новых precondition'ов нет: поле — носитель базы, не CAS-проверка
+  (branch-level CAS остаётся за `expectedHeadSha`, COS-181).
+- **Конверт:** файловые конфликты несут `expected_sha = переданная база`:
+  `exists` → `expected_sha`=база + `actual_sha`=текущий blob; `missing` → `expected_sha`=база +
+  `actual_sha`=null; `paths=[файл]`; код/структура конверта COS-181 не менялись.
+- **Совместимость:** без поля — прежнее `expected_sha=null`; поле принимается и на успешном
+  пути (игнорируется); `expectedHeadSha` (branch-level) приоритетен и проверяется до файлов;
+  битый формат базы → 422 (записей нет); legacy `POST /workspace/commit` не тронут.
+- **Тесты:** `test_workspace_commit_conflict.py` **+13** (5 DTO + 7 route + 1 контракт;
+  файл целиком 33 passed; с COS-124-файлом 63 passed); регресс-сет workspace/openapi/sse/forge —
+  **820 passed / 0 failed**.
+- **Реген:** `docs/cosmo-openapi.{json,yaml}` из живого `app.openapi()` — `baseBlobSha` в схеме
+  `WorkspaceFileChange`; json==yaml==live.
+- **Live-smoke (живой стенд, реальный login+HTTP, read-only):** **13/13 PASS** —
+  `payments/api`: create на существующий `README.md` с базой → 409 `exists`
+  (`expected_sha`=база, `actual_sha`=blob, `paths=[README.md]`); update на несуществующий путь
+  с базой → 409 `missing` (`expected_sha`=база, `actual_sha`=null); без базы → `expected_sha=null`;
+  битый → 422; голова ветки не сдвинулась.
+  Скрипт: `D:\Infra\Temp\opencode\cos185_live_smoke.py` (временный артефакт, не в репо).
+- **Suite gate:** **3588 passed / 24 skipped / 0 failed** (433 s). **Блокеры:** нет.
+  Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: focused
+> `test_workspace_commit_conflict.py` — 28 passed / 0 failed; `baseBlobSha` в OpenAPI
+> (`WorkspaceFileChange`); стенд login 200. Пруфы Luna: `exists`/`missing` несут
+> `expected_sha`=переданная база, без базы — null; live-smoke 13/13; регресс 820/0;
+> suite gate 3588/24/0.
+
+#### COS-186 · FE: typed 409 `WORKSPACE_CONFLICT` в commit-модалке (kind-aware UX)
+
+> **Зачем:** follow-up COS-179/181: наш FE — тоже клиент workspace-commit, но в `frontend/src/cosmo`
+> обработки `WORKSPACE_CONFLICT` нет (grep = 0). Typed-конверт стабилен (COS-181) — довести
+> конфликт до понятного UX: `concurrent` → «ветка ушла вперёд» + refresh/re-bootstrap + повтор;
+> `exists`/`missing` → конфликтующие файлы.
+
+> **Scope:**
+> (1) Обработка typed 409 в commit-пути FE (модалка/палитра): kind-aware сообщение, без сырого detail.
+> (2) `concurrent` → действие «обновить workspace» (re-bootstrap) и повторная попытка.
+> (3) Честная деградация: не-409 — прежнее поведение; успех/409 различимы.
+> (4) Тесты: vitest (kind-aware ветки) + применимый e2e; tsc/build.
+
+> **Out of scope:** серверная форма (COS-181 принят); клиент Vector (`prettyk-ide` — своя зона).
+
+> **Acceptance:** typed 409 даёт понятный UX и различимые действия; vitest/tsc/build зелёные;
+> e2e на конфликт (если воспроизводим на живом стенде).
+
+> **Отчёт обратно:** как обработан конверт; сценарии; тесты; блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Как обработан конверт.** `apiFetch` научился распознавать typed-конверт COS-058 и бросать
+  `CosmoApiError {status, code, details}`; принимаются **обе формы**: live top-level
+  `{"error": {code,message,details}}` (факт COS-181, проверено живым вызовом) и FastAPI-wrapper
+  `{"detail": {"error": …}}` (backward-compat). Plain detail/ошибки — прежнее поведение
+  (`Error`), успех/409 различимы. Экспорт: `CosmoApiError`, `parseCosmoErrorEnvelope`,
+  `WorkspaceConflictDetails`, `WorkspaceConflictKind`.
+- **Commit-путь переведён на typed-ручку.** FE коммитил singular `/workspace/commit` (plain 409,
+  без конверта) — теперь `POST /api/v1/repos/workspace/commits` (COS-124 + COS-181):
+  `fileChanges:[{path,content,action:'update'}]` + `expectedHeadSha`; ответ
+  `{sha, htmlUrl, authoredAt, filesChanged}`. Это единственная ручка с typed 409 — acceptance
+  достижим **без BE-правок** (серверная форма COS-181 не тронута).
+- **Kind-aware UX (модалка Commit & Push).** Конфликт рендерится в блоке
+  `data-testid="commit-conflict"`:
+  - `concurrent` → «Конфликт: ветка ушла вперёд» + «ожидался X, сейчас Y» + кнопка
+    **«Обновить workspace и повторить»** — `re-bootstrap` (`ensureWorkspace` + `fetchTree`) и
+    повтор коммита с **новым** `headSha` (fresh workspace передаётся явно, stale closure
+    исключён);
+  - `exists` / `missing` → «Файлы уже существуют / отсутствуют в ветке: …» (conflicting paths) +
+    кнопка «Обновить workspace» (без retry);
+  - сырой detail не показывается, модалка остаётся открытой, конфликт сбрасывается при
+    открытии модалки/палитры и при успехе.
+- **Тесты.** `WebIDEShell.test.tsx` — **19 passed**: тест 15 обновлён под plural-ручку
+  (`fileChanges` + `expectedHeadSha`), новые 18 (concurrent: конверт без сырого detail, refresh →
+  повторный bootstrap → retry c `sha256:head2`, успех) и 19 (missing: пути конфликта,
+  кнопка без «повторить»); 18 использует live-форму конверта top-level, 19 — backward
+  `detail.error`. Контур `npm test` = **5 файлов / 90 passed**; `tsc -b` = 0; `npm run build`
+  exit 0.
+- **e2e (live, воспроизводимо).** Новый тест в `web-ide.spec.ts`: правка README в Monaco →
+  модалка → внешний пуш (Gitea contents probe-файл) уводит head → «Запушить» → видимый
+  typed-конфликт («Ветка ушла вперёд», без сырого detail) → «Обновить workspace и повторить» →
+  «Запушено»; контент подтверждён через Gitea raw по `main`, probe-файл удалён (гигиена).
+  Полная линия `npx playwright test` = **30 passed / 1 skipped (degraded by design) / 0 failed**.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: `CosmoApiError`
+> + `parseCosmoErrorEnvelope` в `station/api.ts`, kind-aware ветка в `WebIDEShell.tsx`;
+> стенд login 200. Пруфы Flash: обе формы конверта (top-level + `detail`-wrapper); plural-ручка
+> с `fileChanges` + `expectedHeadSha`; live-e2e конфликт → refresh → retry → успех (Gitea raw);
+> playwright 30/1/0; vitest 90; tsc/build 0. Наш FE больше не парсит строки.
+
+---
+
+## ⬜ READY — WAVE 4: E2E IDENTITY, WOODPECKER LIVE-КОНТУР, PTY-ДИЗАЙН (COS-187/188/189)
+
+> **Источник:** хвосты приёмок волн 2-3 и стенд-факты: (1) второй seeded-юзер (follow-up
+> COS-176); (2) Woodpecker DB пуста → деривация чанков в live-смоках не воспроизводилась
+> (стенд-факт COS-180); (3) серверная половина PTY для IDE-CORE-023 (клиент готов, gutter-run
+> честно говорит «runner не подключён»).
+>
+> **Выданы 25.09.2026:** COS-187 → Flash (✅ DONE), COS-188 → Buddy, COS-189 → Luna (✅ DONE).
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-187** | Flash | 2-3h | P3 | COS-176 (принят) | ✅ DONE — viewer seeded, multi-user login, раздельные inbox (e2e 31/1/0) |
+| **COS-188** | Buddy | 2-3h | P2 | COS-180 (принят) | 🔄 выдан |
+| **COS-189** | Luna | 4-6h | P2 | IDE-CORE-023 (клиент) | ✅ DONE — research/дизайн: wire `runnerTty`, сэндбокс-профиль, канон-границы, эпик-нарезка (док) |
+
+#### COS-187 · e2e identity: второй seeded-юзер + раздельные inbox-тесты
+
+> **Зачем:** задокументированный follow-up приёмки COS-176: identity-тест notifications честно
+> переписан под одного seeded-юзера (свой inbox + forged → 401); раздельные inbox'ы двух
+> principals не проверяются — нет второго пользователя.
+
+> **Scope:**
+> (1) Второй seeded-юзер (OpenBao auth: свой sub/email/roles, отличные от admin; идемпотентный
+>     сид — расширить `seed-auth-secrets.py` или отдельный скрипт, PRESERVED при повторе).
+> (2) e2e: publish для A не виден в inbox B; forged-подпись по-прежнему 401; кэш сессий
+>     хелпера учитывает двух principals.
+> (3) Прогон notifications-линии целиком; честные skip'ы не деградируют.
+
+> **Out of scope:** RBAC-модель; прод-сиды; UI.
+
+> **Acceptance:** два principals с раздельными inbox (A не видит B); e2e зелёный; сид
+> идемпотентен (повтор → PRESERVED).
+
+> **Отчёт обратно:** как засидирован второй юзер; сценарии; числа; блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Как засидирован второй юзер.** `secret/cosmo/auth` расширен optional **`users`-списком**
+  (свой email/sub/roles/is_admin; основная запись — admin, backward-compatible).
+  `seed-auth-secrets.py` идемпотентно добавляет viewer: `viewer@cosmoport.local` /
+  `cosmo-viewer-dev` / sub `viewer` / roles `['user']` / is_admin=false; env
+  `COSMO_AUTH_VIEWER_EMAIL/PASSWORD/SUB`. Повторный прогон → **PRESERVED** (проверено двумя
+  запусками: `[auth:viewer] SEEDED` → `PRESERVED`; jwt-keys/admin тоже PRESERVED, kid стабилен).
+- **Login multi-user (BE).** `routes/auth.py`: `_auth_users()` собирает кандидатов
+  (primary + `users`; невалидные записи без email/hash fail-closed пропускаются), email —
+  точный match, пароль **всегда** сверяется PBKDF2-хэшем (для неизвестного email — с хэшем
+  первой записи, чтобы не давать timing-оракул на перебор адресов); токен минтится полями
+  matched-записи (sub/email/roles/is_admin).
+- **Хелпер e2e (COS-187).** Кэш сессий стал **per-email** (`Map`), добавлены
+  `viewerCredentials()`, `authHeaders/e2eRecipient/authenticatePage/authenticatePageOrSkip`
+  принимают credentials; env `E2E_COSMO_VIEWER_EMAIL/PASSWORD`; `E2E_COSMO_RECIPIENT`-override
+  применяется только к default-юзеру.
+- **Сценарии (live).** Новый notifications-тест `COS-187`: publish для viewer → viewer
+  `unread=1`, admin `unread=0`; publish для admin → admin `unread=1`, viewer по-прежнему `1`,
+  и его inbox содержит **только своё** событие (A не видит B). Forged-signature → 401 сохранён
+  (COS-176-тест без деградации).
+- **Числа.** BE focused `test_auth_login.py` = **12 passed** (+5: второй юзер login/wrong-password/
+  per-user creds/`_auth_users` fail-closed); auth-регресс (auth + jwt + surface_auth +
+  sanitary_rbac) = **92 passed**; live `notifications.spec.ts` = **18/18**; полная e2e-линия =
+  **31 passed / 1 skipped (degraded by design) / 0 failed**; vitest **90/90**; `npm run build` 0.
+- **Стенд-факт.** Образ `cosmo-api:local` пересобран + контейнер пересоздан (multi-user login в
+  живом контуре), сид выполнен с AppRole из `services/.env`; viewer login живой — 200
+  (`sub=viewer`, roles `['user']`, is_admin=false).
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: focused
+> `test_auth_login.py` — 12 passed; живой viewer-login 200 (`sub=viewer`); стенд ok.
+> Пруфы Flash: `users`-список в secret (admin backward-compatible); PBKDF2 всегда сверяется
+> (без timing-оракула); идемпотентность SEEDED→PRESERVED; live A/B-inbox; e2e 31/1/0.
+
+#### COS-188 · Woodpecker live-контур: активированный пайплайн-сид
+
+> **Зачем:** стенд-факт COS-180: Woodpecker DB пуста (нет активированных пайплайнов) →
+> деривация лог-чанков из реального пайплайна в live-смоках не воспроизводилась. Живой
+> контур пайплайнов должен быть воспроизводим для live-проверок (SSE логи, run history).
+
+> **Scope:**
+> (1) Идемпотентный сид: репо-фикстура (Gitea) + `.woodpecker`-конфиг + активация в Woodpecker
+>     + прогон пайплайна (или документированная процедура, если автоматизация невозможна).
+> (2) Live-смок: реальный пайплайн → лог-чанки по проводу (проверка пути COS-180 end-to-end).
+> (3) Интеграция в смоук-скрипты (self-skip при оффлайн-стенде).
+
+> **Out of scope:** изменение Woodpecker-инфры; CI-конфиги продуктов; promotion.
+
+> **Acceptance:** на стенде активированный пайплайн; live-смок деривации чанков зелёный;
+> сид идемпотентен.
+
+> **Отчёт обратно:** как засидировано; смоук (сценарий); числа; блокеры.
+
+> **Исполнение (Buddy, 2026-09-25):** ✅ закрыто — живой пайплайн и деривация чанков воспроизводимы.
+>
+> **Сид:** `services/scripts/seed-woodpecker-fixture.py` (идемпотентный): Gitea repo
+> `cosmo/pipeline-fixture` (auto_init + `.woodpecker.yml`, 2 echo-шага) → платформенный
+> WP-юзер `cosmo` в БД (Gitea PAT в `access_token` + `expiry` в будущем; WP API-токен =
+> JWT HS256 {user-id,type}, подпись = `users.hash`) → активация (`POST /api/repos?forge_remote_id=…`,
+> `config_file` явно) → прогон (`POST …/pipelines`) → логи шагов. Повтор: всё PRESERVED.
+> Сид выпускает `COSMO_WOODPECKER_TOKEN` в `services/.env`; compose пробрасывает его в cosmo-api.
+>
+> **Найдено live-смоком (контракт-дрифты, чинились по пути):**
+> 1. `workflows[].children` vs `steps`: живой v3.5 отдаёт шаги в `children` — `_flatten_steps`
+>    (адаптер) и `workspace._step_summaries` молча видели 0 шагов (вот она, «деривация не
+>    воспроизводилась»). Фикс: fallback `steps||children` + тесты.
+> 2. Строки логов: v3.5 отдаёт base64 в `data` (`line` — номер) — `_fetch_step_logs` возвращал
+>    числа вместо текста. Фикс: base64-декод + legacy-фолбэк + тест.
+> 3. Инфра контура: Gitea `ROOT_URL=cosmo-gitea:3000` (clone-плагин агента не резолвил
+>    `localhost:3000`, exit 128) + агенту `WOODPECKER_BACKEND_DOCKER_NETWORK=cosmo-net`
+>    (шаговые контейнеры в сети контура). Без обоих пайплайны не клонируются.
+>
+> **Live-смок:** `services/scripts/smoke-woodpecker-chunks.py` — реальный прогон → durable handle
+> → SSE `GET /runs/{id}/logs/stream` (ticket COS-075). Факт: **11 событий — 3× step_start
+> (clone/prepare/verify), 3× log_chunk, run_finish**; чанки несут реальные строки
+> (`+ echo "cosmo-fixture prepare"`, `cosmo-fixture verify`). Прогнан **2× PASS**.
+> Self-skip при оффлайн-стенде; встроен в `local-smoke.ps1` (Phase 1b).
+>
+> **Тесты:** `test_execution_woodpecker` + sse/resume + run_history = **70 passed**; полный
+> cosmo-сьют = **3612 passed / 1 failed (чужой: docs↔live OpenAPI drift от параллельного
+> COS-187 — docstring auth/login без регена docs; не мой дифф) / 24 skipped**.
+>
+> **Файлы:** `seed-woodpecker-fixture.py`, `smoke-woodpecker-chunks.py`; `execution_woodpecker.py`
+> (children+base64), `workspace.py` (_step_summaries), `docker-compose.yml` (Gitea ROOT_URL,
+> agent NETWORK, cosmo-api TOKEN env), `services/.env` (token, gitignored), тесты, README.
+> Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: `-k woodpecker`
+> — 29 passed / 6 skipped; сид и смок-скрипты на месте. Пруфы Buddy: живой прогон → 11 событий
+> (3× step_start / 3× log_chunk / run_finish), 2× PASS; идемпотентный сид PRESERVED. Ценно:
+> live-смок вскрыл два контракт-дрифта (`children` vs `steps`; base64-логи) — исправлены
+> с тестами. Побочно зафиксирован docs↔live OpenAPI drift после COS-187 → COS-192.
+
+#### COS-189 · PTY-контур: research/дизайн (wire `runnerTty`, сэндбокс, безопасность)
+
+> **Зачем:** IDE-клиент построил TTY-поверхность (IDE-CORE-023: xterm stdin/resize/ANSI),
+> серверной половины нет; gutter-run честно говорит «runner не подключён (PTY epic)». До
+> реализации нужен безопасный дизайн и согласованный wire.
+
+> **Scope:**
+> (1) Research: модель сэндбокса для интерактивного exec (изоляция, ресурсы, сеть, lifetime,
+>     связь с commit-and-run/Woodpecker-контуром).
+> (2) Wire-протокол `runnerTty`: `onData`/`onResize`/exit, транспорт (SSE vs WS), auth-модель,
+>     reconnect.
+> (3) Границы безопасности: PTY не как замена безопасному runner; аудит; fail-closed; что
+>     запрещено по канону.
+> (4) Результат — research-док + предложение эпик-нарезки (реализация — отдельными карточками
+>     после согласования wire с Vector через Максима).
+
+> **Out of scope:** реализация контура; клиентская часть (Vector); PTY как замена безопасному
+> runner (стоп-линия roadmap).
+
+> **Acceptance:** research-док с дизайном/wire/границами и предложением эпик-нарезки;
+> согласование wire с Vector инициировано.
+
+> **Отчёт обратно:** дизайн; wire; риски; предложение нарезки; блокеры.
+
+**Worker report (Luna, 2026-09-25, БЕЗ приёмки):**
+
+- **Дизайн:** `docs/research/2026-09-25-cos-189-pty-contour-design.md` — клиентский канон
+  (IDE-CORE-023) построчно, серверная половина wire, модель сэндбокса (3 варианта), профиль
+  изоляции, границы безопасности, эпик-нарезка, открытые вопросы.
+- **Wire (серверная половина):** транспорт — **SSE (output) + POST (input)** как в клиенте:
+  `pty_open`/`pty_data`/`pty_close` на лог-стриме `/api/v1/runs/{id}/logs/stream` (payload'ы с
+  `run_id`), ввод — `POST /api/v1/repos/workspace/runs/{id}/tty?repo=`. Фреймы публикуются в тот же
+  backlog `runlog` (ids/replay COS-180; порядок log↔pty сохраняется; курсоры логов pty не сдвигают).
+  SSE-обрыв не убивает PTY; типизированные ошибки (`PTY_NOT_OPEN` / `PTY_UNAVAILABLE`), fail-closed.
+  **Контрактный пробел:** у клиента нет open-запроса — «кто открывает сессию» (открытый вопрос №1).
+- **Сэндбокс:** subprocess в `cosmo-api` — **отклонён** (интерактивный shell в control plane =
+  RCE-эквивалент: DB-креды/vault/полная сеть); Woodpecker-транспорт — отклонён (нет интерактивного
+  API). Рекомендация — **ephemeral-контейнер на сессию** через отдельный sandbox-сервис (новый
+  сервис — явное инфра-решение владельца) + профиль: non-root, cap-drop ALL, read-only rootfs,
+  tmpfs, сеть `none`, лимиты, TTL, без docker.sock/host-mount'ов.
+- **Канон (сверено с Vector):** `void-core/web-ide/THREAT-MODEL.md` — будущий shell требует
+  **expiring capability + allowlist + quotas + audit**; `ARCHITECTURE.md` — «Web IDE … not a runner»,
+  interactive shell — не MVP. Дизайн удовлетворяет: **команд-скоупная сессия** (allowlist-энтрипоинт
+  вместо free-shell), capability-выдача (Valkey, паттерн `ot1`), аудит open/close/отказов, лимиты,
+  default-off kill-switch; стоп-линия «PTY ≠ замена безопасному runner'у» зафиксирована.
+- **Нарезка (предложение, после согласования):** PTY-SANDBOX-1 (инфра, 8-12 h) → PTY-SERVER-2
+  (session manager + capability, 6-8 h) → PTY-STREAM-3 (pty-фреймы/backlog, 3-4 h) → PTY-HARDEN-4
+  (security-матрица + live-смоук, 4-6 h) → PTY-FE-5 (Flash, после решения Vector).
+- **Согласование:** wire-предложение и 7 открытых вопросов (§7 дока) готовы к передаче **Vector
+  через Максима**; тема межпродуктовая (Airlock↔Web IDE) — при необходимости оформляется Nexus-пакет
+  по `void-core/SYNC.md`. До согласования серверная реализация не начинается; клиент безопасно
+  деградирует (уже реализовано).
+- **Риски:** новый сервис (инфра-расширение); максимальный риск-профиль поверхности (порядок:
+  sandbox+harden → UX); контрактный пробел open-intent; нагрузка stdin-POST (coalescing).
+- **Тесты/код:** вне scope (research-карточка). **Блокеры:** нет — нужны решение владельца (новый
+  сервис) и согласование wire. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Док прочитан целиком: клиентский
+> канон построчно, wire (§3), 3 варианта сэндбокса с обоснованным отклонением subprocess и
+> Woodpecker, профиль изоляции, границы безопасности, нарезка, 7 вопросов. Согласование wire
+> инициировано этим ходом (пакет передан Максиму → Vector). Реализация — BLOCKED до двух
+> решений (см. PTY-EPIC ниже).
+
+---
+
+## ⏸ BLOCKED — PTY-EPIC: 5 КАРТОЧЕК ПОСЛЕ СОГЛАСОВАНИЯ (COS-189 → PTY-1..5)
+
+> **Источник:** COS-189 (принят). Эпик нарезан Luna, зафиксирован как план.
+> **Решение владельца (25.09.2026):** закладываем sandbox-сервис — по уму, как опцию на будущее
+> (default-off; канон-исключение осознанное). **Остаётся:** согласование wire `runnerTty`
+> с Vector (7 вопросов §7 дока; пакет передан через Максима 25.09.2026) — серверная половина
+> (2+) стартует после него.
+> **Порядок:** 1 (запущен) → 2 → 3 → 4 (жёсткая цепочка) → 5 после 3 + решения Vector.
+
+| # | Карточка (предложение) | Кто | h | Зависит | Статус |
+|---|---|---|---|---:|---|
+| 1 | PTY-SANDBOX-1 — sandbox-сервис: allowlist-энтрипоинт, профиль §5, lifecycle, smoke изоляции | Buddy | 8-12 | ✅ решение владельца (25.09) | ✅ DONE — сервис+изоляция+TTL+аудит; live 29/29 |
+| 1.1 | PTY-SANDBOX-1.1 — швы: attach (pty) + доставка checkout в сессию | Buddy | 6-8 | 1 | ✅ DONE — attach (HTTP-chunked) + delivery; live 44/44 (2026-10-11) |
+| 2 | PTY-SERVER-2 — session manager: registry, single-flight, TTL/kill, аудит, capability | Luna | 6-8 | 1.1 + wire Vector (ждёт) | ⏸ BLOCKED (карточка полная; ждёт wire) |
+| 3 | PTY-STREAM-3 — `pty_*` фреймы в backlog `runlog` (ids/replay COS-180) | Luna | 3-4 | 1,2 | ⏸ BLOCKED |
+| 4 | PTY-HARDEN-4 — security-матрица, лимиты, kill-switch, live-смоук | Luna | 4-6 | 3 | ⏸ BLOCKED |
+| 5 | PTY-FE-5 — открытие сессии из drawer, gutter-run через PTY, UX | Flash | 4-6 | 1-4 + Vector | ⏸ BLOCKED |
+
+#### PTY-SANDBOX-1 · Sandbox-сервис: ephemeral-контейнер на сессию (PTY-контур, шаг 1)
+
+> **Зачем:** PTY-дизайн (COS-189 §4-5) рекомендует отдельный sandbox-сервис; subprocess в
+> `cosmo-api` отклонён (RCE-эквивалент). Решение владельца: закладываем — опция на будущее,
+> default-off, по профилю изоляции §5.
+
+> **Scope:**
+> (1) Сервис (compose-профиль, опциональный, default-off): запуск ephemeral-контейнера на сессию
+>     из образа с **allowlist-инструментами** (не free-shell) + lifecycle API для `cosmo-api`
+>     (внутренняя граница: create/stop/status; без `docker.sock` в `cosmo-api`).
+> (2) Профиль изоляции §5 дизайна: non-root, `cap-drop ALL`, `no-new-privileges`, read-only rootfs
+>     + tmpfs (`/workspace`,`/tmp`), сеть `none`, лимиты cpu/mem/pids/fs, TTL idle+hard, kill.
+> (3) Аудит-хуки: open/close/exit/отказы (для будущего session manager'а).
+> (4) Security-смоук (негативы): нет сети, нет `docker.sock`, нет host-FS; лимиты срабатывают;
+>     kill по TTL; default-off не влияет на стенд.
+
+> **Out of scope:** session manager в `cosmo-api` (PTY-SERVER-2); SSE-эмиссия (PTY-STREAM-3);
+> FE (PTY-FE-5); free-shell; PTY как замена безопасному runner'у.
+
+> **Acceptance:**
+> - Сервис поднимается опционально; сессия контейнера живёт/умирает по TTL; негативы изоляции
+>   подтверждены (нет сети/сокета/хост-FS); аудит пишется; выключенный профиль не влияет на стенд.
+
+> **Отчёт обратно:** образ/профиль; lifecycle API; негативы изоляции; аудит; блокеры.
+
+> **Исполнение (Buddy, 2026-09-25):** ✅ закрыто — сервис, изоляция, TTL, аудит, default-off.
+>
+> **Образ/профиль:** `services/pty-sandbox/image/` — alpine + allowlist-инструменты
+> (git/ls/cat/grep/find/head/tail/wc, read-only набор), `sandbox-run` — allowlist-энтрипоинт
+> (второй рубеж после валидации сервисом; uid 1000 + nologin — свободный shell закрыт).
+> Сервис — `services/pty-sandbox/service/` (FastAPI + docker SDK, владеет docker.sock);
+> compose-сервис `pty-sandbox` с `profiles: ["pty"]` — **default-off** (без профиля
+> отсутствует в `config --services`, стенд не затрагивается).
+>
+> **Lifecycle API** (`127.0.0.1:8190`, cosmo-net): `POST /sessions` (create; tool ∈ allowlist),
+> `GET /sessions`, `GET /sessions/{id}` (status), `DELETE /sessions/{id}` (stop/requested),
+> `POST /sessions/{id}/touch` (шов idle-TTL для PTY-SERVER-2), `GET /health`. Профиль §5 на
+> контейнер сессии: network none, read-only rootfs + tmpfs (/workspace,/tmp), cap-drop ALL,
+> no-new-privileges, non-root, mem 256m / pids 128 / cpu 1.0, TTL idle+hard + reaper, max 4.
+>
+> **Живой смоук** `services/scripts/smoke-pty-sandbox.py` — **29/29 PASS**: default-off
+> (config без/с профилем); deny `sh` → 403; сессия `cat` → профиль подтверждён по
+> docker inspect (network none / ro-rootfs / cap-drop / no-new-privileges / tmpfs-only,
+> без host-mounts / лимиты); негативы изнутри: uid=1000, нет docker.sock, нет сети
+> (egress fail), rootfs ro, tmpfs writable, `sandbox-run sh` → deny(77); **TTL kill
+> (hard_ttl)**; stop (stopped/requested); **аудит JSONL** (denied/create/kill×2).
+> Cleanup: сессии удалены, сервис снят — стенд не тронут (cosmo-api healthy).
+>
+> **Юнит-тесты** чистой логики: `pytest services/pty-sandbox/service/test_logic.py` —
+> **16 passed** (allowlist / кламп TTL / валидация args и id-полей).
+>
+> **Швы (по дизайну):** PTY-канал attach stdin/stdout — PTY-SERVER-2/STREAM-3; наполнение
+> allowlist — §7.6 (Vector/PO; v1 read-only); доставка кода в /workspace (checkout/files) —
+> следующий шаг (сеть none by design); аудит JSONL → `cosmo_audit_events` — PTY-SERVER-2.
+> **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: структура
+> `services/pty-sandbox/{service,image}`; compose-профиль `pty` **default-off** (в обычном
+> конфиге сервиса нет); юнит-тесты логики — **16 passed** (мой прогон); песочница не запущена,
+> стенд `/ready` ok. Пруфы Buddy: live-смоук 29/29 (изоляция по inspect и изнутри, deny `sh`→403,
+> TTL-kill, аудит JSONL, стенд не затронут). Швы зафиксированы; фундамент эпика стоит.
+
+#### PTY-SANDBOX-1.1 · Швы sandbox: attach (pty) + доставка checkout в сессию
+
+> **Зачем:** SANDBOX-1 дал lifecycle + изоляцию; для живой PTY-сессии (SERVER-2/STREAM-3) нужны
+> два шва в sandbox-сервисе: (а) attach stdin/stdout/resize к allowlist-процессу сессии;
+> (б) доставка кода — checkout `repo@commit_sha` в `/workspace` сессии (read-only), т.к. сеть
+> `none` by design.
+
+> **Scope:**
+> (1) Attach-API: серверный стрим сессии (транспорт sandbox↔cosmo-api — WS или HTTP-chunked;
+>     выбор зафиксировать в README/дизайн-заметке), stdin/resize вход, exit-code наружу.
+> (2) Доставка кода: sandbox API принимает workspace-артефакт (tar/bundle) и раскладывает в
+>     `/workspace` (read-only для процесса); идемпотентность по session id; лимиты (размер).
+> (3) Аудит: attach start/stop, delivery (denied/ok).
+> (4) Смоук: attach к allowlist-процессу (`cat`/`echo`) — поток идёт; delivery — файлы видны;
+>     негативы: oversize/битый архив → deny; изоляция не ослаблена (сеть none, без docker.sock).
+
+> **Out of scope:** SERVER-2 (cosmo-api session manager + wire `runnerTty` — Luna; ждёт Vector);
+> STREAM-3 (SSE-фреймы); FE; наполнение allowlist (§7.6 к Vector).
+
+> **Acceptance:** attach-поток живого allowlist-процесса (stdin→stdout) работает; workspace
+> доставлен и read-only; негативы честные; изоляция не ослаблена.
+
+> **Отчёт обратно:** транспорт attach; delivery-формат; смоук; негативы; блокеры.
+
+> **Исполнение (Buddy, 2026-10-11):** ✅ закрыто — оба шва живые, негативы честные, изоляция не ослаблена.
+>
+> **Attach-транспорт (решение 1.1):** HTTP-chunked, не WS — нулевые новые зависимости
+> на обеих сторонах (Starlette out; httpx у cosmo-api) и та же модель «out-стрим +
+> POST на вход», что в дизайне COS-189. `GET /sessions/{id}/attach` — сырые октеты PTY
+> (octet-stream, live-only, без replay); `POST /sessions/{id}/stdin` — chunked body в
+> stdin (один активный стрим, второй → 409); `POST /sessions/{id}/resize` — кламп
+> rows≤500/cols≤1000 (нечисло/≤0 → 422); exit-code — `GET /sessions/{id}` после конца
+> потока (attach к exited → 409 + exit_code в деталях). Ввод/вывод/resize продлевают
+> idle-TTL; обрыв клиента → чистый `attach_close (client_disconnect)`.
+> Границы честные (docker 7.2): закрытие stdin-канала EOF процессу не доставляет —
+> завершение сессии через stop/TTL; attach — live-канал, replay — зона STREAM-3.
+>
+> **Доставка:** `POST /sessions/{id}/workspace` (raw tar) → санитайз fail-closed
+> (только regular files/каталоги; без `/`, `..`, `\`, дисков; лимиты архив/записи/
+> распаковка) → root:root, файлы 0644, каталоги 0755 → `/workspace` (tmpfs mode=755)
+> **read-only для процесса**: touch от uid 1000 → отказ, `/tmp` — скретч.
+> Идемпотентность: повторная доставка заменяет (wipe + relayout). Механика раскладки:
+> exec `head -c N | tar -x` — ro-rootfs блокирует docker `put_archive` (живой факт:
+> 400 "container rootfs is marked read-only"); head читает ровно объём и завершается
+> сам (socket-EOF на 7.2 не доставляется — проверено).
+>
+> **Живой смоук** `services/scripts/smoke-pty-sandbox-attach.py` — **44/44 PASS**:
+> echo stdin→stdout (живой cat), resize/кламп/422, stdin-синглфлайт 409, exit-code=0
+> у `find` + 409-attach с кодом, delivery happy/idempotent, негативы (oversize 413
+> по declared-CL; bad_archive / unsafe_path / unsupported_entry → 400; content-type
+> → 415), изоляция не ослаблена (network none, ro-rootfs, нет docker.sock/egress,
+> /workspace 755), аудит (attach_open/close, stdin_open/close, denied busy/not_running,
+> delivery_ok/denied×4). Регрессия шага 1: `smoke-pty-sandbox.py` — **31/31 PASS**
+> (обновлён: `/workspace` теперь read-only для процесса — осознанное ужесточение
+> профиля под доставку).
+>
+> **Юнит-тесты** чистой логики: `pytest services/pty-sandbox/service/test_logic.py`
+> — **29 passed** (+13: resize-кламп; санитайз tar: traversal/links/лимиты/
+> родители/root:root/644-755).
+>
+> **Капкан docker-py 7.2 (шов для SERVER-2):** `attach_socket`/`exec_start` отдают
+> stdlib `socket.SocketIO(rb)` — write невозможен, после таймаута чтение «залипает»
+> ('cannot read from timed out object'); рабочий путь — сырой `sock._sock`
+> (recv/sendall), проверено синтетикой и живыми прогонами. Debug-логи шва —
+> `PTY_SANDBOX_DEBUG=1` (env-проброс в compose).
+>
+> **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Приёмка Cosmo (2026-10-11):** независимо: `pytest services/pty-sandbox/service/test_logic.py` —
+> **29 passed** (мой прогон); код-спот: attach/stdin/resize/workspace-эндпоинты с честными кодами
+> (409/413/415), доставка через fail-closed санитайз, `/workspace` RO для процесса. Live 44/44
+> и регресс 31/31 — по отчёту Buddy. Принято; границы docker-py 7.2 — переданы в SERVER-2.
+
+#### PTY-SERVER-2 · Session manager: registry, single-flight, TTL/kill, capability, аудит
+
+> **Зачем:** sandbox-сервис даёт изолированную сессию (PTY-SANDBOX-1/1.1), но контур Airlock
+> ещё не управляет ею: нет реестра run→session, политики жизни, прав и аудита. Это серверная
+> половина PTY-эпика (дизайн COS-189 §3/§7).
+
+> **Зависимости:** PTY-SANDBOX-1.1 (attach-шов) + согласованный wire `runnerTty` с Vector
+> (7 вопросов §7 дока COS-189). До согласования не начинать.
+
+> **Scope:**
+> (1) Реестр сессий: run → session, single-flight (одна сессия на прогон), привязка к
+>     principal и репозиторию.
+> (2) Жизненный цикл: idle-TTL + hard-TTL, kill при завершении/отмене/перезапуске прогона;
+>     явное закрытие.
+> (3) Ввод: приём stdin/resize только после открытия сессии (сервер не доверяет клиентскому гейту).
+> (4) Права: expiring capability со скоупом principal+repo+run (формат — по wire-решению);
+>     отзыв; операторский kill-switch.
+> (5) Типизированные ошибки: нет сессии/не открыта; фича выключена или сэндбокс недоступен;
+>     чужой прогон — 404 (анти-энумерация); превышение лимитов ввода.
+> (6) Аудит: открытие/закрытие/отказы/лимиты — в журнал аудита (кто, repo, commit, run, session).
+> (7) Фича по умолчанию выключена; включение — явный флаг.
+
+> **Out of scope:** эмиссия `pty_*` на лог-стрим (PTY-STREAM-3); FE-поверхность (PTY-FE-5);
+> наполнение allowlist; free-shell; PTY как замена безопасному runner'у.
+
+> **Acceptance:** (после согласования wire) сессия открывается против allowlist-процесса
+> сэндбокса; ввод идёт только в открытую сессию; TTL/kill срабатывают; чужой прогон → 404;
+> выключенная фича → типизированный отказ; аудит пишется; негативы честные.
+
+> **Отчёт обратно:** реестр/lifecycle; capability; типизированные ошибки; аудит; live-смоук; блокеры.
+
+---
+
+## ⬜ READY — WAVE 5: SOURCE-SAST ДИЗАЙН + FE DRAFT RESTORE (COS-190/191)
+
+> **Источник:** (1) COS-189 закрыл PTY-дизайн → следующий крупный кандидат SOURCE_AUDIT —
+> source-SAST (SonarQube/CodeScoring) research-заходом; (2) разведка FE: серверный черновик
+> сохраняется (COS-182), но `getWorkspaceDraft` нигде не вызывается — восстановления нет.
+>
+> **Выданы 25.09.2026:** COS-190 → Luna, COS-191 → Flash.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-190** | Luna | 4-6h | P2 | — | ✅ DONE — research/дизайн source-SAST: варианты, mechanics через живой findings-мост, legacy SONAR-POOL, нарезка (док) |
+| **COS-191** | Flash | 2-3h | P3 | COS-182 (принят) | ✅ DONE — restore server-draft + badges (server WIP/local), delete при Сбросе; vitest 95 |
+
+#### COS-190 · Source-SAST: research/дизайн (SonarQube / CodeScoring)
+
+> **Зачем:** SOURCE_AUDIT-кандидат: интеграция сканера исходников (гейты пока покрывают
+> container/artifact-сканы: trivy/syft/grype закрыты). Нужен дизайн до реализации: варианты,
+> где живёт сканер, связь с evidence/SARIF, границы.
+
+> **Scope:**
+> (1) Research: варианты (SonarQube / CodeScoring / иное) — что уже есть в линейке (lab Keeper?),
+>     чем отличаются, что закрывает SOURCE_AUDIT.
+> (2) Механика: запуск (Airlock-контур: run/pipeline vs внешний сервис), формат результата
+>     (SARIF?), запись в Evidence Ledger, гейт-потенциал.
+> (3) Границы: что не трогаем; межпродуктовые зависимости (Keeper — если lab-инстанс).
+> (4) Результат — research-док + предложение нарезки (реализация — после решения владельца).
+
+> **Out of scope:** реализация; container-сканы (приняты); DAST (Коробка).
+
+> **Acceptance:** research-док с вариантами/механикой/границами и предложением нарезки.
+
+> **Отчёт обратно:** варианты; рекомендация; границы; нарезка; блокеры.
+
+**Worker report (Luna, 2026-09-25, БЕЗ приёмки):**
+
+- **Док:** `docs/research/2026-09-25-cos-190-source-sast-design.md` — варианты, механика,
+  границы, нарезка, 6 открытых вопросов.
+- **Главная находка:** канон УЖЕ описывает source-SAST (LC-шаги 1.4 SonarQube / 1.6 CodeScoring;
+  source- vs container-профили; `BrickType` содержит `sast`/`sca`; E2E-харнесс
+  `run-e2e-pipeline.ps1` уже собирает «Sonar SAST»-кирпич как шаг Woodpecker), а принимающая
+  машинерия **живая**: findings-мост `POST /api/v1/runs/{run_id}/findings` → `runs.findings_refs`
+  (COS-101, severity-канон) → `GatePolicyEngine` (Critical→BLOCK / High→WARN) + Evidence Ledger +
+  Findings Search. Не хватает только сканера и ingest-адаптера отчёта.
+- **Legacy SONAR-POOL** (проверено `git grep` + живой ПГ): `sonar_pool.py` (пул CE-воркеров),
+  `sarif_merger.py` (50 шардов→1, O(1)), `minio_buffer.py` (S3 + Valkey `sonar.ingest`),
+  `ingest_controller.py` (token bucket), `fast_ingest.py` (SARIF→findings) — код/тесты есть,
+  **в рантайм не подключены**; `fast_ingest` метит в таблицу `cosmo_findings`, которой в Airlock-2
+  **нет** (проверено в живой ПГ) → ретаргетинг на текущий носитель обязателен. Бlueprint боевой
+  (Cosmoport-1: 50 параллельных run).
+- **Рекомендация:** Phase 1 — **SAST как шаг пайплайна** (brick `type=sast`, Woodpecker,
+  `sonar-scanner-cli`) против CE-хоста + отчёт → живой findings-мост → гейт/evidence (по BAN.md
+  процессов локально не поднимаем). Phase 2 — legacy-пул (SONAR-POOL) только под подтверждённый
+  масштаб. CodeScoring (1.6) — отдельный трек по решению владельца; CodeQL отложен.
+- **Нарезка:** SAST-STEP-1 → SAST-INGEST-2 → SAST-GATE-3 → SAST-STAND-4 (+ SAST-SCALE-5,
+  SCA-CODESCORING-6 — по решению). Оценки в доке.
+- **Открытые вопросы (6):** чей CE-хост (сервис стенда Airlock vs lab-инстанс Keeper); семантика
+  гейта (TERMINATE_ON_ERROR канона vs severity-политика); Quality/coverage охват; конвенция
+  projectKey (CE без branch-analysis); доступность/лицензия CodeScoring; масштаб Phase 2.
+- **Границы:** container-сканы не трогаем (приняты); DAST — Коробка; секреты — только секретница;
+  airgap — образы scanner/CE в бандл (как COS-171/172). **Тесты/код:** вне scope (research-карточка).
+  **Блокеры:** нет — нужны решения владельца (хост/гейт/масштаб). Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Док прочитан целиком (147 строк):
+> канон-сверка (LC 1.4/1.6, source- vs container-профили, `BrickType` sast/sca), живая машинерия
+> (findings-мост COS-101 → GatePolicyEngine → Evidence), legacy SONAR-POOL — честный статус
+> «не подключён», варианты A-E, Phase 1/2, 6 открытых вопросов. Реализация — BLOCKED до решений
+> владельца (см. SAST-EPIC ниже).
+
+#### COS-191 · FE: серверный черновик — восстановление (`getWorkspaceDraft`) + индикация
+
+> **Зачем:** COS-182 перевёл Save на серверный черновик (COS-110, TTL 7d), но `getWorkspaceDraft`
+> в FE нигде не вызывается — после перезагрузки черновик недоступен (localStorage очищен).
+> Иллюзия сохранения без восстановления.
+
+> **Scope:**
+> (1) Восстановление серверного черновика при открытии файла (если отличается от repo-версии) —
+>     с честной индикацией источника (server WIP / local / repo).
+> (2) Не ломать семантику COS-182 (Save→draft, ошибки честные); «Сбросить» откатывает.
+> (3) 404/503 черновика — тихо к repo-версии (не ошибка).
+> (4) Тесты: vitest (restore, индикация, деградации) + применимый e2e; tsc/build.
+
+> **Out of scope:** серверный draft-контракт (COS-110/182 приняты); multi-file drafts.
+
+> **Acceptance:** после reload открытый файл восстанавливает серверный черновик (или честно
+> repo-версию); индикация различима; vitest/tsc/build зелёные.
+
+> **Отчёт обратно:** как восстановлено; индикация; тесты; блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Как восстановлено.** `loadFileContent` после чтения repo-версии (CAS/ref) проверяет черновики
+  в порядке приоритета: **локальный** (localStorage — «несохранённые правки») → **серверный**
+  (`GET /api/v1/repos/workspace/draft`, только CAS-режим; в ref-snapshot пропускается как
+  read-only). Server-draft применяется, только если отличается от repo-версии; после restore
+  доступен «Сбросить», diff показывает WIP против repo.
+- **Индикация.** В шапке — `data-testid="content-source-badge"`: **`server WIP`** (cyan,
+  «переживает reload») или **`local draft`** (amber, «ещё не сохранён на сервере»); бейдж
+  показывается, только когда источник не repo **и** контент реально отличается от repo-версии
+  (черновик == repo → без ложного WIP). Плюс статус-сообщение «Восстановлен серверный черновик»
+  / «Восстановлен локальный черновик».
+- **Семантика COS-182 не сломана.** Save→draft как было (статус/ошибки честные); «Сбросить»
+  теперь возвращает repo-версию **и удаляет серверный черновик** (`DELETE /workspace/draft` —
+  иначе reload вернул бы его снова); сбой удаления → честное предупреждение
+  «Локально сброшено, но серверный черновик не удалён: …».
+- **Деградации.** 404/503 черновика — **тихо к repo-версии** (внутренний catch: без статус-ошибок
+  и terminal-шума); честная видимость ошибки загрузки repo-файла (COS-179) не задета.
+- **Тесты.** vitest `WebIDEShell.test.tsx` = **24 passed** (+5: restore server + бейдж/статус;
+  local приоритетнее server; 503 → тихо repo без индикации/ошибок; draft==repo → без WIP;
+  «Сбросить» → DELETE + repo-версия). Контур `npm test` = **5 файлов / 95 passed**;
+  `tsc -b` = 0; `npm run build` exit 0.
+- **e2e (live).** Новый тест: правка Monaco → Save (server draft) → **reload** → черновик
+  восстановлен (бейдж `server WIP` + контент в Monaco) → «Сбросить» → repo-версия, бейдж исчез,
+  `GET /workspace/draft` → **404** (удалён). Полная линия `npx playwright test` =
+  **32 passed / 1 skipped (degraded by design) / 0 failed**.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка:
+> `getWorkspaceDraft`/`deleteWorkspaceDraft` вызываются в WebIDEShell; `content-source-badge`
+> с тестами; `DELETE /workspace/draft` живой на BE; мой прогон vitest — **5 файлов / 95 passed**.
+> Пруфы Flash: e2e live (Save→reload→restore→Сбросить→404), линия 32/1/0; деградации тихие.
+
+---
+
+## ⬜ READY — FIX: OPENAPI РЕГЕН ПОСЛЕ COS-187 (COS-192)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-192** | Flash | 1-2h | P1 | COS-187 (принят) | ✅ DONE — реген-тул (`regen_openapi.py --check`) + артефакты; гвард 0 failed; дельта 1 строка |
+
+#### COS-192 · OpenAPI реген: снять docs↔live drift после COS-187 (гвард COS-177)
+
+> **Зачем:** гвард `test_docs_equal_live_app_schema` (COS-177) падает единственным в сьюте:
+> live `app.openapi()` после COS-187 (auth/login docstring multi-user) ≠ `docs/cosmo-openapi.{json,yaml}`.
+> Снять до коммита (чистый suite gate).
+
+> **Scope:**
+> (1) Реген `docs/cosmo-openapi.{json,yaml}` из живого `app.openapi()` (байт-воспроизводимая
+>     процедура COS-177/180/181/185); дифф — ровно дельта COS-187; json==yaml==live.
+> (2) Гвард + focused openapi/ref-контракт зелёные.
+
+> **Out of scope:** новые контракты; auth-код (COS-187 принят).
+
+> **Acceptance:** `test_workspace_ref_readonly.py` — 0 failed; дифф минимален (дельта COS-187).
+
+> **Отчёт обратно:** дифф; прогон; блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Процедура (байт-воспроизводимая).** Вынес реген в тул
+  `orchestrator/tools/regen_openapi.py` (идемпотентный, `--check` для CI/контроля):
+  JSON — `json.dumps(spec, indent=2, ensure_ascii=False)` + CRLF без хвостового
+  перевода; YAML — `yaml.safe_dump(spec, allow_unicode=True, sort_keys=False)` + CRLF;
+  источник — живое `app.openapi()` рабочего дерева. Формат подтверждён посимвольным
+  сравнением с уже принятыми артефактами (COS-177/180/181/185) — совпадает, отличалась
+  ровно дельта COS-187.
+- **Дифф минимален.** `docs/cosmo-openapi.json` — **1 строка** (только `description` ручки
+  `/api/v1/auth/login`: docstring multi-user из COS-187); `docs/cosmo-openapi.yaml` —
+  тот же блок (12+/1−). Никакого форматного шума.
+- **Прогон.** Гвард `test_workspace_ref_readonly.py` = **34 passed / 7 skipped, 0 failed**
+  (включая `test_docs_equal_live_app_schema`, `test_docs_json_equals_docs_yaml`,
+  `test_ref_param_in_docs_json_and_yaml`); focused `test_openapi_contract.py` — в том же
+  прогоне зелёный; transfer-matrix (`-k "openapi or schema"`) = **5 passed**. Второй запуск
+  `regen_openapi.py --check` → **IDENTICAL ×2** (exit 0) — регенерация идемпотентна.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: мой прогон
+> `test_workspace_ref_readonly.py` — **20 passed / 7 skipped / 0 failed** (гвард
+> `test_docs_equal_live_app_schema` зелёный); дифф-минимализм подтверждён (1 строка json);
+> тул `regen_openapi.py --check` идемпотентен. Drift снят до коммита.
+
+---
+
+## ⏸ BLOCKED — SAST-EPIC: 6 КАРТОЧЕК ПОСЛЕ РЕШЕНИЙ (COS-190 → SAST-1..6)
+
+> **Источник:** COS-190 (принят). Эпик нарезан Luna; рекомендация — Phase 1
+> (STEP-1 → INGEST-2 → GATE-3 → STAND-4), Phase 2/CodeScoring — по решению.
+> **Решение владельца (25.09.2026):** хост — **свой SonarQube CE в стенде Airlock**
+> (самодостаточность, закладываем на будущее). **Рабочие допущения Cosmo** (до признания иного):
+> гейт — ошибка сканера = terminate, findings = severity-политика (комбинация); v1 — только
+> security-findings, Quality/coverage — опция позже; projectKey v1 — `owner__repo` (без веток,
+> CE-ограничение), branch-конвенция — при плагине; CodeScoring — отдельный трек (доступ/лицензия);
+> масштаб Phase 2 — по факту нагрузки.
+> **Фактический старт:** STAND (хост — фундамент для live-прогона) → STEP-1 → INGEST-2 → GATE-3.
+
+| # | Карточка (предложение) | Кто | h | Зависит | Статус |
+|---|---|---|---|---:|---|
+| 1 | SAST-STEP-1 — SAST-кирпич пайплайна (brick `type=sast`, Woodpecker, `sonar-scanner-cli`, конфиг скана, артефакт-отчёт) | Luna | 6-8 | ✅ | ✅ DONE — brick+отчёт+durable-захват; settle-фикс гонки логов; live 12/12; gate 3629/24/0 |
+| 2 | SAST-INGEST-2 — отчёт → findings: конвертер (SARIF/CE-API) + живой мост (`tool=sonarqube`), дедуп | Flash | 4-6 | ✅ | ✅ DONE — SARIF/CE-конвертер + ретаргетинг-дедуп; live smoke 5→4, повтор 0; finding → COS-193 |
+| 3 | SAST-GATE-3 — evidence + гейт: маппинг severity/порогов, финализация, Hub-проводка | Luna | 4-6 | ✅ 2 (INGEST) · COS-203 ✅ | ✅ DONE — принят Cosmo (2026-10-05); live e2e 19/19 |
+| 4 | SAST-STAND-4 — стенд: **свой** SonarQube CE сервис + идемпотентный сид + live-smoke | Luna | 4-6 | ✅ решение владельца | ✅ DONE — CE-хост в стенде (companion-файл), сид идемпотентен (4×), live 9/9 |
+| 5 | SAST-SCALE-5 — SONAR-POOL revival (пул+merger+buffer, ретаргетинг) | Luna | 8-12 | подтверждённый масштаб | ⏸ BLOCKED |
+| 6 | SCA-CODESCORING-6 — CodeScoring-трек (шаг 1.6) | — | ? | решение владельца | ⏸ BLOCKED |
+
+#### SAST-STAND-4 · Стенд: свой SonarQube CE + идемпотентный сид (SAST-эпик, старт)
+
+> **Зачем:** решение владельца — свой CE-хост в стенде Airlock (самодостаточность, на будущее);
+> это фундамент Phase 1: без живого хоста не провести live-прогон SAST-кирпича (STEP-1).
+
+> **Scope:**
+> (1) SonarQube CE сервис в стенде (зеркало compose-канона Keeper: CE+PG, `:9000`, своя сеть),
+>     опциональный профиль (не тормозит обычный стенд), ресурсный бюджет ~4GB учтён.
+> (2) Идемпотентный сид: SONAR-токен → секретница (не plaintext), projectKey-конвенция
+>     `owner__repo`, quality-profile PrettyK (если применимо).
+> (3) Live-smoke: сервис healthy; токен валиден (API `api/system/status`); проект создаётся.
+> (4) Канон-доки: `SECURITY_MAINTENANCE.md`/README стенда — как поднять/погасить.
+
+> **Out of scope:** SAST-кирпич (STEP-1); ingest (INGEST-2); гейт (GATE-3); CodeScoring;
+> lab-инстанс Keeper (кросс-продуктовая зависимость не вводится).
+
+> **Acceptance:**
+> - CE поднимается опциональным профилем, healthy; токен из секретницы работает; сид идемпотентен
+>   (повтор → PRESERVED).
+> - Обычный профиль стенда не затронут (сервис default-off/отдельный профиль).
+
+> **Отчёт обратно:** compose/профиль; сид; конвенция ключей; live-smoke; блокеры.
+
+**Worker report (Luna, 2026-09-25, БЕЗ приёмки):**
+
+- **Compose/профиль:** `services/docker-compose.sonarqube.yml` — `sonarqube:community` +
+  `postgres:16-alpine`, UI `:9000`, **своя сеть `cosmo-sonar-net`** (`cosmo-net`/`pk-net` не
+  трогаются), `mem_limit 4096m` / reservation 2048m, volumes данных/логов; зеркало канона Keeper
+  минус `pk-net`. **Опциональность:** отдельный companion-файл (канон openbao/registry/test-pg) —
+  обычный `up -d` стенда его НЕ содержит (проверено `config --services`: без sonar).
+- **Сид:** `services/scripts/seed-sonar-stand.py` — ждёт UP; admin-доступ (dev `admin/admin`,
+  каскад со сменой дефолта при необходимости); **токен `prettyk-airlock` → OpenBao
+  `secret/cosmo/sast`** (kv-v2, AppRole `cosmo-app`; в выводе маска); проект по конвенции
+  **`owner__repo`** (фикстура `payments/api` → `payments__api`); quality-profile **PrettyK**
+  (copy `Sonar way`, py/ts) + назначение проекту. Vault-запись — только при изменениях.
+- **Идемпотентность:** доказана 4 прогонами; финальный (RUN 4): admin / token / project /
+  profiles / OpenBao — **все PRESERVED**, тот же токен, `SEED OK`.
+- **Live-smoke:** **9/9 PASS** (независимая проверка вне кода сида): CE UP
+  (`26.8.0.126808`); `secret/cosmo/sast` читается; токен из секретницы валиден
+  (`/api/authentication/validate` → `valid=true`); проект `payments__api` виден токен-доступом;
+  `PrettyK(py/ts)` назначен проекту; основной compose без sonar; стенд Airlock `/ready` = ok.
+  Скрипт: `D:\Infra\Temp\opencode\sast_stand_smoke.py` (временный артефакт, не в репо).
+- **Канон-доки:** `SECURITY_MAINTENANCE.md` §2.6 (up/down, секрет/ротация, конвенции) +
+  `README.md` (карта скриптов + короткая секция SAST-стенда).
+- **Стенд-факт:** CE оставлен **поднятым** (нужен STEP-1 как хост; `down` — документирован);
+  обычный профиль не затронут.
+- **Для эпика:** зависимость STEP-1 («STAND (хост)») снята — хост + токен + конвенции готовы.
+  **Suite gate не запускался:** код приложения/тестов не тронут (только services/* + docs).
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: SonarQube
+> UP (`:9000`, `26.8.0.126808` живой запрос); compose/seed на месте; стенд `/ready` ok.
+> Пруфы Luna: идемпотентность 4 прогона (PRESERVED), live-smoke 9/9 (токен из секретницы
+> валиден, проект/профили видны), основной compose без sonar. Зависимость STEP-1 снята.
+
+#### SAST-STEP-1 · SAST-кирпич пайплайна (brick `type=sast`, Woodpecker)
+
+> **Зачем:** первый шаг Phase 1: source-SAST как шаг пайплайна против своего CE (STAND-4 принят;
+> хост/токен/конвенции готовы). По BAN.md сканер исполняется CI-шагом, не в процессе Cosmo.
+
+> **Scope:**
+> (1) Brick-def `type=sast` (executor=woodpecker, image `sonarsource/sonar-scanner-cli`), конфиг
+>     скана: SONAR_HOST_URL (стенд), projectKey `owner__repo`, токен — из секретницы
+>     (`secret/cosmo/sast`, ref), не plaintext.
+> (2) Шаг сканирует checkout рана (repo@commit_sha) → отчёт (SARIF 2.1.0; либо CE-API конверсия).
+> (3) Артефакт-отчёт: capture в MinIO/Evidence (как trivy/syft), ref на отчёт durable.
+> (4) Live-прогон на стенде: реальный run → шаг → отчёт существует; негатив: CE недоступен →
+>     честный фейл шага.
+
+> **Out of scope:** ingest в findings (INGEST-2); гейт (GATE-3); CodeScoring; legacy-пул.
+
+> **Acceptance:** brick исполняется на живом стенде; отчёт снимается и durable; негатив честный;
+> секрет не светится в логах/DTO.
+
+> **Отчёт обратно:** brick/конфиг; прогон; отчёт; негатив; блокеры.
+
+**Worker report (Luna, 25.09.2026, БЕЗ приёмки):**
+
+- **Кирпич + конфиг скана.** Каталог: brick `sast-sonarqube` (`type=sast`,
+  `executor=woodpecker`, image `sonarsource/sonar-scanner-cli:latest`,
+  `inputs.SONAR_PROJECT_KEY=cosmo__sast-fixture`, timeout 1200s); upsert идемпотентен.
+  Фактическая команда скана — в repo-`.woodpecker.yml` фикстуры (шаги `sonar-scan` +
+  `sonar-report`): канон контура исполняет repo-конфиг, brick = каталожная дефиниция
+  (модель хранит только executor/image/inputs/outputs/timeout). Секреты шага — WP
+  repo-secrets `sonar_token`/`sonar_host_url` (значения из `secret/cosmo/sast`, в логах маска).
+- **Отчёт.** Шаг `sonar-report` снимает CE `api/issues/search` (CE-ветка Scope «либо»)
+  → JSON + канонический маркер `[prettyk-sast-report] format=ce-issues sha256=… bytes=… b64=<gzip+b64>`;
+  новый `domain/sast_report.py` (parse/find/verify — маркер сверяется с payload по bytes/sha256).
+- **Durable-захват.** Новый `control_plane/sast_capture.py` (зеркало COS-164): на `passed`-batch
+  с sast-кирпичом реальные логи прогона сканируются; отчёт → `ArtifactStore` (base `cosmo-evidence`,
+  механизм COS-075) + `EvidenceLedgerEntry type=raw_response` (`content_ref=artifact://…`,
+  `content_hash`=sha256 отчёта; provenance: source/format/brick_names/artifact_path/bytes).
+  Нет кирпича → no-op; нет маркера → `MissingSastReportError` → alert-след
+  `cosmo-sast-report-missing` (отчёт не выдумывается); расхождение → `InvalidSastReportError`.
+  Хук — в `execution_service.write_run_evidence`; попутно: `_resolve_brick_refs` (`bricks_refs`
+  в БД = ID-строки) + tolerant `docker_build_specs` (не-dict refs больше не обрывают evidence-путь).
+- **Live-гонка (вскрыта и починена).** WP флешит `log_entries` асинхронно: маркер отчёта лёг
+  в БД в ту же секунду, что и terminal, но уже ПОСЛЕ нашего чтения → ложный alert вместо отчёта
+  (прогон #13; замер по WP-БД: `finished` == `created` лог-записей). Фикс: `collect_all_logs
+  (settle_empty_s=…)` — bounded добор (≤2 доп. попытки) только для терминальных шагов с пустыми
+  логами; executor включает по умолчанию 2 с (`COSMO_EVIDENCE_LOG_SETTLE_S`, 0 = выкл.);
+  legacy-семантика без изменений, +3 детерминированных юнит-теста. (Живой прогон этого захода
+  гонку не воспроизвёл — захват через +7.8 с после финиша, ветка покрыта юнитами.)
+- **Тесты.** Новый `tests/cosmo/test_sast_report.py` — **23 passed**; `test_execution_woodpecker.py`
+  — **+3** settle-теста (вместе с sast-файлом — **47 passed**); focused-контур
+  (adapter+batch+service+sast) — **102 passed**; suite gate — **3629 passed / 24 skipped / 0 failed**
+  (400 c).
+- **Live-прогон (стенд).** `services/scripts/seed-sast-fixture.py` (идемпотентный сид полной
+  цепочки: Gitea-репо `cosmo/sast-fixture` + PAT/WP-активация + секреты → domain/app-binding →
+  brick → plan → run → pipeline): **12/12 PASS**.
+  - happy: `run-sast-1790364945-ok` → batch `passed`, WP #15 success (clone/sonar-scan/sonar-report),
+    маркер в логах, `raw_response`-запись
+    (`artifact://run-sast-…/…/sast-report/response_1790364977807.json`), chain `verified=ok`,
+    файл durable в store, секрет не светится.
+  - негатив (CE недостижим): batch `failed` честно, WP #16 failure, `sonar-scan` failure,
+    `sonar-report` skipped, отчёт не сфабрикован; секрет восстановлен.
+- **Стенд-факты.** `cosmo-api:local` пересобран + recreate (хеши adapter/executor в контейнере
+  совпали с хостом); `COSMO_EXECUTOR_ENABLED=1` — в compose стенда (комментарий у сервиса).
+  Остаток (не блокер): (а) warning `YAML generation failed … 'str' object has no attribute 'get'` —
+  аудит-YAML ждёт dict-refs, а `bricks_refs` хранит ID-строки; не фатален (WP исполняет
+  repo-`.woodpecker.yml`), кандидат в follow-up; (б) байты отчёта — FS контейнера
+  `/app/cosmo-evidence` (общий caveat контура COS-075; при recreate файлы теряются, source of
+  truth — ledger + `content_hash`).
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: focused
+> `test_sast_report.py` — **23 passed**; settle-фикс на месте (`collect_all_logs(settle_empty_s)`
+> в adapter + `COSMO_EVIDENCE_LOG_SETTLE_S` в executor); хеши adapter/executor в контейнере
+> совпали с хостом (пруф Luna). Пруфы: live-сид 12/12 (happy: маркер + raw_response + chain
+> verified + durable + маска секрета; негатив: CE недостижим → честный failure без фабрикации);
+> suite gate 3629/24/0. Остатки: аудит-YAML warning (`bricks_refs` ID-строки vs dict) → COS-194;
+> FS-байты отчёта — известный caveat COS-075.
+
+#### SAST-INGEST-2 · Отчёт → findings через живой мост (конвертер SARIF/CE-API)
+
+> **Зачем:** отчёт (STEP-1) превратить в канонические findings через **живой** мост COS-101
+> (`POST /api/v1/runs/{run_id}/findings`) с дедупом и severity-каноном.
+
+> **Scope:**
+> (1) Конвертер SARIF 2.1.0 (и/или CE-API `api/issues/search`) → findings-json моста
+>     (`tool=sonarqube`, severity map, CWE, path/line).
+> (2) Дедуп composite key (path+rule+line) — по legacy-блюпринту `fast_ingest`, **с ретаргетингом**
+>     на текущий носитель (`runs.findings_refs`; `cosmo_findings` не существует).
+> (3) Тесты: конвертер на фикстуре SARIF (golden), мост-вызов, дедуп, пустой/битый отчёт.
+> (4) Разработка параллельна STEP-1 против SARIF-фикстуры; живой смоук — на отчёте STEP-1.
+
+> **Out of scope:** сам кирпич (STEP-1); гейт (GATE-3); UI.
+
+> **Acceptance:** SARIF-фикстура → findings в `runs.findings_refs` через мост (severity-канон);
+> дедуп работает; пустой/битый отчёт — честно; тесты зелёные.
+
+> **Отчёт обратно:** конвертер; дедуп; golden-прогон; живой смоук; блокеры.
+
+**Worker report (Flash, 25.09.2026, БЕЗ приёмки):**
+
+- **Конвертер.** `orchestrator/cosmo/control_plane/sast_ingest.py`:
+  SARIF 2.1.0 → канонический finding-json носителя (`severity` канон gate-engine,
+  `cwe`/`cwe_ids`, `file_path`, `line`/`line_number`, `rule_id`, `tool`/`source_tool`
+  = `sonarqube`, `scan_type=sast`, `detected_at` из invocations). Severity-precedence:
+  Sonar-градация (`properties.severity`: BLOCKER→Critical…INFO→Info) → `security-severity`
+  (CVSS-полосы ≥9/≥7/≥4/>0) → SARIF `level` fallback (error→High, warning→Medium,
+  note→Low, none→Info). CWE — из properties (`cwe`/`cwe_id`) и tags
+  (`external/cwe/cwe-89`). Отдельный конвертер CE `api/issues/search`
+  (`convert_sonar_issues`) с тем же каноном. Пустой валидный SARIF (`runs: []`/без
+  results) → `[]`; битый JSON / не-SARIF структура → `SastReportError` (честный fail,
+  не молчаливый []); не-идентифицируемые entries (ни ruleId, ни message) — пропуск.
+- **Дедуп (ретаргетинг legacy).** Composite key **`path|rule_id|line`** (блюпринт
+  `ledger/fast_ingest.py`, но вместо несуществующей `cosmo_findings` — проверка против
+  текущего носителя `runs.findings_refs` до вызова моста) + схлопывание дублей внутри
+  батча. Идемпотентность: повторный ingest того же отчёта в тот же run → `attached=0`.
+- **Живой мост.** `ingest_findings_to_run` (общий вход) / `ingest_sarif_to_run` →
+  `control_plane.findings_bridge.attach_findings` (COS-101: severity-нормализация,
+  append в `runs.findings_refs`). CLI `orchestrator/tools/sast_ingest.py`
+  (`--run-id` + `--sarif`/`--issues`; exit 2 на битый отчёт / отсутствующий run) —
+  точка для CI-шага STEP-1.
+- **Тесты.** Новый `tests/cosmo/test_sast_ingest.py` — **14 passed**: golden-фикстура
+  SonarQube (`tests/cosmo/fixtures/sast/sonarqube_report.sarif`, 5 results → 4 unique),
+  severity-precedence/полосы, CWE, CE-конвертер, пустой/битый/мусорные entries,
+  дедуп (интра-батч, разная line, повтор), **живой мост на test PG**: ingest 5→attached 4,
+  повтор → attached 0/dups 5, missing run → LookupError, битый → SastReportError без записи.
+  Legacy `test_fast_ingest.py` — зелёный (28 passed суммарно).
+- **Live smoke (стенд Airlock, run через API + CLI).** `ingest#1`: parsed 5 /
+  **attached 4** / duplicates 1 / total 4; `ingest#2` (идемпотентность): attached 0 /
+  duplicates 5 / total 4. Носитель: `jsonb_array_length(findings_refs)=4`. Канонический
+  read-путь COS-104: `GET /api/v1/findings/search?q=SQL` → **total=1**,
+  `Critical sonarqube src/db.py:42 run=sast2smoke…` — находка видна. Smoke-раны со стенда
+  удалены (2 шт, гигиена); фильтрованный `GET /runs?domain` снова 200. Повторный смоук
+  на реальном отчёте STEP-1 — после кирпича (Luna).
+- **Finding (вне scope, вскрыт live-смоуком):** `Run.findings: list[str]`
+  (`domain/run_model.py:75`) ↔ носитель `runs.findings_refs` хранит **dicts** →
+  `GET /api/v1/runs/{id}` и `GET /api/v1/runs?domain_id=…` падают **500**
+  (pydantic ValidationError) для любого прогона с dict-findings. Латентный дрейф
+  контракта (COS-101 пишет dicts, COS-104 читает dicts, run-DTO остался на ID-строках);
+  gate/search/evidence не задеты. Нужен follow-up: выровнять DTO (типизированный Finding
+  или `list[str | dict]`) — решение PO.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 25.09.2026):** acceptance закрыта. Независимая проверка: focused
+> `test_sast_ingest.py` — **14 passed**; конвертер/CLI/фикстура на месте; дрейф `run_model.py:75`
+> подтверждён (follow-up COS-193 ниже). Пруфы Flash: live smoke — 5→4 attached, повтор 0,
+> поиск COS-104 видит находку; пустой/битый/мусор — честно. Живой смоук на реальном отчёте
+> STEP-1 — после кирпича (Luna).
+
+#### SAST-GATE-3 · Source-SAST: evidence + гейт + проводка решения
+
+> **Зачем:** отчёт source-SAST приходит в findings и ложится в Evidence, но контур не доводит
+> прогон до честного гейт-решения: нужно, чтобы ошибка сканера терминально завершала прогон,
+> а findings влияли на вердикт по severity-политике — с видимым результатом для оператора и
+> проводкой решения наружу по уже принятым контрактам.
+
+> **Зафиксированные решения (2026-10-04, рабочая позиция Cosmo до признания иного):**
+> (1) Ошибка сканера (шаг сканирования не отработал, отчёт отсутствует или невалиден) —
+>     терминальное завершение прогона, без «тихого» PASS; отсутствие обязательного evidence
+>     не маскируется.
+> (2) Findings обрабатываются severity-политикой действующего гейт-движка (Critical → блок,
+>     High → warn по порогу) — единый канон с container-сканами, двойной политики не вводим.
+> (3) v1 — только security-findings; Quality/coverage — опция позже, вне этого шага.
+> (4) projectKey-конвенция v1 — `owner__repo` (CE-ограничение); ветки — при плагине.
+
+> **Scope:**
+> (1) Маппинг source-SAST findings в гейт-политику: пороги/severity — по канону действующего движка.
+> (2) Финализация прогона: терминальное решение честное и durable; прогон с Critical findings
+>     не может закончиться «успехом» вопреки политике.
+> (3) Решение доступно внешнему контуру (Hub) по уже принятым контрактам и видимо оператору:
+>     что решено и почему — без пересчёта на клиенте.
+> (4) Живой прогон на синхронизированном рантайме (rebuild — COS-203; Sonar-хост — поднят):
+>     полный Woodpecker SAST-прогон — happy + негатив (сканер недоступен → честная терминация).
+
+> **Out of scope:** легаси-пул SAST (масштабирование), CodeScoring, Quality/coverage,
+> container-сканы (приняты), миграционная цепочка, контракт чтения прогонов (COS-193).
+
+> **Acceptance:**
+> - живой SAST-прогон: findings доходят до гейт-вердикта; Critical блокирует по политике,
+>   чистый прогон проходит; решение и evidence durable и согласованы с внешним контуром;
+> - негатив: сканер недоступен или отчёт потерян → прогон терминально честный (не PASS),
+>   причина видима;
+> - затронутые проверки зелёные; живой прогон выполнен на рантайме после COS-203.
+
+> **Отчёт обратно:** политика и маппинг; вердикты happy/negative на живом стенде; проводка
+> решения; проверки; пробелы.
+
+**Luna > Airlock: SAST-GATE-3 исполнен (2026-10-04, БЕЗ приёмки).**
+
+- **Терминальная честность (код).** `execution_service._capture_sast_reports`: sast-кирпич без
+  канонического маркера (шаг упал/не дошёл) больше не «alert-only» — выставляется degraded
+  (`BatchExecutor.mark_degraded`, consume-once) → финализация даёт терминальный **failed** с
+  причиной в ledger (`write_degraded_evidence`); alert-след сохранён. «Шаг сканера упал» и так
+  даёт batch failed → run **blocked** (терминально, не PASS).
+- **Авто-ingest findings в гейт (закрытый гэп).** Отчёт, захваченный из логов CI-шага, теперь
+  сразу конвертируется и прикрепляется к прогону (`_ingest_sast_findings`: SARIF → `ingest_sarif_to_run`;
+  CE-issues → `convert_sonar_issues` → `ingest_findings_to_run`) — findings успевают к гейт-оценке
+  финализации **без внешнего шага**; идемпотентно (дедуп `path+rule+line`). Ошибка ingest не молчит:
+  degraded → failed.
+- **Durable решение + проводка наружу.** `_gate_blocked` возвращает `(blocked, decisions)`;
+  при block пишется durable-след в evidence ledger (`type="decision"`, `source=cosmo-gate`,
+  decisions + plan_id), а уведомление наружу получило терминальный переход **`run_blocked`**
+  (taxonomy policy/service: event type + severity `high`) с payload `reason` + `gate_decisions` —
+  «что решено и почему» видно внешнему контуру без пересчёта на клиенте. `failed`-путь также несёт
+  `reason` (degraded), `blocked`-по-батчу — `batch_failed`.
+- **Пруфы (код).** `test_findings_bridge.py`: +2 (`gate block → type=decision` с решениями;
+  `sast без маркера → degraded → failed` + alert); +1 (`авто-ingest: S2077-подобный CE-issue
+  BLOCKER → Critical в носителе, повтор → без дублей`). `test_notification_triggers.py`: `run_blocked`
+  (unit + persist). Focused-кластер (bridge/notify/sast report/ingest/run dto/control plane/exec service) —
+  **128 passed**; **suite gate — 3646 passed / 24 skipped / 0 failed**.
+- **Живой e2e (`seed-sast-fixture.py`, расширен сценариями гейта; стенд: cosmo-api пересобран —
+  хеш `execution_service.py` совпал, CE 26.8 поднят).** Финальный прогон: **19/19 PASS, rc=0.**
+  - **run#1** (политика `Critical→block` + `High→block`): реальный отчёт CE (2067 B) → findings
+    **[Critical, High]** авто-ингест'ятся; вердикт — **blocked**; durable decision-след (1 запись);
+    наружу `run_blocked` с `reason=gate_blocked` и `gate_decisions`.
+  - **run#2 (негатив, CE недостижим)**: `sonar-scan` failure, отчёт не сфабрикован → batch failed →
+    run **blocked** (не PASS), наружу `run_blocked reason=batch_failed`.
+  - **run#3 (в пределах warn-порога `max_count`)**: те же findings → **succeeded** — политика не
+    блокирует произвольно.
+- **Найдено и починено живыми прогонами фикстуры:** (а) **гонка report-шага**: sonar-scanner
+  завершается раньше обработки отчёта CE (результаты видны ~40 c позже) → пустой отчёт; шаг
+  `sonar-report` теперь дожидается CE-задач (`/api/ce/activity`, bounded 240 c); (б) sample
+  фикстуры обновлён под действующие правила CE 26.8 — weak-hash `hashlib.md5` (S4790, CRITICAL→канон
+  High) и фейковый GitHub-PAT (S6418 secret detection, BLOCKER→канон **Critical**).
+- **Остаток (честно):** ветка «маркер отсутствует при success-шаге» покрыта кодом/интеграционным
+  тестом, но не живым прогоном (для неё нужен «успешный без отчёта» шаг — не сочиняли искусственно).
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Приёмка Cosmo (2026-10-05):** независимо: focused (run-DTO + SAST report/ingest) — **42 passed**;
+> CE 26.8 жив (`/api/system/status` UP); `run_model.py` host == контейнер (`14cbd3c2…`); OpenAPI-гейт
+> после приёмочного регена — IDENTICAL. Live e2e 19/19 (blocked / warn / негатив) — по отчёту Luna.
+> Принято; остаток про «success без маркера» — честная граница, не блокер.
+
+---
+
+## ✅ DONE — FIX: RUN-DTO FINDINGS DRIFT (COS-193)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-193** | Luna | 2-4h | P1 | — | ✅ DONE — принят Cosmo (2026-10-05) |
+
+#### COS-193 · Run DTO: findings `list[str]` ↔ dicts — 500 на GET /runs (латентный дрейф)
+
+> **Зачем:** live-смоук SAST-INGEST-2 вскрыл: носитель `runs.findings_refs` хранит **dicts**
+> (COS-101 пишет, COS-104 читает), а `Run.findings: list[str]` (`domain/run_model.py:75`)
+> остался на ID-строках → `GET /api/v1/runs/{id}` и `GET /api/v1/runs?domain_id=…` падают **500**
+> (pydantic ValidationError) на любом прогоне с dict-findings. Gate/search/evidence не задеты.
+
+> **Scope:**
+> (1) Выровнять run-DTO с носителем: типизированный finding (единый контракт с COS-104) или
+>     union — предпочтительно типизированно, без string-дрейфа.
+> (2) Регресс: `GET /runs/{id}` + `?domain_id` на прогоне с dict-findings → 200; поиск/gate не тронуты.
+> (3) Тесты: прогон с findings (dicts) → оба GET 200 и данные корректны; пустой список — как раньше.
+> (4) OpenAPI реген.
+
+> **Out of scope:** переписывание моста/поиска (COS-101/104); SAST-контур.
+
+> **Acceptance:** GET /runs на прогоне с dict-findings — 200 (не 500); контракт выровнен;
+> OpenAPI обновлён; suite gate зелёный.
+
+> **Отчёт обратно:** выбранный тип; тесты; реген; блокеры.
+
+**Luna > Airlock: COS-193 исполнен (2026-10-04, БЕЗ приёмки).**
+
+- **Выбранный тип.** `domain/run_model.py`: новый `FindingRef` (`extra="allow"`,
+  `severity: str = ""` — канон моста даёт непустую; extras сканеров сохраняются) и
+  `Run.findings: list[FindingRef | str]` — dict-путь типизирован (без string-дрейфа),
+  legacy-строки-ID проходят честно (union, не выдумываем severity).
+- **Регресс закрыт.** `_to_run_schema` больше не падает pydantic-валидацией на
+  dict-findings: `tests/cosmo/test_run_dto_findings.py` **5 passed** (FindingRef extras,
+  Run dict/str, `_to_run_schema` dict/empty); integration HTTP
+  `tests/cosmo/integration/test_runs_dto_findings.py` **1 passed**: живой мост
+  (`POST /runs/{id}/findings`, severity `critical|High` → канон `Critical|High`) →
+  **GET /runs/{id} — 200**, **GET /runs?domain_id= — 200**, extras (`cwe_ids`, `title`) на месте
+  (до фикса — 500 ValidationError).
+- **OpenAPI.** `python orchestrator/tools/regen_openapi.py` — json/yaml перезаписаны
+  (`FindingRef` + union в схеме Run); `--check` → IDENTICAL.
+- **Пруфы.** Focused-кластер (bridge + run_control_plane + новые) — **56 passed**;
+  integration-кластер — **31 passed**; **suite gate — 3642 passed / 24 skipped / 0 failed**
+  (PASS; +6 к базе 3636/24).
+- **Блокеры:** нет. Live-часть SAST-GATE-3 разблокирована (чтение прогонов с dict-findings живёт).
+
+> **Приёмка Cosmo (2026-10-05):** независимо: focused (run-DTO + SAST report/ingest) — **42 passed**;
+> `run_model.py` host == контейнер (`14cbd3c2…`); OpenAPI `--check` → IDENTICAL после приёмочного регена.
+> Принято.
+
+---
+
+## ✅ DONE — АУДИТ ПРОГОНА SAST: ЧЕСТНОЕ СОСТОЯНИЕ (COS-194)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-194** | Flash | 1-2h | P3 | — | ✅ DONE — принят Cosmo (2026-10-03); runtime rebuild/full SAST run остаются follow-up |
+
+#### COS-194 · Аудит SAST-прогона: корректные ссылки и честная полнота
+
+> **Зачем:** в принятом SAST-контуре аудит прогона может выдавать предупреждение на
+> корректных ссылках либо не объяснять, почему часть сведений неполна. Оператору нужен
+> точный отчёт: все доступные шаги представлены, а отсутствующие данные не маскируются.
+
+> **Сценарии приёмки:**
+> - Given завершённый SAST-прогон со всеми доступными ссылками, When формируется аудит,
+>   Then он содержит соответствующие шаги без предупреждения и дублирования.
+> - Given ссылка отсутствует или не разрешается, When формируется аудит, Then неполнота
+>   явно обозначена с причиной; отчёт не выдаёт неполные сведения за полные.
+> - Given прогон без SAST-шагов, When формируется аудит, Then прежнее поведение сохраняется.
+
+> **Out of scope:** контракт чтения findings прогона (COS-193); изменение конфигурации
+> SAST-сканирования, gate-policy или Hub-контракта.
+
+> **Acceptance:** три сценария выше покрыты проверками; аудит существующего SAST-контура
+> корректен и честно маркирует неполноту; связанные проверки зелёные.
+
+> **Отчёт обратно:** наблюдаемое поведение happy/negative; проверки; оставшиеся пробелы.
+
+**Flash > Airlock: COS-194 исполнен (2026-10-03, БЕЗ приёмки).**
+
+- **Причина warning'а.** `batches.bricks_refs` живого компилятора хранит ID-строки
+  (`['sast-sonarqube']`), а `BatchExecutor.submit_batches` отдавал их в audit-YAML как есть →
+  `brick.get(...)` на строке → `'str' object has no attribute 'get'` (не фатален, но аудит
+  терял шаги: прогон виделся «без шагов»).
+- **Резолв (executor).** Новый `BatchExecutor._resolve_audit_bricks`: ID-строки резолвятся из
+  каталога `pipeline_bricks` (name/definition_json/depends_on); dict-формы (legacy/unit) проходят
+  как есть; нерезолвнутые ссылки не выдумываются — возвращаются с причиной
+  (`brick not found in catalog` / `catalog unavailable (no DB session)`). YAML получает
+  `unresolved_refs`, неполнота логируется отдельным warning'ом с ref+причиной (вместо generic
+  «YAML generation failed»).
+- **Аудит (adapter).** `generate_pipeline_yaml` терпим к не-dict refs (не падает и не создаёт
+  шаг-фантом) и фиксирует неполноту секцией **`x-audit-incomplete`** (`[{ref, reason}]`);
+  happy-путь — шаги на месте, секции нет (без дублей).
+- **Сценарии (тесты, +10).** happy: ID-строка → шаг из каталога, без warning'а и дублирования;
+  negative: ghost-ссылка → причина и в warning'е, и в YAML; legacy: пустые/dict-refs (без
+  SAST-шагов) — прежнее поведение. `tests/test_execution_woodpecker.py` +3,
+  `tests/cosmo/test_batch_executor.py` +7 (резолв + submit-уровень).
+- **Пруфы.** Focused-набор (woodpecker/executor/sast/docker_build/registry_gap) —
+  **125 passed / 0 failed**; **suite gate — 3636 passed / 24 skipped / 0 failed** (367 c, +7 к базе).
+- **Live (read-only, живая БД стенда).** 5 SAST-батчей с `refs=['sast-sonarqube']`; реальный
+  резолвер → `Sonar SAST` (image `sonarsource/sonar-scanner-cli:latest`,
+  `SONAR_PROJECT_KEY=cosmo__sast-fixture`), `unresolved=[]`, audit-YAML содержит шаг; негатив
+  с `ghost-brick` → resolved-шаг + `x-audit-incomplete: [{ref, reason: brick not found in catalog}]`.
+- **Оставшиеся пробелы.** Audit-YAML — каталожная форма (фактическая команда в repo-`.woodpecker.yml`,
+  канон SAST-STEP-1; для кирпича без `commands` шаг несёт `echo 'no commands'`); `x-audit-incomplete` —
+  маркер аудита/сверки (в Woodpecker не отправляется). Контейнер `cosmo-api:local` (без mount'ов)
+  получит фикс при плановом rebuild/recreate; полный WP SAST-прогон не гонялся (live-проверка
+  read-only на существующих батчах).
+- **Коммит/пуш — по команде Максима.**
+
+> **Приёмка Cosmo (2026-10-03):** все три сценария карточки совпадают с поведением и тестами.
+> Независимый focused-прогон: adapter **3 passed**, submit/resolver **7 passed**; отчёт Flash:
+> focused **125/0**, suite gate **3636 passed / 24 skipped / 0 failed** и live read-only на пяти
+> реальных SAST-батчах плюс ghost-reference. Кодовая/контрактная часть принята.
+>
+> **Follow-up, не блокер приёмки COS-194:** запущенный `cosmo-api:local` ещё не пересобран и полный
+> Woodpecker SAST-прогон не проводился. SAST-GATE-3 должен подтвердить реальный прогон уже с
+> обновлённым runtime; до этого не утверждать, что исправление работает в текущем контейнере.
+
+---
+
+## ⬜ READY — PK-C-010: ГИГИЕНА ОБРАЗОВ (COS-195)
+
+> **Источник:** MASTER `PK-C-010` (директива `Cosmo > Airlock > PK-C-010 -> MASTER.md`,
+> 2026-09-26); диагностика Vector: `D:\prettyk.io\docs\board\status\image-hygiene-2026-09-26.md`.
+> Суть: не чистка, а смена схемы сборки — dev монтирует исходники (нет пересборки на правку),
+> релиз использует immutable-теги (нет `<none>`), cache и bind-mount — под правилами.
+>
+> **Выдан 26.09.2026:** COS-195 → Luna.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-195** | Luna | 6-10h | P1 | — | ✅ DONE — dev-профиль (6 reload, +0 образов), immutable `git-sha`, cache 14.65→3.2 GB, bind-mount чек 0 |
+
+#### COS-195 · Dev-профиль + immutable-релизы + BuildKit GC + bind-mount гигиена (PK-C-010)
+
+> **Зачем:** за ~2 суток — 19+ dangling (~10.7 GB reclaimable) + BuildKit cache ~14 GB; причина
+> воспроизводится на каждой правке (переиспользуемый тег `:local` + запечённый dev-код).
+> Плюс фантомная папка по мёртвому абсолютному host-пути при старте устаревшего контейнера.
+
+> **Scope:**
+> (1) **Dev-профиль:** исходники монтируются в контейнеры (api — hot-reload; frontend —
+>     dev-сервер); правка кода не порождает новый образ; `:local` не меняется в dev-цикле.
+> (2) **Релиз/airgap:** immutable-тег (git sha) вместо `:local`; прошлые сборки остаются
+>     именованными; retention («держать N») описана.
+> (3) **BuildKit cache:** gc-политика (keep-storage); процедура задокументирована.
+> (4) **Bind-mount гигиена:** только относительные пути; при переносе репо — контейнеры
+>     пересоздаются, а не `start` старых (не воскрешать мёртвые host-пути).
+> (5) **Разовый клиринг** накопленного (dangling + build-cache) с зафиксированными числами.
+
+> **Out of scope:** продуктовый рантайм/контракты; prod-стенд, не связанный с локальной сборкой.
+
+> **Acceptance:**
+> - после ≥5 правок в dev-цикле число dangling-образов и tagged-версий не растёт;
+> - релизный образ существует как immutable-тег; релизы не оставляют `<none>`;
+> - gc-политика build-cache применена; размер в лимите (`docker system df`);
+> - пересоздание compose-контейнеров после «переноса» репо не создаёт папок по мёртвым путям;
+> - runbook-строка (DEPLOYMENT/README): «как не плодить» + «как разово убрать».
+
+> **Отчёт обратно:** dev-профиль (как монтируется, hot-reload); тег-схема релиза; gc-политика;
+> bind-mount-правило; числа клиринга (до/после); блокеры.
+
+**Worker report (Luna, 26.09.2026, БЕЗ приёмки):**
+
+- **Dev-профиль.** Новый `services/docker-compose.dev.yml` (override поверх основного;
+  запуск `cosmo-start.ps1 -Dev [-Full]`):
+  - `cosmo-api`: монтирует `../orchestrator`, `../alembic`, `../alembic.ini` в `/app`;
+    entrypoint при `COSMO_DEV_RELOAD=1` поднимает `uvicorn --reload --reload-dir /app/orchestrator`
+    (пересборка нужна ТОЛЬКО при смене Dockerfile/requirements.txt/entrypoint.sh);
+  - `cosmo-frontend`: `node:22-alpine` + `npm ci && npm run dev -- --port 80` — Vite HMR,
+    порт :80 ВНУТРИ (канонический Caddy-апстрим `cosmo-frontend:80` цел; host :5174 прежний),
+    `/api` → `cosmo-api:8100` (`VITE_API_PROXY` в vite.config.ts), healthcheck — wget,
+    node_modules — в named volume (host-бинарники Windows не тащим).
+- **Live dev-цикл:** 6 правок файла-зонда в `orchestrator/` → **6 reload'ов WatchFiles**
+  (`:local` ID не менялся: 32a980276bbc, +0 образов, dangling +0); `/ready` ok после reload'ов.
+  Входы: host :5174 → 200; Caddy :8180 SPA → 200; :8180/api → 401 (edge жив); Vite проксирует /api.
+- **Immutable-релизы.** Новый `services/scripts/build-release.ps1`: тег по умолчанию
+  `git-<short12 HEAD>`; guard «существующий тег не перезаписывается»; dirty-предупреждение;
+  retention `-KeepN 5` + `-Prune`. Прогон: **`cosmo-api:git-89110393f4c2` +
+  `cosmo-frontend:git-89110393f4c2`** (cache-reuse; сборка 1.5 мин) — **+0 `<none>` от релиза**
+  (уникальные теги). Compose параметризован: `image: cosmo-api:${COSMO_API_TAG:-local}` (и frontend) —
+  dev/стенд-путь не изменился.
+- **Airgap.** `airgap-bundle.ps1` собирает build-образы с immutable-тегом и **вшивает тег
+  в копию compose бандла** (self-contained; dry-replace токенов проверен: 1+1 замена, остатка нет);
+  `verify-airgap-checksums.sh` в running-режиме берёт загруженные `cosmo-*`-теги динамически
+  (статические `:local` убраны).
+- **BuildKit GC.** Новый `services/scripts/image-hygiene.ps1`: dangling prune + build-cache sweep
+  (опция `-ReserveCacheGB N` — `--reserved-space`). **Числа клиринга (до → после):**
+  dangling **4 → 2** (снос: superseded `cosmo-api:local` + кэш-запись; остаток — in-use образами,
+  снести нельзя), Build Cache **14.65 GB → 3.17 GB** (reclaimable **11.48 GB → 0 B**; пол — слои,
+  расшаренные с образами). Грабли (проверено на Docker 29.6.2/BuildKit 0.31.2): `--keep-storage`
+  deprecated → `--reserved-space` («минимум, который не вытесняется», НЕ лимит), `--max-used-space`
+  на практике no-op (проверен трижды, вкл. контролируемый кэш) — политика = full sweep + опция reserve.
+- **Bind-mount гигиена.** Новый `services/scripts/check-bind-mounts.ps1` — статический чек compose:
+  только относительные пути, allowlist `/var/run/docker.sock`. Прогон: 6 compose-файлов,
+  2 абсолютных маунта — оба allowlist → **0 нарушений**. Live: `up -d --force-recreate cosmo-caddy`
+  (первоисточник фантомов PK-C-010) — mount резолвится в `D:\prettyk-airlock\services\Caddyfile`,
+  `D:\prettyk-control-plane` **не материализуется** (до/после False), edge /live → 200.
+  Правило «при переносе репо — пересоздавать, не `docker start`» — в доке.
+- **Runbook.** `docs/DEPLOYMENT.md` §6.5 («как не плодить» — dev-цикл/тег-схема/cache-политика/
+  bind-mount-правило; «как разово убрать» — image-hygiene) + `services/scripts/README.md`
+  (каталог + секция «Dev-профиль + гигиена образов»).
+- **Валидации:** `docker compose config` (main+dev) rc=0; парс всех 5 PS-скриптов OK; `bash -n
+  verify-airgap-checksums.sh` rc=0; trailing-whitespace новых файлов 0. Капкан среды (учтён):
+  PS 5.1 читает UTF-8-no-BOM как cp1251, em dash → smart-quote `”` — делимитер строки → парс
+  ломается; исполняемые строки новых скриптов ASCII, русский — только в комментариях.
+- **Стенд-факт:** стенд переведён в dev-профиль (api hot-reload + FE dev-сервер), Caddy-вход цел.
+  Откат: `docker compose -f services/docker-compose.yml up -d --no-deps cosmo-api cosmo-frontend`
+  (без dev-файла). `:local` пересобран ровно один раз (entrypoint — единственная неизбежная
+  пересборка новой схемы).
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Принято (Cosmo, PO, 26.09.2026):** acceptance закрыта. Независимая проверка: 5 артефактов
+> на месте (`docker-compose.dev.yml`, `cosmo-start.ps1`, `build-release.ps1`, `image-hygiene.ps1`,
+> `check-bind-mounts.ps1`); мой прогон `check-bind-mounts` — **0 нарушений**; `docker system df`:
+> Build Cache 3.66 GB (reclaim 380 MB) — совпадает с заявленным клирингом. Пруфы Luna: dev-цикл
+> 6 правок → 6 reload, +0 образов; immutable-теги `git-89110393f4c2` (+0 `<none>`); доки §6.5 +
+> README. Инцидент среды (падение Docker Desktop) — не связан; стенд восстановлен.
+
+---
+
+## 🔄 ACTIVE — ДЕМО «НОРМАЛЬНЫЙ БИЛД»: РЕАЛЬНЫЙ ПРОГОН СБОРКИ (COS-196…198)
+
+> **Источник:** команда Максима, 2026-10-03: «приоритет показать хоть и сырой но хотя бы
+> билд нормальный. Нужен пайплайн». Выдан 2026-10-05 (перевыдача — прошлые строки до воркеров не дошли, файлы не тронуты): COS-196/198 → Flash, COS-197 → Luna (сид/скрипты; one-command — после контракта 196); COS-200/205 — следом за Flash.
+>
+> **Факты нарезки:**
+> - Витрина «Сборки» в Control Station на живом стенде не работает: клиент запрашивает список
+>   и создание сборки по адресам, которых нет в API (живой API отдаёт список только по
+>   конкретному приложению).
+> - Триггер сборки в API — заглушка: статус «running» не обновляется, логи и ссылка на образ
+>   выдуманы (указан несуществующий registry).
+> - Реальный механизм сборки уже принят: кирпич `docker_build` (build + push в registry зоны,
+>   канонический digest-тег), захват digest из логов шага, durable-запись артефакта и Evidence
+>   (COS-162/163/164/166). Его не переписываем.
+> - Сквозного живого пути «запуск → пайплайн → реальный образ → digest → evidence», пригодного
+>   для показа, нет: live-смоук COS-166 исполнял команды сборки напрямую, а 8-фазный
+>   e2e-скрипт выставляет статусы вручную.
+> - Фактическое исполнение в контуре — конфиг пайплайна в репозитории (канон SAST-STEP-1);
+>   сгенерированный аудит-YAML — сверочная форма. Для реального docker build в демо нужен
+>   исполняемый конфиг сборки в репозитории демо-приложения (или эквивалентный принятый механизм).
+>
+> **Канон:** честность важнее красоты; не строить второй билд-механизм; не ломать принятые
+> поверхности. **Не трогать:** deploy/promotion ЗР→ЗТ→ЗПЭ (приняты), SAST-контур, контракт
+> чтения прогонов (COS-193 в работе у Luna), миграционная цепочка.
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-196** | Flash | 8-12h | P1 | — | ✅ принято (Cosmo, 2026-10-11) — реальное исполнение сборки + durable-digest |
+| **COS-197** | Luna | 6-8h | P1 | COS-196 — для one-command части (хвост → COS-207) | ✅ принято (Cosmo, 2026-10-11) |
+| **COS-198** | Flash | 6-8h | P1 | COS-196 ✅ | ✅ принято (Cosmo, 2026-10-11) — витрина сборки на живых данных |
+| **COS-200** | Flash | 8-12h | P2 | COS-196/197 ✅ (демо-пакет закрыт 11.10) | 🔄 выдан (2026-10-05) — очередь: образ → годность → запуск в ЗР |
+
+#### COS-196 · Сборка: реальное исполнение за триггером
+
+> **Зачем:** сейчас запись сборки декоративна: запуск не приводит к исполнению, статус залипает,
+> логи и ссылка на образ выдуманы. Для показа нужен настоящий билд приложения с реальным digest.
+
+> **Scope:**
+> (1) Запуск сборки приводит к реальному исполнению в существующем build-контуре (кирпич
+>     `docker_build`, исполняемый пайплайном; второй механизм не создавать).
+> (2) Статус сборки честно отражает жизненный цикл (создана → идёт → успех/провал) и
+>     обновляется по факту; «вечный running» исключён.
+> (3) Успех закрепляет реальную immutable-ссылку на образ (канонический digest-тег), согласованную
+>     с registry и Evidence; провал не оставляет артефакта-фантома и называет причину.
+> (4) Логи сборки — из реального исполнения; недоступность логов подаётся честно.
+> (5) Контракты создания и списка сборок согласованы между API и клиентом: список сборок
+>     отвечает на живом стенде, создание принимает то, что шлёт UI.
+
+> **Сценарии:**
+> - Given живой стенд и приложение с build-конфигурацией, When оператор запускает сборку,
+>   Then исполнение реально стартует, а по финишу сборка показывает успех и digest-ссылку,
+>   совпадающую с образом в registry.
+> - Given исполнение упало (runner или registry недоступны), When оператор открывает сборку,
+>   Then статус = провал с причиной, артефакта-фантома нет.
+> - Given открыт реестр сборок, When данные грузятся, Then список отдаётся живым API
+>   (не 404/405) и показывает реальные статусы.
+
+> **Out of scope:** UI-косметика вне сборок (COS-198); deploy/promotion (принято);
+> SAST-контур; контракт чтения прогонов (COS-193); миграционная цепочка.
+
+> **Acceptance:** сценарии подтверждены на живом стенде: реальный образ в registry по digest,
+> консистентность registry ↔ запись сборки ↔ Evidence; негатив честный; затронутые проверки зелёные.
+
+> **Опорные факты (Luna, COS-197, 2026-10-11):** каталог не может нести `docker_build`-дефиницию
+> (`BrickDefinition` требует `image`, extras режет; `DockerBuildSpec` — `extra=forbid`) → durable
+> digest-record (COS-164) на демо-кирпиче сейчас честно SKIP, digest верифицируется логами шага +
+> registry. WP v3.5 detail-API не отдаёт steps — состояния/логи шагов читаются из WP-БД (канон
+> стенд-фикстур). Демо-контур — `services/scripts/seed-build-demo.py` (ветка `--docker-build-def`
+> готова; позитивный compile — после расширения схемы каталога).
+
+> **Отчёт обратно:** как запускается реальное исполнение; статусы/артефакт/логи; негатив; проверки; пробелы.
+
+**Flash > Airlock: COS-196 исполнен (2026-10-11, БЕЗ приёмки).**
+
+- **Как запускается реальное исполнение.** `POST /api/v1/builds` (и per-app `POST /apps/{id}/builds`) — сборка оборачивает принятый
+  runs-контур: build `bld-*` + run `run-bld-*` на плане приложения (`app.pipeline_plan_id`, свежие батчи) → `execution_service.submit_run`
+  (канон COS-097) → WP pipeline из repo-конфига (`cosmo/build-demo/.woodpecker.yml`) → poll → evidence → finalize. Второй механизм не строился.
+- **Список/контракт (п.5).** `GET /api/v1/builds` — живой (был 404/405): фильтры app_id/project_id/status/branch; админ — сводно, не-админ — свой домен.
+  DTO расширен клиентскими полями (title/initiator/run_id/evidence_refs/build_logs/meta); создание принимает то, что шлёт UI: `{app_id,title,branch,commit_sha}`.
+- **Статус — по факту, «вечный running» исключён (п.2).** Reconcile сборки с прогоном при чтении (succeeded→success; failed/blocked→failed+причина;
+  cancelled→aborted). Провал submit'а больше не зависает: durable-след `submit_failed` (дозапись ручки — раньше UPDATE по несуществующей строке терялся),
+  PG-терминал батча, degraded-причина, финализация run. Исполненный план (терминальные батчи) → честный **409** «скомпилируйте новый план»
+  (resubmit-guard не поднял бы батчи → вечный running).
+- **Артефакт (п.3).** Успех закрепляет canonical digest-ref из durable `ArtifactRecord` (COS-163/164). Закрыты два шва:
+  (a) резолв ID-строк `bricks_refs` → каталог → `docker_build`-спека (раньше capture молча no-op);
+  (b) bounded growing-settle логов WP — хвост с digest-маркером доливается асинхронно (живая гонка флеша, ловилась alert'ом «missing digest»).
+  Провал/отмена — без фантома, причина видна.
+- **Логи (п.4).** Детали тянут реальные логи шагов из WP (кап 2000 строк), персистятся; недоступность — честная причина (`meta.logs_error`), не выдумка.
+- **Шов схемы (находка (a) Luna).** `BrickDefinition` расширен docker_build-полями (flat, additive; `image` больше не обязателен) — дефиниция проходит
+  API-путь; `DockerBuildSpec.from_definition` толерантен к generic-полям. Live: `PUT /bricks/docker-build-demo` с полной спекой → 200, каталог несёт `type=docker_build`.
+- **Live proof (живой стенд).** `bld-f7a0d142` (app-build-demo, plan-build-demo-4, run-bld-a9ebd825bf, WP **#5**): success ~14 с;
+  **artifacts `build-demo:1.0.0@sha256:1df9e237…897f2d` == registry-манифест (HEAD 200) == ledger decision `ef6f53ae40cd`** (canonical_ref совпал);
+  логи шага с маркером; evidence — 2 записи (log + artifact-record). Digest совпадает с приёмкой COS-197 (`1df9e237…`).
+- **Негативы.** (1) повторный запуск на исполненном плане → **409** «уже исполнялся (батчи: passed)»;
+  (2) `abort` активной сборки → build `aborted`, run `cancelled`, durable-ручка «cancelled via API» (WP-пайплайн крайне быстрого билда может успеть досчитать — продукт честно фиксирует отмену по команде);
+  (3) executor off → сборка-запись `failed` с причиной, без run'а и фантома (unit + ветка кода); (4) честный кейс «успех без durable-record» (сборка до фикса шва): success + artifact_note, без выдумок.
+- **Проверки.** Suite gate — **3670 passed / 24 skipped / 0 failed, 0 errors**; focused (builds/cos196/executor/adapter-settle/artifact_capture/deps-guard/domain-invariant) — зелёные;
+  OpenAPI реген (`docs/cosmo-openapi.*` синхронны, COS-192-тест зелёный).
+- **Стенд.** Перед proof: `COSMO_WOODPECKER_TOKEN` в `.env` освежён (канон seed-woodpecker-fixture) + recreate `cosmo-api`; WP repo 3 `trusted.volumes=true`;
+  образ `cosmo-api:local` пересобран из текущего дерева.
+- **Пробелы/координация.** (1) Сид COS-197 сеет кирпич generic-дефом (default) — для durable digest-record прогон нужен с `--docker-build-def`
+  (ветка готова; после закрытия шва её можно сделать дефолтом — решение Luna); (2) хвост one-command (COS-207) может стартовать через builds-поверхность;
+  (3) dev-остатки прогонов Luna (`…0621-1`, `…1770-2`, `…3448-1`) — её зона (часть помечена в приёмке COS-197). Блокеры: нет. Коммит/пуш — по команде Максима.
+
+> **Acceptance (Cosmo, 2026-10-11).** Принято: реальное исполнение за триггером подтверждено живым стендом (мой прогон, не по отчёту).
+> - Мой цикл через продуктовую ручку: свежий план → `POST /api/v1/builds` → `bld-293c7d63`: running → **success**; artifacts
+>   `build-demo:1.0.0@sha256:1df9e237…` == registry-манифест; evidence 2 — `2daca2da77a3` (log, WP #16) + `6af2d2c5ee28`
+>   (decision `oci://…@sha256:1df9e237…`); run `run-bld-038c5ea134` succeeded. Перед этим `PUT /bricks/docker-build-demo` с полной
+>   спекой → 200 (каталог несёт `type=docker_build` — шов (a) закрыт, durable-record работает).
+> - Мои негативы: повтор на исполненном плане → **409** («уже исполнялся (батчи: passed)»); `commit_sha` < 7 → **422**;
+>   честный no-record (`bld-716dc586`, кирпич был generic после сида) → success + `artifact_note` «durable ArtifactRecord по
+>   digest не найден» — без фантома.
+> - Ledger-сверка отчётного `bld-f7a0d142`: artifacts digest == registry == decision `ef6f53ae40cd`; `bld-f1c69917` (abort) — aborted;
+>   `GET /api/v1/builds` живой (6 записей, контракт UI-полей принят).
+> - Проверки — мои прогоны: **suite gate 3670 passed / 24 skipped / 0 failed (368 с)**; focused builds-кластер 74 passed; OpenAPI `--check` IDENTICAL.
+> - Замечание → COS-207: сид демо сеет generic-дефолт (после прогона сида durable-record выключается — поймано в приёмке);
+>   дефолт — полная спека (`--docker-build-def` готов).
+
+#### COS-197 · Демо-контур «нормальный билд»: сид, прогон одной командой, очистка
+
+> **Зачем:** чтобы показывать билд повторяемо и без ручной подготовки: идемпотентный демо-контур
+> от репозитория до терминала сборки и понятного итога.
+
+> **Сплит (2026-10-05):** исполняет Luna. Сид и очистка — независимы; one-command часть — после
+> контракта COS-196 (Flash).
+
+> **Scope:**
+> (1) Идемпотентный демо-сид: домен и приложение демо-сервиса, репозиторий с реальным Dockerfile
+>     и исполняемым build-пайплайном (сборка + push в registry зоны по каноническому тегу),
+>     кирпич/план — готовые к прогону. Повтор не плодит дубли.
+> (2) One-command запуск показа: стартует сборку через продуктовую поверхность, дожидается
+>     терминала и печатает человекочитаемый итог (статус, digest-ссылка, evidence-след) с кодом
+>     возврата; недоступный registry/runner → честная ошибка.
+> (3) Очистка `--clean`: снимает демо-следы, не задевая чужой стейт.
+> (4) Runbook: как поднять, показать и убрать.
+
+> **Out of scope:** изменение продуктовых контрактов (COS-196); UI (COS-198); deploy/promotion.
+
+> **Acceptance:** два прогона подряд — первый реальный успех, второй без дублей; `--clean` убирает
+> демо-следы; итог содержит digest, совпадающий с registry, и evidence; негатив честный.
+
+> **Отчёт обратно:** состав сида; вывод показа; негатив; очистка; блокеры.
+
+**Luna > Airlock: COS-197 исполнен (2026-10-11, БЕЗ приёмки).**
+
+- **Сид (`services/scripts/seed-build-demo.py`, идемпотентно).** Gitea `cosmo/build-demo`
+  (реальный `Dockerfile` + исполняемый `.woodpecker.yml`: `docker build` + `docker push` в
+  registry зоны по каноническому тегу `localhost:5100/cosmoport/zr/build-demo:1.0.0`,
+  digest-маркер COS-142); WP: активация (PAT) + `config_file` + **`trusted.volumes=true`**
+  (без trust linter режет docker.sock-шаг); Cosmo: domain/app binding, brick, plan
+  (`plans/compile`) — готовые к прогону. Повтор — PRESERVED/synced, дублей нет.
+- **Показ (`--run [--runs N]`).** По прогону — **свой план на запуск** (`plan-build-demo-<tag>`;
+  общий план унаследовал бы терминальный батч — канон SAST-фикстуры). Итог человекочитаемо
+  с rc: batch passed → WP pipeline success (состояния шагов — из WP-БД: v3.5 detail-API
+  steps не отдаёт) → digest-маркер `build-demo:1.0.0@sha256:…` из логов шага → **образ по
+  digest существует в registry ZR (:5100)** → run succeeded; evidence-след прогона
+  (log-запись COS-097) проверяется всегда.
+- **Живые пруфы.** Два прогона подряд: **13/13 PASSED, 0 FAILED, 2 SKIP** — run
+  `…630-1` (WP #11) и `…651-2` (WP #12): batch passed, evidence, pipeline success
+  (`clone`+`docker-build`), digest `sha256:1df9e237e1f8a914bd86f12baf7c3b6594defbe595523f4b9f8343a135897f2d`,
+  registry-manifest 200, run succeeded. Полный цикл **clean → seed → показ** воспроизведён
+  (контрольный run #13: 7/7, 1 SKIP; `forge_remote_id` перепривязан 34→35).
+- **Очистка (`--clean`).** Gitea repo снят; WP delete API отвечает 500 (честный WARN —
+  сид сам перепривязывает remote; цикл повторного подъёма проверен); app/domain delete
+  FK-блок → честный WARN (как в каноне SAST-фикстуры); ledger/registry-следы не удаляются
+  (immutable/retention).
+- **Находки (швы, важные для COS-196).**
+  (a) Каталог **не может нести `docker_build`-дефиницию**: `BrickDefinition` требует `image`
+  и игнорирует extras (`_to_brick_schema`/compile падают на дефиниции COS-162), а
+  `DockerBuildSpec` — `extra=forbid`. Следствие: digest→durable artifact-record (COS-164)
+  не срабатывает — демо-кирпич сеется **generic-дефиницией**, digest проверяется по
+  логам+registry, а ledger-запись честно **SKIP**; в скрипте заготовлена ветка
+  `--docker-build-def` (полная спека; позитивный compile — после расширения схемы).
+  (b) WP v3.5 detail-API не отдаёт `steps` (и у sast-репо тоже) — чтение состояний/логов
+  переведено на WP-БД (`steps`, `log_entries.data` — `bytea`, hex-декод).
+  (c) env-токен `COSMO_WOODPECKER_TOKEN` протухает при смене `users.hash` (401 в submit);
+  канон обновления — `seed-woodpecker-fixture.py` + recreate `cosmo-api` (в runbook).
+  (d) **Мина в `seed-sast-fixture.py`**: его `ensure_wp_user` пишет `hash=pat`/`forge_id=<repo id>`
+  без `forge_remote_id` (ломает WP-user-row → env-токен 401), а `ensure_activated` использует
+  body-вариант `POST /api/repos` (v3.5 не читает → 500). Не трогала (вне scope) — кандидат в
+  follow-up на канон-фикс.
+- **Проверки.** Продуктовый код карточкой не изменялся. Suite gate — **3668 passed / 24 skipped,
+  2 errors** в чужом `test_hub_evaluation_dispatch` (транзиент среды; изолированно — **47/47**).
+- **Runbook.** `services/scripts/README.md` — секция «Демо „нормальный билд" (COS-197)»:
+  сид/показ/очистка, зависимости стенда, границы (COS-196/198).
+- **Остаток.** One-command «показ через builds-поверхность» — после продуктового контракта
+  COS-196; сейчас показ идёт через принятую runs-поверхность. UI витрины — COS-198 (Flash).
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Acceptance (Cosmo, 2026-10-11).** Принято: сид/показ/очистка/runbook подтверждены живым стендом.
+> - Идемпотентный re-seed: повтор — PRESERVED/synced (repo + файлы, PAT, WP-user, brick, plan), дублей нет.
+> - Живой прогон приёмки (`run-build-demo-1791676486-1`, свой план): batch passed, evidence-след (log, COS-097),
+>   WP **#14** `clone`+`docker-build` success, digest-маркер `sha256:1df9e237…`, манифест по digest в
+>   registry `:5100` → 200, run succeeded. Итог: **7/7 PASS, 1 честный SKIP** (durable artifact-record — шов COS-196).
+> - Ledger-сверка отчётных прогонов: батчи …630-1/…651-2/…752-1 — `passed`; evidence-записи
+>   `woodpecker://cosmo/build-demo/11|12|13` — маппинг совпал.
+> - `--clean`: честные best-effort WARN (WP delete API 500 → перепривязка remote по канону; FK domain/app),
+>   ledger/registry не трогаются — по отчёту и коду.
+> - Изолированный `test_hub_evaluation_dispatch.py` — **47 passed** (2 errors suite-gate не воспроизвелись — транзиент).
+> - Замечания: (1) dev-остаток `run-build-demo-1791675371-1` — running без батча (ранний черновик —
+>   остаток до финальной версии скрипта; в контуре не участвует); (2) находка (d) уточнена — реальный дефект: call-site
+>   `ensure_wp_user(pat, str(gitea.get("id")))`, где `gitea` — объект репо → user-row получает
+>   `forge_remote_id` репозитория (канон — id пользователя); «hash=pat» и «body-вариант активации» в текущем
+>   файле не подтвердились → фикс-карточка **COS-208** (выдана Luna).
+> - Хвост scope (2): one-command через builds-поверхность — после контракта COS-196 → карточка **COS-207**.
+
+#### COS-198 · Витрина сборки: реальные данные в Control Station
+
+> **Зачем:** «показать» требует экрана: реестр сборок должен показывать настоящие данные и
+> открывать детали без обмана.
+
+> **Scope:**
+> (1) Реестр сборок на живых данных: статус, время, ветка, инициатор, артефакт; честные
+>     loading/empty/error.
+> (2) Детали сборки: commit/branch, статус, реальные логи (или честное «недоступно»),
+>     digest-ссылка на образ, evidence-след.
+> (3) Запуск сборки из UI по контракту COS-196; честные ошибки при отказе.
+> (4) Никаких синтетических данных и мёртвых кнопок.
+
+> **Out of scope:** backend-контракт сборки (COS-196); deploy/promotion; прочие экраны.
+
+> **Acceptance:** живой стенд — сборка из COS-197 видна в реестре, детали открываются,
+> значения совпадают с исполнением; пусто/ошибка честные; vitest/tsc/build зелёные.
+
+> **Отчёт обратно:** что показывает реестр/детали; живой прогон; проверки; пробелы.
+
+**Flash > Airlock: COS-198 исполнен (2026-10-11, БЕЗ приёмки).**
+
+- **Реестр (п.1, живые данные).** `GET /api/v1/builds` → таблица: статус/время/ветка/инициатор/артефакт; фильтры (приложение/статус/ветка) и поиск;
+  лёгкий поллинг активных сборок (честное дотягивание до терминала); честные loading/empty/error (без моков).
+- **Детали (п.2).** Клик по строке → диалог: commit/branch, статус, инициатор, прогон (`run_id`), начало/финиш;
+  **digest-ссылка** (canonical_ref артефакта); **evidence-след** (id записей); **реальные логи прогона** из API
+  (недоступность — честный `logs_error`, у активных — «ещё не оставило логов», у провалов — причина); честные алерты
+  `failure_reason` / `artifact_note`; «Прервать сборку» для активных (abort → run cancel).
+- **Запуск из UI (п.3).** Существующая модалка по контракту COS-196 (`POST /api/v1/builds`); отказы честные (400 — нет плана; 409 — план уже исполнен; executor off — сборка-провал с причиной).
+- **Никаких синтетиков и мёртвых кнопок (п.4)** — все кнопки/поля привязаны к живым вызовам; «—» вместо выдумок.
+- **Live proof (CDP, :5174, admin).** Реестр «Сводная история сборок · 4 из 4» — реальные сборки демо-стенда;
+  диалог `bld-f7a0d142`: digest `build-demo:1.0.0@sha256:1df9e237…897f2d`, evidence (2: `ed2c637b0f50`, `ef6f53ae40cd`),
+  логи `clone` + `docker-build` с маркером; скрин — `D:\Buddy\Flow\Current\blitz-auth\cdp\cos196-details.png`.
+- **Проверки.** vitest — **96 passed** (5 файлов; `ControlStationViews` 43, вкл. новый COS-198-тест деталей: digest/evidence/логи);
+  `tsc -b` — чисто; `npm run build` — ок. BE-контракт подтверждён suite gate'ом (COS-196).
+- **Пробелы.** Косметика вне сборок и группировка по проекту (project_id-фильтр API есть, в UI не выведен) — вне scope. Блокеры: нет.
+
+> **Acceptance (Cosmo, 2026-10-11).** Принято. Живой стенд сверен независимо: CDP-скрин `cos196-details.png` —
+> реестр «Сводная история сборок» на реальных данных и модалка `bld-f7a0d142`: success, digest-ссылка `sha256:1df9e237…`,
+> evidence-след (2: `ed2c637b0f50`, `ef6f53ae40cd`), реальные логи `clone`/`docker-build`; значения совпали с ledger-записями (БД).
+> Проверки — мои прогоны: vitest **96 passed** (5 файлов), `tsc -b` rc=0; BE-контракт покрыт suite gate (COS-196). Группировка
+> по проекту — вне scope (зафиксировано).
+
+#### COS-200 · Демо-продолжение: от собранного образа до запущенного сервиса в ЗР
+
+> **Зачем:** демо-пакет показывает сборку; для «нормального пайплайна» нужен следующий честный
+> шаг: собранный образ проходит проверку годности и запускается в зоне разработки — одной
+> командой, без ручных обходов, с видимым итогом.
+
+> **Опорные факты (read-only разведка Flash, 2026-10-04):**
+> - Годность образа уже существует: trivy-скан + durable-аттестация; deploy без PASS блокируется —
+>   второй механизм не строить.
+> - Запуск в ЗР уже существует: материализация pull → run → healthy; статус `deployed` — только
+>   после фактического healthy, иначе честный rollback.
+> - Труба «одной команды» — надстройка над демо-контуром COS-197.
+> - Внимание: generic-путь создания деплоя ставит мгновенный success без материализации — для
+>   демо и приёмки брать принятый release-deploy путь, не его (см. COS-204).
+
+> **Scope:**
+> (1) Продолжение демо-сценария после успешной сборки: решение годности образа по канону
+>     (скан контейнера; критичные находки блокируют запуск) — на существующем механизме.
+> (2) Запуск в ЗР: образ поднимается из registry по digest (без плавающих тегов), сервис
+>     доходит до healthy; статус честный.
+> (3) Всё — одной командой показа: от сборки до запущенного сервиса, с человекочитаемым итогом
+>     (digest, решение годности, состояние сервиса); повтор и `--clean` — по канону демо-контура.
+> (4) Негативы честные: нет digest, годность не пройдена, registry недоступен → запуск не
+>     происходит, причина видима.
+
+> **Out of scope:** продвижение в другие зоны; изменение механизмов скана/деплоя; витрина
+> сборок (COS-196…198); миграционная цепочка.
+
+> **Acceptance:**
+> - живой стенд: одна команда доводит демо-приложение от сборки до контейнера healthy;
+>   digest и решение годности консистентны с registry и Evidence;
+> - негативы: критичная находка / отсутствие digest / недоступный registry → честная остановка
+>   без запуска;
+> - затронутые проверки зелёные.
+
+> **Отчёт обратно:** сценарий и вывод; вердикты happy/negative; проверки; пробелы.
+
+---
+
+## ✅ DONE — HONESTY: HEALTH-СТАТУС REGISTRY ЗР (COS-199)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-199** | Buddy | 1-2h | P3 | — | ✅ DONE — принят Cosmo (2026-10-05) |
+
+#### COS-199 · Registry ЗР: health-статус без ложного «unhealthy»
+
+> **Зачем:** контейнер registry зоны ЗР числится `unhealthy`, хотя фактически обслуживает запросы:
+> `/v2/` отвечает 200, каталог образов отдаётся, sidecar-проверка доступности зелёная. Причина —
+> проверка здоровья в конфиге контейнера вызывает инструмент, которого нет в образе registry
+> (доступен только busybox-набор). Ложный признак путает оператора и портит демо.
+
+> **Сценарии приёмки:**
+> - Given запущенный registry ЗР, When оператор смотрит статус, Then контейнер честно `healthy`
+>   (проверка выполняется доступным способом или снята в пользу sidecar-чека);
+> - Given registry реально недоступен, When оператор смотрит статус, Then он честно `unhealthy`;
+> - Given зона ЗТ не поднята, Then её недоступность не маскируется под доступность ЗР.
+
+> **Out of scope:** включение ЗТ; поведение/хранилище registry; продуктовые контракты и API.
+
+> **Acceptance:** статус контейнера совпадает с фактической доступностью (positive и negative);
+> compose-конфиг валиден.
+
+> **Отчёт обратно:** как исправлено; live-проверка статуса; негатив; блокеры.
+
+> **Исполнение (Buddy, 2026-10-05):** ✅ закрыто — статус registry совпадает с реальностью (positive/negative).
+>
+> **Причина:** healthcheck в `docker-compose.registry.yml` вызывал `curl`, которого нет в образе
+> `distribution/distribution:3.1.0` (alpine/busybox-набор) → проба падала всегда → ложный
+> `unhealthy` при фактически живом registry (`/v2/` = 200, каталог отдаётся).
+>
+> **Фикс:** проба переведена на доступный busybox-wget —
+> `test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5000/v2/"]`.
+> Compose сам не пересоздаёт контейнер при смене healthcheck → применён
+> `docker compose -f docker-compose.registry.yml up -d --force-recreate registry-zr`.
+>
+> **Live, positive:** `cosmo-registry-zr` — `healthy` (FailingStreak=0); `:5100/v2/_catalog` →
+> `4 repos`; sidecar `cosmo-registry-health`: `[OK] registry-zr :5000 reachable`.
+>
+> **Live, negative (честность):** registry реально недоступен (`docker pause cosmo-registry-zr`) →
+> контейнер честно `unhealthy`; проба wget на закрытый порт rc=1 (на живой — rc=0).
+>
+> **ЗТ не маскируется:** `registry-zt` off by design (`deploy.replicas: 0`); sidecar печатает
+> `[FAIL] registry-zt :5000 unreachable` — недоступность ЗТ не выглядит как доступность ЗР.
+>
+> **Acceptance:** статус ↔ фактическая доступность ✔ (positive/negative);
+> `docker compose -f docker-compose.registry.yml config -q` → rc=0 ✔.
+>
+> **Артефакты:** `services/docker-compose.registry.yml`.
+>
+> **Блокеры:** нет.
+
+> **Приёмка Cosmo (2026-10-05):** независимо: `cosmo-registry-zr` = `healthy` (FailingStreak=0),
+> `:5100/v2/` = 200, `compose config -q` → rc=0. Негатив (pause → честный `unhealthy`)
+> и немаркировка ЗТ — по отчёту Buddy. Принято.
+
+---
+
+## ✅ DONE — СТЕНД ПОКАЗА: ПОДЪЁМ И ЧЕСТНАЯ СВОДКА ОДНОЙ КОМАНДОЙ (COS-201)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-201** | Buddy | 2-4h | P2 | COS-199 | ✅ DONE — принят Cosmo (2026-10-05) |
+
+#### COS-201 · Стенд показа: одна команда поднимает контур и печатает честную сводку
+
+> **Зачем:** префлайт показа (2026-10-04) вскрыл, что контур может лежать целиком
+> (Docker Desktop остановлен, frontend не поднят), а часть статусов легко принять за
+> рабочие или за сломанные по ошибке. Для показа нужен один вход: поднять всё нужное и
+> получить честный отчёт о состоянии — без ручных шагов и без маскировки.
+
+> **Scope:**
+> (1) Одна команда поднимает контур, необходимый для демо (ядро + полный профиль + registry
+>     зоны ЗР), идемпотентно, не трогая чужие стеки.
+> (2) Ждёт готовности и проверяет ключевые входы: API, edge, frontend, registry (каталог),
+>     Gitea, Woodpecker, признак включённого executor.
+> (3) Печатает честную сводку: что up/healthy, что degraded/down и почему; известные ложные
+>     статусы не маскируются (см. COS-199) — либо честно объясняются оператору.
+> (4) Повторный прогон не плодит дубли; отчёт пригоден для человека, ведущего показ.
+
+> **Out of scope:** изменение поведения сервисов; продуктовые контракты; dev-профиль для
+> разработки (уже есть); починка ложного health-статуса registry (COS-199).
+
+> **Acceptance:**
+> - Given Docker engine остановлен, When запускают команду, Then она честно сообщает, что
+>   engine недоступен, и не притворяется, что контур поднят;
+> - Given engine поднят, When запускают команду, Then контур поднят и печатается сводка,
+>   совпадающая с ручной проверкой; реально лежащий сервис отражён честно (negative);
+> - повторный прогон без дублей; чужие стеки не затронуты.
+
+> **Отчёт обратно:** команда; состав поднимаемого; пример сводки; негатив; блокеры.
+
+> **Исполнение (Buddy, 2026-10-05):** ✅ закрыто — один вход, честная сводка, негативы пройдены.
+>
+> **Команда:** `.\services\scripts\cosmo-start.ps1 -Full` — подъём контура (идемпотентно) + пробы
+> + сводка. `-CheckOnly` — только проверка и сводка, без `up` (для негатив-демонстраций).
+> Exit codes: `0` — все входы up; `1` — degraded/down; `2` — Docker engine недоступен.
+>
+> **Состав (`-Full`):** core compose (PG, Valkey, API, Frontend, Caddy) + `--profile full`
+> (MinIO, Gitea, Woodpecker + agent) + `docker-compose.openbao.yml` (shared, auto-unseal) +
+> `docker-compose.registry.yml` (ZR + health-sidecar; ЗТ off by design). Сети `cosmo-net`/`pk-infra`
+> создаются только при отсутствии. Чужие стеки не трогаются (без `--remove-orphans`); известные
+> orphan-warnings общего project-лейбла `services` поясняются оператору строкой `[i]`.
+>
+> **Префлайт:** `docker version` — engine недоступен → честный стоп: `[FAIL] Docker engine
+> unreachable - the stand cannot be started or probed` + подсказка; exit 2, никакого «UP».
+>
+> **Пробы:** API `/ready`; edge `:8180/live`; frontend `:5174/` и via edge `:8180/`;
+> Registry ZR каталог `:5100/v2/_catalog`; Gitea `:3100/api/v1/version`; Woodpecker `:8000/version`;
+> OpenBao `:8200/v1/sys/health` (sealed → DOWN с подсказкой bootstrap); executor — env-признак
+> живого контейнера `COSMO_EXECUTOR_ENABLED` (app-level INFO не доходит до `docker logs`).
+>
+> **Пример сводки (live, повторный прогон):**
+>
+> ```text
+> === Cosmoport stand summary (demo set) ===
+>   [UP]   API           :8100/ready ok (db=connected, cache=connected)
+>   [UP]   Edge          :8180/live HTTP 200 (via Caddy)
+>   [UP]   Frontend      :5174 HTTP 200; via edge :8180/ HTTP 200
+>   [UP]   Registry ZR   :5100/v2/_catalog -> 4 repos
+>   [OFF]  Registry ZT   off by design (deploy.replicas=0); not part of the demo
+>   [UP]   Gitea         :3100 v1.22.6
+>   [UP]   Woodpecker    :8000 v3.5.2
+>   [UP]   OpenBao       :8200 initialized=True, sealed=False
+>   [UP]   Executor      enabled, poll loop (COSMO_EXECUTOR_ENABLED=1)
+> === STAND GREEN: 8 inputs up, 1 off by design ===
+> ```
+>
+> **Негативы:**
+> - engine недоступен (`DOCKER_HOST` на закрытый порт) → `[FAIL]`, exit 2;
+> - registry реально лежит (`docker pause cosmo-registry-zr`) → `[DOWN] Registry ZR` (причина:
+>   timeout), `STAND NOT GREEN`, exit 1; после `unpause` → `healthy`, снова GREEN;
+> - повторные прогоны `-Full`: контейнеры без дублей (33/33 до и после), состав не менялся.
+>
+> **Шов:** журнальный признак `ExecutionService started/disabled` в `docker logs cosmo-api` не
+> виден (конфигурация логирования app-level INFO) — детект по env; если нужен журнальный
+> признак — отдельная задача.
+>
+> **Артефакты:** `services/scripts/cosmo-start.ps1`.
+>
+> **Блокеры:** нет.
+
+> **Приёмка Cosmo (2026-10-05):** независимо прогнал `cosmo-start.ps1 -CheckOnly` (core) и
+> `-Full -CheckOnly`: оба GREEN, exit 0; full-сводка совпала с заявленной (8 up, ЗТ off by design).
+> Негативы (engine down → exit 2; registry pause → `[DOWN]`/exit 1; повторные прогоны без дублей) —
+> по отчёту Buddy. Принято.
+
+---
+
+## ✅ DONE — EVIDENCE: DURABLE-БАЙТЫ АРТЕФАКТОВ (COS-202)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-202** | Luna | 6-10h | P2 | — | ✅ DONE — принят Cosmo (2026-10-05) |
+
+#### COS-202 · Evidence-байты: артефакты переживают пересоздание контейнера
+
+> **Зачем:** артефакты evidence (отчёты сканов, ответы, акты) сохраняются в файловую систему
+> контейнера API: ledger хранит ссылки и хеши, но сами байты при пересоздании/redeploy теряются.
+> Для боевого контура и ГОСТ-актов это полу-временное состояние: доказательство должно быть
+> извлекаемым, а не только «хеш без содержимого».
+
+> **Scope:**
+> (1) Байты артефактов сохраняются в durable-хранилище контура (платформенный S3/MinIO уже
+>     поднят в стенде) — ссылки и хеши в ledger не меняются.
+> (2) Пересоздание контейнера API не теряет ранее сохранённые артефакты: чтение по ссылке
+>     работает после рестарта.
+> (3) Честная деградация: хранилище недоступно → захват не молчит и не теряет факт; причина
+>     видима; повтор безопасен (идемпотентность по содержимому/хешу).
+> (4) Существующие контракты ссылок (`artifact://…`) и проверки целостности не ломаются.
+
+> **Out of scope:** смена семантики ledger/цепочки; UI; airgap-бандлы; миграционная цепочка;
+> переезд существующих байтов (отдельным решением).
+
+> **Acceptance:**
+> - Given сохранённый артефакт, When контейнер API пересоздан, Then артефакт читается по ссылке
+>   и хеш совпадает;
+> - Given хранилище недоступно, When идёт захват, Then деградация честная (видимая причина),
+>   без молчаливой потери;
+> - затронутые проверки зелёные; живой смоук на стенде.
+
+> **Отчёт обратно:** где хранятся байты; поведение после recreate; негатив; проверки; блокеры.
+
+**Luna > Airlock: COS-202 исполнен (2026-10-04, БЕЗ приёмки).**
+
+- **Где хранятся байты (код).** `ledger/artifact_store.py`: `ArtifactStore` получил прозрачное
+  durable-зеркало в платформенный S3/MinIO (env-канон `PK_MINIO_URL`/`PK_MINIO_ACCESS_KEY`/
+  `PK_MINIO_SECRET_KEY`, SigV4 через принятый `s3_sigv4_headers`; buckets `cosmo-evidence`/
+  `cosmo-artifacts`, проvisioning startup.py). Пишутся: объект по относительному пути ref +
+  ref-индекс `_refs/{ref_id}` (sha[:16]); локальный FS остаётся кэшем/фолбэком.
+  **Контракты не изменились:** `artifact://{path}`, `content_ref`, `content_hash`, размеры и пути
+  в ledger — те же; `ArtifactRef` получил опциональное поле `degraded_reason` (default None).
+- **Recreate-инвариант (живой пруф).** Прогон SAST fixture (19/19 PASS) → отчёт 2067 B
+  зазеркален (`provenance.degraded=false`); host-проверка MinIO (:9100, SigV4 GET) — sha совпал
+  с ledger `12fc1eff…`. Затем **`cosmo-api` пересоздан** (`--force-recreate`): локального файла
+  в свежем контейнере нет (`local_file_absent=true`), **`retrieve(ref)` вернул 2067 B из S3 со
+  совпавшим sha**, `retrieve_by_ref_id` — тоже. Бонусом live подтверждена идемпотентность:
+  отчёты run#1 и run#3 (одинаковое содержимое) получили **один ref-путь и один sha** (индекс).
+- **Честная деградация (живой негатив).** `cosmo-minio` остановлен → `store()` не молчит:
+  `degraded_reason="durable mirror failed: …"` (лог + поле + `provenance.degraded_reason` в
+  ledger-записи захвата), локальная копия записана, `retrieve` локально работает; MinIO
+  восстановлен (healthy). «Повтор безопасен»: зеркало идемпотентно по контенту/хешу.
+- **Кто покрыт.** Зеркало центральное — все потребители `ArtifactStore` (source-SAST-отчёты
+  `sast_capture`, ГОСТ-акты `gost_assembler`, read-пути `artifacts`/`fast_ingest`); `sast_capture`
+  прокидывает `degraded/degraded_reason` в provenance. Известный caveat SAST-STEP-1 («байты — FS
+  контейнера») закрыт для новых захватов; переезд ранее сохранённых байтов — out of scope (карточка).
+- **Пруфы.** Новый `tests/cosmo/test_artifact_store_durable.py` — **6 passed** (recreate-чтение
+  после потери FS, идемпотентный путь, деградация без потери, hash-mismatch → ValueError,
+  ref_id через индекс, local-only без S3); смежный кластер (gost/fast_ingest/retention/attestation/
+  anchor) — **160 passed**; **suite gate — 3652 passed / 24 skipped / 0 failed**.
+- **Блокеры:** нет. Коммит/пуш — по команде Максима.
+
+> **Приёмка Cosmo (2026-10-05):** независимо: `test_artifact_store_durable.py` — **6 passed**;
+> живой MinIO (`cosmo-evidence`): индекс `_refs/12fc1eff…` и объект на месте; host-проба
+> `retrieve_by_ref_id('12fc1eff0d7c6dc7')` → 2067 B из S3, sha совпал (`…74121d2f`).
+> Recreate-инвариант подтверждён; переезд старых байтов — вне scope (зафиксировано). Принято.
+
+---
+
+## ✅ DONE — RUNTIME SYNC: КОНТЕЙНЕР API НА АКТУАЛЬНОМ КОДЕ (COS-203)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-203** | Boss | 2-4h | P1 | — | ✅ DONE — принят Cosmo (2026-10-04); фикс COS-194 подтверждён в рантайме |
+
+#### COS-203 · Runtime sync: API-контейнер на актуальном коде + честная проверка
+
+> **Зачем:** принятые фиксы (COS-194 и предшествующие принятые работы) живут в рабочем дереве,
+> а запущенный контейнер API собран раньше — рантайм отстаёт от кода. Это хвост приёмки COS-194
+> и предусловие живой части SAST-GATE-3 и демо-проверок: без синхронизации «живой» результат
+> ничего не доказывает.
+
+> **Scope:**
+> (1) Пересборка образа API из текущего рабочего дерева и пересоздание контейнера; короткий
+>     контролируемый даунтайм, стенд возвращается живым.
+> (2) Честная проверка после: `/ready` ok; ключевые ручки отвечают; фикс COS-194 присутствует
+>     в рантайме (audit-YAML на прогоне с SAST-кирпичом не теряет шаги — read-only проверка или
+>     сверка хешей ключевых модулей контейнер ↔ хост).
+> (3) Если сборка или старт не удались — стенд возвращён в рабочее состояние, факт доложен
+>     честно; маскировки нет.
+> (4) Чужие стеки не тронуты; чужие WIP-правки не коммитятся и не откатываются.
+
+> **Out of scope:** изменения кода; gate-политика (SAST-GATE-3); демо-карточки (COS-196…200);
+> frontend-витрина (при необходимости — отдельным rebuild’ом владельца).
+
+> **Acceptance:**
+> - рантайм синхронизирован: контейнер собран из текущего дерева, `/ready` ok, ключевые входы живы;
+> - фикс COS-194 подтверждён в рантайме (шаги SAST-аудита не теряются);
+> - негатив: неуспешная сборка/старт → стенд восстановлен, причина видима;
+> - чужие стеки и правки не затронуты.
+
+> **Отчёт обратно:** как собрано; короткий даунтайм; результаты live-проверок (включая COS-194);
+> негатив; блокеры.
+
+**Boss > Airlock: COS-203 исполнен (2026-10-04, БЕЗ приёмки).**
+
+- **Как собрано.** `docker compose -f services/docker-compose.yml build cosmo-api` (context `..`,
+  `services/cosmo-api.Dockerfile`) → `cosmo-api:local`; затем `up -d --force-recreate cosmo-api`.
+- **Даунтайм.** Короткий: контейнер `cosmo-api` пересоздан и `healthy` через **6 s** (остальные сервисы стека
+  не трогались).
+- **Stale-фикс подтверждён ДО.** Образ был от `2026-09-26`; sha256 host ↔ контейнер **не совпадали**;
+  grep `_resolve_audit_bricks`/`x-audit-incomplete` в контейнере — пусто (рантайм отставал от кода).
+- **После пересборки.**
+  - `cosmo-api` healthy; `GET /live` → 200; `GET /ready` → 200 `{database:connected, cache:connected, anchor:disabled}`;
+    OpenAPI **148** api-путей; `GET /api/v1/domains` → **401** (auth-ручка жива).
+  - **Фикс COS-194 в рантайме (read-only):** sha256 host == контейнер для
+    `orchestrator/cosmo/control_plane/executor.py` (`f228061b…`) и
+    `orchestrator/cosmo/adapters/execution_woodpecker.py` (`50fc12f3…`) — байт-в-байт;
+    `BatchExecutor._resolve_audit_bricks` присутствует; `WoodpeckerAdapter.generate_pipeline_yaml` присутствует
+    (терпимость к не-dict refs + `x-audit-incomplete`). Полный Woodpecker SAST-прогон не гонялся — вне scope.
+- **Негатив.** Сборка и старт **успешны** — негативный сценарий не наступил; стенд возвращён живым, маскировки нет.
+  (При провале: пересоздание из compose-образа + снимки состояния.)
+- **Границы.** Чужие стеки не тронуты (все контейнеры стека Up/healthy); чужие WIP не коммитились/не откатывались;
+  коммитов не делал.
+- **Коммит/пуш — по команде Максима.**
+
+> **Приёмка Cosmo (2026-10-04):** независимая проверка совпала с отчётом: `cosmo-api` healthy, `/ready` = ok
+> (database/cache connected), sha256 `executor.py` и `execution_woodpecker.py` host == контейнер
+> (`f228061b…`, `50fc12f3…`), `_resolve_audit_bricks` и `x-audit-incomplete` присутствуют в рантайме.
+> Хвост приёмки COS-194 закрыт. Полный WP SAST-прогон — в SAST-GATE-3 (там же Sonar-хост).
+
+---
+
+## ✅ DONE — DECLARATIVE DEPLOY: МГНОВЕННЫЙ SUCCESS НЕ ВЫДАЁТСЯ ЗА РЕАЛЬНЫЙ (COS-204)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-204** | Boss | 4-6h | P2 | COS-203 | ✅ DONE — принят Cosmo (2026-10-05) |
+
+#### COS-204 · Deploy-путь: декларативный success не выглядит как реальное развёртывание
+
+> **Зачем:** разведка демо-контура (2026-10-04) подтвердила: generic-путь создания деплоя ставит
+> success мгновенно, без материализации (pull/run/healthy). В витрине и отчётах это выглядит как
+> реальное развёртывание — маскировка, противоречащая канону честности. Принятый release-deploy
+> путь (материализация + честный rollback) существует и должен быть единственным «реальным».
+
+> **Scope:**
+> (1) Generic deploy-путь больше не выдаёт мгновенный success за реальное развёртывание: либо
+>     переводится на принятый materialize-путь, либо честно маркируется как декларативный/черновой
+>     и не попадает в витрину как реальный.
+> (2) Витрина деплоев показывает фактические статусы (healthy/rollback/декларативный), без
+>     выдуманных значений и мгновенных «успехов».
+> (3) Негатив честный: нет артефакта/годности/материализации → не success.
+> (4) Канонический e2e-раннер учитывает новое поведение (скриптовая часть — COS-205).
+
+> **Out of scope:** release-deploy путь (принят, не переписывать); демо-карточки; миграционная
+> цепочка; frontend-косметика вне витрины деплоев.
+
+> **Acceptance:**
+> - Given декларативный deploy, When оператор смотрит витрину, Then он помечен декларативным
+>   (или отсутствует), а не «успешным развёртыванием»;
+> - Given реальный deploy, When он завершён, Then статус отражает фактическое healthy/rollback;
+> - негатив: без артефакта/годности success не выставляется;
+> - затронутые проверки зелёные.
+
+> **Отчёт обратно:** как разделены реальный/декларативный пути; витрина; негатив; проверки; блокеры.
+
+**Boss > Airlock: COS-204 исполнен (2026-10-04, БЕЗ приёмки).**
+
+- **Разделение путей.** Generic-путь `POST /api/v1/apps/{app_id}/deploys` больше **не выдаёт мгновенный
+  `success`**: он честно **декларативный** (`status="declarative"`); `finished_at` не проставляется,
+  endpoint **не выдумывается** (`custom_url` — только если задан явно). Реальное развёртывание остаётся
+  принятым release-deploy (materialize, `releases.py`) — не переписывался.
+- **Негатив честный.** Generic `rollback` для не-материализованных деплоев (в т.ч. `declarative`) →
+  **409** «not materialized — nothing to roll back» (и `pending`/`running`). `success`/`failed`-ветка сохранена.
+- **Витрина.** `DeploymentStatus` += `declarative`; FE `DeploymentsRegistry`/`ApplicationDetail`
+  (`statusMeta`/`deploymentStatusMeta`) и `StatusChip` показывают `declarative` (нейтральный чип), а не «active».
+- **Проверки.** Backend focused (`test_builds_and_deployments_api.py` + `test_deps_guard_regression.py`) —
+  **43 passed**; FE `tsc --noEmit` = 0, `vitest` `ControlStationViews.test.tsx` — **42 passed**.
+- **Runtime sync.** Пересобраны `cosmo-api:local` + `cosmo-frontend:local`, пересозданы; `cosmo-api` healthy,
+  `GET /live`/`/ready` → 200 (`database:connected, cache:connected`); sha256 host == контейнер для
+  `deployments.py` (`5c34f704…`) и `deployment_model.py` (`a06e0199…`); `cosmo-frontend` healthy.
+- **Негатив/инцидент.** Во время сборки **упал Docker daemon** (рецидив) — сборка прервана; поднял Docker Desktop,
+  контейнеры авто-восстановились, затем пересборка/пересоздание завершены, стенд возвращён живым. Маскировки нет.
+- **Границы.** Release-deploy (принятый) не трогал; чужие стеки/WIP не затронуты; коммитов нет.
+- **Коммит/пуш — по команде Максима.**
+
+> **Приёмка Cosmo (2026-10-05):** независимо: `cosmo-api`/`cosmo-frontend` healthy, `/live`/`/ready` ok;
+> sha256 host == контейнер для `deployments.py` (`5c34f704…`) и `deployment_model.py` (`a06e0199…`);
+> focused `test_builds_and_deployments_api.py` — 5 passed; маркеры `declarative` подтверждены в BE
+> (`status="declarative"`, `DeploymentStatus`) и FE (StatusChip/DeploymentsRegistry/ApplicationDetail).
+> Принято. Docker daemon (рецидив) — не product-дефект; стенд восстановлен. Дрив OpenAPI (описания +
+> enum `declarative`) снят при приёмке регеном (`--check` IDENTICAL).
+
+---
+
+## 🔄 ACTIVE — CANONICAL E2E RUNNER: ДЕКЛАРАТИВНЫЕ ФАЗЫ НЕ МАСКИРУЮТСЯ (COS-205)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-205** | Flash | 2-4h | P2 | COS-196…200 (реальный контур) | 🔄 выдан (2026-10-05; очередь после демо) |
+
+#### COS-205 · Канонический E2E-раннер: реальные фазы — реальные, декларативные — помечены
+
+> **Зачем:** канонический 8-фазный раннер вручную проставляет статусы батчей и мгновенный
+> deploy-успех — в отчёте это неотличимо от реального исполнения. Для показа «нормального
+> пайплайна» раннер не должен маскировать декларативные фазы.
+
+> **Опорные факты (read-only разведка Flash, 2026-10-04):**
+> - Канонический раннер — 8 фаз (Domain → App → Bricks → Plan → Run → Batches → Gates → Release →
+>   Deploy → Transfer); декларативность deploy зафиксирована в шапке, статусы батчей проставляются
+>   вручную.
+> - План по карточке: классифицировать каждую фазу «реальная/декларативная»; где реальный путь
+>   (COS-196…200) доступен — переключиться на него; патчи и мгновенные success не выдавать за
+>   исполнение.
+> - Детализация — после отчёта COS-200 (не пересказывать его результат вслепую).
+
+> **Scope:**
+> (1) Каждая фаза раннера явно классифицирована: реальное исполнение или декларативная проверка
+>     контракта; отчёт различает их без двусмысленности.
+> (2) Где реальный путь уже существует (демо-контур сборки/годности/запуска — COS-196…200),
+>     раннер использует его, а не подмену.
+> (3) Статус-патчи и мгновенные успехи не выдаются за реальное исполнение ни в выводе, ни в отчёте.
+> (4) Учесть решение по deploy-пути (COS-204).
+> (5) Поведение при недоступном контуре — честный skip/провал с причиной.
+
+> **Out of scope:** продуктовые deploy-пути (COS-204); демо-карточки; изменение канона фаз.
+
+> **Acceptance:**
+> - отчёт раннера различает реальные и декларативные фазы; декларативные не выглядят как исполнение;
+> - реальные фазы идут по принятому контуру (где он есть);
+> - негатив: недоступный контур → честный исход;
+> - проверки зелёные.
+
+> **Отчёт обратно:** классификация фаз; отчёт (пример); негатив; проверки; блокеры.
+
+---
+
+## ❌ CANCELLED — СТЕНД: SONAR CE ПОДНЯТ И ГОТОВ К LIVE SAST-ПРОГОНУ (COS-206)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-206** | Boss | 0.5-1h | P2 | — | ❌ cancelled — хост поднят в рамках live-прогона SAST-GATE-3; отдельная подготовка не нужна |
+
+#### COS-206 · Стенд: поднять Sonar CE и проверить готовность к live SAST-прогону
+
+> **Зачем:** live-часть SAST-GATE-3 требует живого Sonar CE-хоста стенда с валидным токеном из
+> секретницы и видимым проектом/профилем. Хост сейчас не поднят; подготовка — инфра-шаг, который
+> разгружает владельца гейт-логики и снимает ожидание перед живым прогоном.
+
+> **Scope:**
+> (1) Поднять Sonar CE штатным компаньон-профилем стенда (как в STAND-4), не тормозя обычный контур.
+> (2) Прогнать идемпотентный сид: токен — в секретнице, проект по конвенции, профиль; повторный
+>     прогон не плодит дубли (PRESERVED).
+> (3) Проверить фактическую готовность: сервис healthy; токен из секретницы валиден; проект/профиль
+>     видны токен-доступом.
+> (4) Оставить хост поднятым для live-прогона SAST-GATE-3; если политика стенда требует иного —
+>     честно сообщить.
+
+> **Out of scope:** сам SAST-прогон и гейт-логика (SAST-GATE-3); правки SAST-контура; масштабирование.
+
+> **Acceptance:** CE healthy; сид идемпотентен (повтор → PRESERVED); токен валиден; проект/профиль
+> доступны токен-доступом; обычный контур стенда не затронут.
+
+> **Отчёт обратно:** как поднято; результаты сида (идемпотентность); live-проверки; состояние после.
+
+> **Отмена (Cosmo, 2026-10-05):** Sonar CE-хост уже поднят и использован живым прогоном
+> SAST-GATE-3 (19/19); отдельный пре-степ не требуется. Карточка закрыта без исполнения.
+
+---
+
+## 🔄 ACTIVE — ДЕМО-ХВОСТ: ONE-COMMAND ЧЕРЕЗ BUILDS-ПОВЕРХНОСТЬ (COS-207)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-207** | Luna | 1-2h | P2 | COS-196 ✅ | 🔄 выдана (2026-10-11; очередь после COS-208) |
+
+#### COS-207 · Демо: показ одной командой через builds-поверхность
+
+> **Зачем:** закрыть хвост COS-197 — показ «одной командой» через продуктовую builds-поверхность
+> (сейчас показ идёт через принятую runs-поверхность). Контракт COS-196 принят (11.10) — можно
+> стартовать (после COS-208, тем же воркером).
+
+> **Scope:**
+> (1) Одна команда доводит сборку через builds-поверхность до терминала и печатает человекочитаемый
+>     итог (статус, digest-ссылка, evidence-след) с кодом возврата.
+> (2) Недоступный runner/registry → честная ошибка; повтор и очистка — по канону демо-контура
+>     (COS-197: `--clean` не трогает ledger/registry).
+> (3) Надстройка поверх принятого контура; сид/очистка COS-197 не переписываются.
+> (4) Сид демо сеет полную `docker_build`-спеку **дефолтом** (приёмка COS-196 поймала: generic-дефолт
+>     выключает durable-record — сборка остаётся без digest-ссылки); `--docker-build-def` становится штатным.
+
+> **Out of scope:** продуктовая сборка (COS-196); витрина (COS-198); deploy/promotion.
+
+> **Acceptance:** живой прогон одной командой через builds-поверхность: терминал, digest совпадает
+> с registry, evidence-след виден; rc честный; повтор без дублей; после сида-дефолта сборка несёт
+> durable artifact-record (digest в записи сборки).
+
+> **Отчёт обратно:** команда; вывод показа; негатив; блокеры.
+
+---
+
+## 🔄 ACTIVE — CANON-FIX: SAST-ФИКСТУРА НЕ ПОРТИТ WP-USER-ROW (COS-208)
+
+| ID | Кто | h | Приоритет | Зависимость | Результат |
+|---|---|---:|---|---|---|
+| **COS-208** | Luna | 1-2h | P2 | — | 🔄 выдана (2026-10-11) — канон-фикс user-row |
+
+#### COS-208 · `seed-sast-fixture`: user-row получает `forge_remote_id` репозитория
+
+> **Зачем:** при прогоне фикстуры строка WP-пользователя получает `forge_remote_id` **репозитория**
+> (`ensure_wp_user` вызывается с `gitea.get("id")`, где `gitea` — объект репо; канон — id
+> Gitea-пользователя, как в `seed-woodpecker-fixture`/`seed-build-demo`). Forge-доступ строки
+> расходится с фактической привязкой → 401 в WP-операциях до ручного ремонта (канон ремонта:
+> `seed-woodpecker-fixture.py` + recreate `cosmo-api`).
+
+> **Уточнение при приёмке COS-197 (Cosmo, 2026-10-11):** из отчёта Luna подтверждён **только**
+> call-site-дефект; «hash=pat» и «body-вариант POST /api/repos» на текущем дереве не подтвердились
+> (hash не трогается; активация — query-параметр).
+
+> **Scope:**
+> (1) User-row: использовать id Gitea-**пользователя** (отдельный user-lookup); активация репо —
+>     по-прежнему по id репозитория (query-параметр).
+> (2) Идемпотентный повтор: `forge_remote_id` = id пользователя; env-токен отвечает 200; повтор — PRESERVED.
+> (3) Правка только фикстуры; SAST-логику/гейт не трогать.
+
+> **Out of scope:** SAST-контур/гейт; другие стенд-фикстуры; продукт.
+
+> **Acceptance:** живая проверка (точечная, полный SAST e2e не требуется): user-row `forge_remote_id`
+> = id Gitea-пользователя; WP-операции без 401; повтор — PRESERVED; затронутые проверки зелёные.
+
+> **Отчёт обратно:** причина/фикс; live-проверка строки и токена; повтор; блокеры.

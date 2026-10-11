@@ -45,6 +45,8 @@ opencode.json
 cosmo-artifacts/
 evidence_artifacts/
 backups/
+bundle-out/
+cosmoport2-*-airgap.tar.gz
 reports/*.json
 reports/*.html
 reports/*.sarif
@@ -61,6 +63,9 @@ reports/load-test*
 *.pem
 *.key
 *.crt
+
+# OpenBao local material (COS-178): unseal key + init material (root token/recovery)
+services/.openbao/
 
 # IDE / OS
 .idea/

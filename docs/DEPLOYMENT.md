@@ -466,6 +466,69 @@ Buddy собирает отдельный Cosmo Compose в `D:\prettyk-airlock\s
 - проверки, что health endpoint действительно реализован;
 - Caddy service в самом Compose stack.
 
+### 6.5. Гигиена образов и dev-профиль (PK-C-010, COS-195)
+
+**Природа `<none>`:** это не «лишние» сущности, а предыдущие версии тех же
+образов, потерявшие имя при переиспользовании тега (`:local`). Лечится сменой
+схемы сборки, а не чисткой.
+
+**Dev-цикл (обычная работа):** исходники монтируются в контейнеры, правка кода
+не пересобирает образы:
+
+```powershell
+# стенд в dev-режиме: api — hot-reload, frontend — Vite dev server
+.\services\scripts\cosmo-start.ps1 -Full -Dev
+# эквивалент:
+# docker compose -f services\docker-compose.yml -f services\docker-compose.dev.yml up -d
+```
+
+- `cosmo-api`: `../orchestrator` (+`../alembic`) монтируются в `/app`; entrypoint
+  при `COSMO_DEV_RELOAD=1` поднимает `uvicorn --reload --reload-dir /app/orchestrator`.
+  Правка python-файла подхватывается без сборки. Пересборка нужна ТОЛЬКО при
+  смене `Dockerfile` / `requirements.txt` / `entrypoint.sh`.
+- `cosmo-frontend`: контейнер `node:22-alpine` с `npm ci && npm run dev`
+  (Vite HMR, :5174); `/api` проксируется на `cosmo-api:8100` (`VITE_API_PROXY`).
+
+**Релиз/airgap (immutable-теги):** каждая релизная сборка получает уникальный
+тег `git-<short-sha>` — прошлые образы сохраняют имена, `<none>` не остаются:
+
+```powershell
+.\services\scripts\build-release.ps1                 # cosmo-api/cosmo-frontend:git-<sha>
+.\services\scripts\build-release.ps1 -KeepN 5 -Prune # retention: держим 5 последних
+```
+
+Запуск стенда на релизном теге:
+
+```powershell
+$env:COSMO_API_TAG='git-<sha>'; $env:COSMO_FRONTEND_TAG='git-<sha>'
+docker compose -f services\docker-compose.yml up -d --no-deps cosmo-api cosmo-frontend
+```
+
+Airgap-бандл (`airgap-bundle.ps1`) вшивает те же immutable-теги в копию compose —
+на airgap-машине ничего не досчитывается.
+
+**BuildKit cache (лимит):** у Docker Desktop нет daemon-политики — лимит
+применяется регулярной командой (после крупных сборок / раз в день):
+
+```powershell
+.\services\scripts\image-hygiene.ps1                    # dangling + full sweep of build cache
+.\services\scripts\image-hygiene.ps1 -ReserveCacheGB 2  # сохранить 2 GB cache для скорости
+```
+
+Тонкость (проверено на Docker 29.6.2 / BuildKit 0.31.2): старый флаг
+`--keep-storage` deprecated и переназван в `--reserved-space` («минимум, который
+не вытесняется», а не предел), а `--max-used-space` в этом Docker на практике
+no-op. Поэтому политика = полный sweep нереференсного кэша (пол — слои,
+расшаренные с образами) + опциональный `--reserved-space` для скорости.
+
+**Bind-mount правило:** в compose репозитория — только относительные пути
+(`./`, `../`) или named volumes; исключение — `/var/run/docker.sock`. Абсолютный
+host-путь при старте контейнера материализует отсутствующую папку (фантомы
+после переноса репо). Проверка: `.\services\scripts\check-bind-mounts.ps1`.
+При переносе репо контейнеры **пересоздаются**
+(`docker compose up -d --force-recreate`), а не `docker start` старых — иначе
+старый абсолютный путь воскресает.
+
 ---
 
 ## 7. Edge-архитектура: Caddy (канонический) + nginx same-origin

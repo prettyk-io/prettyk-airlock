@@ -1,7 +1,7 @@
 # COS-173 — OpenBao standalone host + миграция Cosmo (план + журнал исполнения)
 
 > **Карточка:** `D:\prettyk-airlock\docs\BACKLOG.md` → COS-173 (Owner: Flash, P1).
-> **Канон:** `D:\prettyk.io\nexus-core\OPENBAO-PLATFORM.md`.
+> **Канон:** `D:\prettyk.io\void-core\OPENBAO-PLATFORM.md`.
 > **Исполнитель:** Flash. **Коммит:** по команде Максима.
 > **Тип:** live-infra (dev-контур), не кодовая фича.
 
