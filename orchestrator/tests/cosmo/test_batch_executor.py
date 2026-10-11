@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 _orch = Path(__file__).resolve().parents[1]
 if str(_orch) not in sys.path:
@@ -468,3 +469,153 @@ class TestIntegration:
         c.set_executor(None)
         assert c._executor is None
         assert c.poll_batches() == []
+
+
+# ── COS-194: аудит-YAML и резолв bricks_refs (ID-строки) ─────────────────
+
+
+class _FakeBrickRow:
+    """Минимальная форма строки каталога pipeline_bricks."""
+
+    def __init__(self, name, definition, depends_on=None):
+        self.name = name
+        self.definition_json = definition
+        self.depends_on = depends_on or []
+
+
+class _FakeSession:
+    """Sync-session-заглушка: только .get/.rollback/.close (аудиту больше не надо)."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.closed = False
+
+    def get(self, _model, key):
+        return self.rows.get(key)
+
+    def rollback(self):  # pragma: no cover — только при сбое lookup
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+class TestAuditBrickResolution:
+    """COS-194: audit-YAML для bricks_refs живого компилятора (ID-строки)."""
+
+    @staticmethod
+    def _executor(adapter, session=None):
+        factory = (lambda: session) if session is not None else None
+        return BatchExecutor(
+            adapter=adapter, dry_run=True, db_session_factory=factory,
+        )
+
+    def test_string_refs_resolved_from_catalog(self, adapter):
+        """Happy: ID-строка → шаг из каталога (имя/дефиниция/depends_on)."""
+        session = _FakeSession({"brick-sast": _FakeBrickRow(
+            "Sonar SAST",
+            {"executor": "woodpecker",
+             "image": "sonarsource/sonar-scanner-cli:latest",
+             "inputs": {"SONAR_PROJECT_KEY": "cosmo__sast-fixture"}},
+            depends_on=["brick-build"],
+        )})
+        resolved, unresolved = self._executor(
+            adapter, session)._resolve_audit_bricks(["brick-sast"])
+        assert unresolved == []
+        assert resolved[0]["name"] == "Sonar SAST"
+        assert resolved[0]["definition"]["image"].startswith("sonarsource/")
+        assert resolved[0]["depends_on"] == ["brick-build"]
+        assert session.closed is True
+
+    def test_missing_ref_marked_with_reason(self, adapter):
+        """Negative: ссылки нет в каталоге — причина названа, шаг не выдуман."""
+        session = _FakeSession({})
+        resolved, unresolved = self._executor(
+            adapter, session)._resolve_audit_bricks(["ghost-brick"])
+        assert resolved == []
+        assert unresolved == [
+            {"ref": "ghost-brick", "reason": "brick not found in catalog"},
+        ]
+
+    def test_no_catalog_session_marks_unresolved(self, adapter):
+        """Без БД (legacy/unit) ссылка не разрешается — честная причина."""
+        resolved, unresolved = self._executor(
+            adapter)._resolve_audit_bricks(["sast-sonarqube"])
+        assert resolved == []
+        assert unresolved[0]["ref"] == "sast-sonarqube"
+        assert "catalog unavailable" in unresolved[0]["reason"]
+
+    def test_dict_refs_pass_through_legacy(self, adapter):
+        """Legacy-формы (dict) проходят как есть, без обращения к каталогу."""
+        brick = {"name": "Build", "definition": {"image": "node:20"}}
+        resolved, unresolved = self._executor(
+            adapter)._resolve_audit_bricks([brick])
+        assert resolved == [brick] and unresolved == []
+
+    def test_empty_refs_noop(self, adapter):
+        resolved, unresolved = self._executor(adapter)._resolve_audit_bricks([])
+        assert resolved == [] and unresolved == []
+
+
+class TestSubmitBatchesAuditYaml:
+    """COS-194: submit_batches генерит аудит-YAML из резолвнутых кирпичей."""
+
+    @staticmethod
+    def _sast_batch():
+        return [{
+            "id": "batch-sast", "plan_id": "plan-test-1", "type": "static_test",
+            "status": "pending", "bricks": ["brick-sast"], "artifacts": [],
+        }]
+
+    @staticmethod
+    def _wire(adapter, session):
+        ex = BatchExecutor(adapter=adapter, dry_run=True,
+                           db_session_factory=lambda: session)
+        ex._query_batches = MagicMock(return_value=TestSubmitBatchesAuditYaml._sast_batch())
+        ex._update_batch_pg = MagicMock()
+        ex._get_batch_pg_status = MagicMock(return_value=None)
+        seen = []
+        orig = adapter.generate_pipeline_yaml
+
+        def spy(batch):
+            seen.append(batch)
+            return orig(batch)
+
+        ex._adapter.generate_pipeline_yaml = spy
+        return ex, seen, orig
+
+    def test_happy_yaml_has_step_no_warning(self, adapter, run_record, caplog):
+        """Сценарий 1: все ссылки разрешены — шаг в аудите, warning'а нет."""
+        session = _FakeSession({"brick-sast": _FakeBrickRow(
+            "Sonar SAST",
+            {"executor": "woodpecker",
+             "image": "sonarsource/sonar-scanner-cli:latest",
+             "inputs": {"SONAR_PROJECT_KEY": "cosmo__sast-fixture"}},
+        )})
+        ex, seen, orig = self._wire(adapter, session)
+        submitted = ex.submit_batches(run_record)
+
+        assert submitted == ["batch-sast"]
+        assert seen[0]["bricks"][0]["name"] == "Sonar SAST"
+        parsed = yaml.safe_load(orig(seen[0]))
+        assert "Sonar SAST" in parsed["steps"]
+        assert "x-audit-incomplete" not in parsed
+        assert "YAML generation failed" not in caplog.text
+        assert "Audit YAML incomplete" not in caplog.text
+
+    def test_missing_ref_warns_with_reason_and_marks_yaml(
+            self, adapter, run_record, caplog):
+        """Сценарий 2: ссылка не разрешается — причина в warning и в YAML."""
+        session = _FakeSession({})  # каталог пуст
+        ex, seen, orig = self._wire(adapter, session)
+        submitted = ex.submit_batches(run_record)
+
+        assert submitted == ["batch-sast"]
+        assert "Audit YAML incomplete for batch batch-sast" in caplog.text
+        assert "brick-sast: brick not found in catalog" in caplog.text
+        assert "YAML generation failed" not in caplog.text
+        parsed = yaml.safe_load(orig(seen[0]))
+        assert parsed["steps"] == {}
+        assert parsed["x-audit-incomplete"][0] == {
+            "ref": "brick-sast", "reason": "brick not found in catalog",
+        }

@@ -41,6 +41,22 @@ class Batch(BaseModel):
     )
 
 
+class FindingRef(BaseModel):
+    """COS-193: типизированная находка прогона (носитель ``runs.findings_refs``).
+
+    Единый контракт с мостом COS-101/104: dict-находки сканеров (severity +
+    произвольные поля: rule/path/line/cwe_ids/message/...). Extras сохраняются
+    (не отбрасываются), severity нормализуется мостом к канону gate-движка
+    (Critical|High|Medium|Low|Info). Пустая строка — legacy-запись до нормализации.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    severity: str = Field(
+        default="",
+        description="Канон gate engine: Critical|High|Medium|Low|Info",
+    )
+
+
 class Run(BaseModel):
     """Один запуск пайплайна."""
     model_config = StrictModel
@@ -72,9 +88,12 @@ class Run(BaseModel):
         default_factory=list,
         description="ID gate'ов этого запуска",
     )
-    findings: list[str] = Field(
+    findings: list[FindingRef | str] = Field(
         default_factory=list,
-        description="ID находок (findings)",
+        description=(
+            "Находки прогона (COS-193): типизированные dict-находки канона "
+            "COS-101/104; строка — legacy-ID-находка до выравнивания носителя"
+        ),
     )
     evidence_ledger_ref: str | None = Field(
         default=None,

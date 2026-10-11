@@ -233,6 +233,23 @@ class TestGrypeReport:
         assert env["GRYPE_DB_CACHE_DIR"] == str(tmp_path / "grypedb")
         assert captured[0]["cmd"][1].startswith("sbom:")
 
+    def test_grype_env_inherits_cache_dir_from_environment(self, repo_dir, monkeypatch):
+        """COS-183: без db_dir grype использует GRYPE_DB_CACHE_DIR из окружения
+        (в контейнере — ENV образа /var/lib/grype; тут env наследуется как есть)."""
+        sbom = generate_sbom(repo_dir)
+        monkeypatch.setenv("GRYPE_DB_CACHE_DIR", "/var/lib/grype")
+        captured: list = []
+
+        def _run(cmd, **kwargs):
+            captured.append({"cmd": cmd, "kwargs": kwargs})
+            return _FakeProc(stdout=json.dumps({"matches": []}))
+
+        res = generate_vuln_report(sbom.document, runner=_run)
+        assert res.source == "grype"
+        env = captured[0]["kwargs"]["env"]
+        assert env["GRYPE_DB_CACHE_DIR"] == "/var/lib/grype"
+        assert env["GRYPE_DB_AUTO_UPDATE"] == "false"
+
     def test_grype_missing_is_honest_none(self, repo_dir, monkeypatch):
         sbom = generate_sbom(repo_dir)
         monkeypatch.setattr("shutil.which", lambda name: None)

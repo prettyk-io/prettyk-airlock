@@ -107,7 +107,13 @@ async def create_deployment(
     principal: PrincipalContext = Depends(require_capability(Action.DEPLOY_MANAGE, domain_binding="identity")),
     db: AsyncSession = Depends(get_db),
 ) -> Deployment:
-    """Создать новое развертывание сборки в указанную зону.
+    """Создать запись развертывания сборки в указанную зону.
+
+    COS-204: generic-путь **декларативный** — он не материализует развёртывание
+    (нет pull/run/healthy), поэтому статус `declarative`, а не мгновенный `success`;
+    реальный endpoint не выдумывается (`custom_url` — только если задан явно),
+    `finished_at` не проставляется. Реальное развёртывание — принятый release-deploy
+    (materialize). Витрина показывает `declarative` как таковой, не «активный».
 
     COS-083: write требует capability deploy:manage.
     """
@@ -123,7 +129,6 @@ async def create_deployment(
 
     dep_id = f"dep-{uuid.uuid4().hex[:8]}"
     now = datetime.datetime.utcnow()
-    endpoint_url = body.custom_url or f"https://{app.id}.{body.target_zone}.kits.bank.corp:8443"
 
     dm = DeploymentModel(
         id=dep_id,
@@ -133,12 +138,12 @@ async def create_deployment(
         release_id=body.release_id,
         segment=body.segment,
         target_zone=body.target_zone,
-        status="success",
-        custom_url=endpoint_url,
+        status="declarative",
+        custom_url=body.custom_url,
         operator_id=principal.user_id,
         env_vars=body.env_vars,
         started_at=now,
-        finished_at=now + datetime.timedelta(seconds=5),
+        finished_at=None,
     )
     db.add(dm)
     await db.commit()
@@ -172,6 +177,10 @@ async def rollback_deployment(
 ) -> Deployment:
     """Инициировать откат развертывания (Rollback).
 
+    COS-204: откат применим только к материализованным деплоям (`success`/`failed`);
+    для декларативных/незрелых записей — честный **409** (откатывать нечего, реального
+    развёртывания нет).
+
     COS-083: write требует capability deploy:manage.
     """
     dm = await db.get(DeploymentModel, id)
@@ -179,6 +188,15 @@ async def rollback_deployment(
         raise HTTPException(status_code=404, detail=f"Deployment '{id}' not found")
 
     verify_ownership(dm.domain_id, resolve_caller_domain(principal, caller_domain), f"Deployment '{id}'")
+
+    if dm.status not in ("success", "failed"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Deployment '{id}' is '{dm.status}' (not materialized) — nothing to roll back; "
+                "use the release-deploy path for real deployments"
+            ),
+        )
 
     # Ищем предыдущий успешный деплой в эту же зону
     prev_stmt = (

@@ -126,7 +126,8 @@ class FakeWoodpecker:
         seq = self.statuses.get(str(handle.get("number")), [])
         return seq.pop(0) if seq else "running"
 
-    def collect_all_logs(self, handle: dict) -> dict[str, list[str]]:
+    def collect_all_logs(self, handle: dict, settle_empty_s: float = 0.0,
+                         settle_attempts: int = 3) -> dict[str, list[str]]:
         return dict(self.logs)
 
     def get_logs(self, handle: dict, step: int = 0) -> list[str]:

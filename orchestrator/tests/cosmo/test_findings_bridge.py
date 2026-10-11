@@ -43,11 +43,14 @@ from orchestrator.cosmo.control_plane.findings_bridge import (  # noqa: E402
 from orchestrator.cosmo.control_plane.execution_service import ExecutionService  # noqa: E402
 from orchestrator.cosmo.db.models import (  # noqa: E402
     Application,
+    Batch as BatchORM,
     Domain,
+    EvidenceLedgerEntry,
     Gate as GateORM,
     PipelinePlan,
     Run as RunORM,
 )
+from sqlalchemy import select  # noqa: E402
 
 SCRATCH_DB = _testpg.scratch_name("findings_bridge")
 _POSTGRES_ADMIN_URL = _testpg.admin_dsn()
@@ -365,6 +368,109 @@ class TestFinalizeGateBridge:
         await svc.finalize_run(ids["run"], all_passed=True)
         run = await _seeded_run(env, ids["run"])
         assert run.status == "failed"
+
+    # ── SAST-GATE-3: durable решение + терминальная честность ──
+
+    async def test_gate_block_writes_durable_decision_evidence(self, env):
+        """SAST-GATE-3: gate block → evidence type=decision с решениями гейтов."""
+        ids = await _seed_plan_with_run(env["maker"], findings=[
+            {"severity": "critical", "title": "SQLi"}])
+        gate_id = await _seed_gate(env["maker"], ids["plan"], {
+            "rules": [{"finding_type": "Critical", "action": "block"}]})
+        svc = _make_service(env)
+        await svc._start_core()
+        await svc.finalize_run(ids["run"], all_passed=True)
+        run = await _seeded_run(env, ids["run"])
+        assert run.status == "blocked"
+
+        async with env["maker"]() as s:
+            rows = (await s.execute(
+                select(EvidenceLedgerEntry).where(
+                    EvidenceLedgerEntry.run_id == ids["run"],
+                    EvidenceLedgerEntry.type == "decision")
+            )).scalars().all()
+        assert len(rows) == 1
+        provenance = rows[0].provenance_json
+        assert provenance["source"] == "cosmo-gate"
+        assert provenance["decisions"] == {gate_id: "block"}
+
+    async def test_missing_sast_report_terminates_run(self, env):
+        """SAST-GATE-3: sast-кирпич без маркера отчёта → degraded → failed.
+
+        Отсутствие обязательного evidence не маскируется: alert-след сохранён,
+        финализация даёт терминальный failed (не тихий PASS).
+        """
+        ids = await _seed_plan_with_run(env["maker"])
+        batch_id = f"b-sast-{uuid.uuid4().hex[:6]}"
+        async with env["maker"]() as s:
+            s.add(BatchORM(id=batch_id, plan_id=ids["plan"], type="static_scan",
+                           status="passed",
+                           bricks_refs=[{"name": "sast-brick", "type": "sast",
+                                         "definition": {}}]))
+            await s.commit()
+
+        svc = _make_service(env)
+        async with env["maker"]() as s:
+            batch = await s.get(BatchORM, batch_id)
+            await svc._capture_sast_reports(s, ids["run"], batch, {})
+        assert svc._executor.degraded_reason(ids["run"])  # хук выставил причину
+
+        async with env["maker"]() as s:
+            alerts = (await s.execute(
+                select(EvidenceLedgerEntry).where(
+                    EvidenceLedgerEntry.run_id == ids["run"],
+                    EvidenceLedgerEntry.type == "alert")
+            )).scalars().all()
+        assert len(alerts) == 1
+
+        await svc.finalize_run(ids["run"], all_passed=True)
+        run = await _seeded_run(env, ids["run"])
+        assert run.status == "failed"
+
+    async def test_sast_report_auto_ingested_to_findings(self, env, monkeypatch, tmp_path):
+        """SAST-GATE-3: валидный отчёт из логов → findings прогона (мост), идемпотентно."""
+        import json as _json
+
+        import orchestrator.cosmo.control_plane.sast_capture as sast_capture_mod
+        from orchestrator.cosmo.domain.sast_report import emit_sast_report_marker
+
+        monkeypatch.setattr(sast_capture_mod, "SAST_EVIDENCE_BASE_DIR", str(tmp_path))
+
+        report = _json.dumps({"total": 1, "issues": [{
+            "key": "AX-1", "rule": "javascript:S2077", "severity": "BLOCKER",
+            "component": "cosmo__sast-fixture:src/db.js", "line": 42,
+            "message": "SQL injection", "tags": ["cwe-89"],
+        }]}).encode("utf-8")
+        line = emit_sast_report_marker(report, fmt="ce-issues")
+
+        ids = await _seed_plan_with_run(env["maker"])
+        batch_id = f"b-sast-{uuid.uuid4().hex[:6]}"
+        async with env["maker"]() as s:
+            s.add(BatchORM(id=batch_id, plan_id=ids["plan"], type="static_scan",
+                           status="passed",
+                           bricks_refs=[{"name": "sast-brick", "type": "sast",
+                                         "definition": {}}]))
+            await s.commit()
+
+        svc = _make_service(env)
+        async with env["maker"]() as s:
+            batch = await s.get(BatchORM, batch_id)
+            await svc._capture_sast_reports(
+                s, ids["run"], batch, {"sonar-report": [line]})
+
+        run = await _seeded_run(env, ids["run"])
+        assert len(run.findings_refs) == 1
+        finding = run.findings_refs[0]
+        assert finding["severity"] == "Critical"  # BLOCKER → канон Critical
+        assert finding["file_path"] == "src/db.js"
+
+        # Повторный захват того же отчёта → дедуп, без дублей.
+        async with env["maker"]() as s:
+            batch = await s.get(BatchORM, batch_id)
+            await svc._capture_sast_reports(
+                s, ids["run"], batch, {"sonar-report": [line]})
+        run = await _seeded_run(env, ids["run"])
+        assert len(run.findings_refs) == 1
 
 
 def _make_engine(sync_factory):

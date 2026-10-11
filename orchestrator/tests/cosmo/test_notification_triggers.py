@@ -55,6 +55,13 @@ class TestTriggerEventTypes:
             run_id="r-1", domain_id="d-1", status="succeeded", plan_id="p-1",
         )
 
+    def test_run_blocked_maps_to_run_blocked(self):
+        """SAST-GATE-3: терминальный blocked — значимый переход с причиной."""
+        notify_run_status_safe(
+            run_id="r-1", domain_id="d-1", status="blocked", plan_id="p-1",
+            reason="gate_blocked", gate_decisions={"g-1": "block"},
+        )
+
     def test_run_running_is_silent(self):
         """status='running' — не значимый переход, no event."""
         notify_run_status_safe(
@@ -236,6 +243,7 @@ class TestDomainTriggerPersistence:
         # Actual test events
         for event_type, agg_type, agg_id in [
             ("run_failed", "run", "r-v1"),
+            ("run_blocked", "run", "r-blk-v1"),
             ("gate_blocked", "gate", "g-v1"),
             ("batch_failed", "batch", "b-v1"),
             ("release_approved", "release", "rel-v1"),
@@ -254,6 +262,7 @@ class TestDomainTriggerPersistence:
             )).scalars().all()
             event_types = {e.event_type for e in events}
             assert "run_failed" in event_types
+            assert "run_blocked" in event_types
             assert "gate_blocked" in event_types
             assert "batch_failed" in event_types
             assert "release_approved" in event_types

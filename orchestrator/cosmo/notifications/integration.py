@@ -49,21 +49,41 @@ def notify_run_status_safe(
     status: str,
     plan_id: str = "",
     initiator: str = "",
+    reason: str = "",
+    gate_decisions: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Run status change → durable outbox event.
 
-    Значимые переходы: succeeded → run_succeeded, failed → run_failed.
+    Значимые переходы: succeeded → run_succeeded, failed → run_failed,
+    blocked → run_blocked (SAST-GATE-3: решение гейта/терминальная причина
+    видны внешнему контуру — reason + gate_decisions, без пересчёта на клиенте).
     Другие переходы (running, queued) — не уведомление.
     """
     if status == "failed":
         event_type = "run_failed"
     elif status == "succeeded":
         event_type = "run_succeeded"
+    elif status == "blocked":
+        event_type = "run_blocked"
     else:
         return  # не значимый переход
 
     title = f"Run {run_id} {status}"
     message = f"Run {run_id} ({plan_id}) — {status}"
+    if reason:
+        message = f"{message} [{reason}]"
+
+    payload: Dict[str, Any] = {
+        "run_id": run_id,
+        "domain_id": domain_id,
+        "plan_id": plan_id,
+        "initiator": initiator,
+        "status": status,
+    }
+    if reason:
+        payload["reason"] = reason
+    if gate_decisions:
+        payload["gate_decisions"] = gate_decisions
 
     _run_async(_emit(
         event_type=event_type,
@@ -73,13 +93,7 @@ def notify_run_status_safe(
         message=message,
         correlation_id=run_id,
         domain_id=domain_id,
-        payload={
-            "run_id": run_id,
-            "domain_id": domain_id,
-            "plan_id": plan_id,
-            "initiator": initiator,
-            "status": status,
-        },
+        payload=payload,
     ))
 
 

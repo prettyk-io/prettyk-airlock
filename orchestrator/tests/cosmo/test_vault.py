@@ -16,6 +16,7 @@ from orchestrator.cosmo.infra.vault import (
     VaultError,
     VaultLookupError,
     VaultNotConfigured,
+    VaultUnavailableError,
 )
 
 ROOT_TOKEN_DEFAULT = "cosmo-bao-root-dev"
@@ -76,14 +77,25 @@ class TestDevMode:
         with pytest.raises(VaultNotConfigured, match="required"):
             c.authenticate()
 
-    def test_not_authenticated_rejected_on_read(self, monkeypatch):
+    def test_lazy_reauth_on_read_after_token_reset(self, monkeypatch):
+        """COS-178: сброшенный токен → read сам поднимает сессию (lazy-auth)."""
         monkeypatch.setenv("COSMO_ENV", "test")
         monkeypatch.setenv("VAULT_DEV_ROOT_TOKEN_ID", "dev-root-123")
         c = VaultClient()
         c.authenticate()
-        c._token = None  # симуляция сброса
-        with pytest.raises(VaultAuthError, match="not authenticated"):
-            c.read_secret("any")
+        c._token = None  # симуляция сброса (напр. vault ожил после старта API)
+
+        class MS:
+            def get(self, url, headers=None, timeout=None):
+                assert headers["X-Vault-Token"] == "dev-root-123"
+                return MockResponse({"data": {"data": {"ok": "yes"}}})
+            def post(self, *a, **kw):
+                return MockResponse({})
+
+        c._session = MS()
+        data = c.read_secret("any")
+        assert data["ok"] == "yes"
+        assert c._token == "dev-root-123"  # сессия восстановлена
 
     def test_default_addr_localhost(self):
         c = VaultClient()
@@ -188,6 +200,28 @@ class TestAppRoleAuth:
         c.authenticate()
         assert c._token == "rt"  # dev token, НЕ approle
 
+    def test_approle_login_sealed_503_raises_unavailable(self, monkeypatch):
+        """COS-178: sealed vault на AppRole login → VaultUnavailableError (не VaultAuthError)."""
+        monkeypatch.setenv("VAULT_APPROLE_ROLE_ID", "rid-x")
+        monkeypatch.setenv("VAULT_APPROLE_SECRET_ID", "sid-x")
+        c = VaultClient()
+
+        class Sealed:
+            status_code = 503
+            def json(self):
+                return {"errors": ["Vault is sealed"]}
+            def raise_for_status(self):
+                import requests
+                raise requests.HTTPError("503 sealed", response=self)
+
+        class SealedSession:
+            def post(self, *a, **kw):
+                return Sealed()
+
+        c._session = SealedSession()
+        with pytest.raises(VaultUnavailableError, match="sealed"):
+            c.authenticate()
+
 
 # ── KV secret I/O mock tests ───────────────────────────────────────────
 
@@ -236,6 +270,22 @@ class TestKvSecretIO:
         c._session = MS404()
         with pytest.raises(VaultLookupError, match="not found"):
             c.read_secret("nonexistent")
+
+    def test_read_sealed_503_raises_unavailable(self, monkeypatch):
+        """COS-178: sealed vault (503) → VaultUnavailableError (surface отдаст 503, не 500)."""
+        monkeypatch.setenv("COSMO_ENV", "test")
+        monkeypatch.setenv("VAULT_DEV_ROOT_TOKEN_ID", "rt")
+        c = VaultClient()
+        c.authenticate()
+
+        class MS503:
+            def get(self, url, headers=None, timeout=None):
+                return MockResponse({"errors": ["Vault is sealed"]}, status=503)
+            def post(self, *a, **kw):
+                return MockResponse({})
+        c._session = MS503()
+        with pytest.raises(VaultUnavailableError, match="sealed"):
+            c.read_secret("any")
 
     def test_write_secret(self, monkeypatch):
         monkeypatch.setenv("COSMO_ENV", "test")

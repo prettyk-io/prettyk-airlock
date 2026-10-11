@@ -22,6 +22,7 @@ class Build(BaseModel):
     id: str = Field(..., min_length=1, description="Уникальный идентификатор сборки (e.g. bld-001)")
     app_id: str = Field(..., min_length=1, description="ID приложения, к которому относится сборка")
     domain_id: str = Field(default="default", min_length=1, description="ID КИТС-домена")
+    title: str = Field(default="", description="Человекочитаемое название сборки")
     commit_sha: str = Field(..., min_length=7, description="Git commit SHA (40 hex символов или short SHA)")
     branch: str = Field(default="main", min_length=1, description="Ветка репозитория")
     status: BuildStatus = Field(default="pending", description="Текущий статус сборки")
@@ -41,6 +42,22 @@ class Build(BaseModel):
         default="system",
         min_length=1,
         description="ID пользователя или агента, инициировавшего сборку",
+    )
+    initiator: Optional[str] = Field(
+        default=None,
+        description="COS-196: клиентский алиас инициатора (initiator_user_id)",
+    )
+    app_name: Optional[str] = Field(
+        default=None,
+        description="COS-196: человекочитаемое имя приложения (enrichment для витрины)",
+    )
+    run_id: Optional[str] = Field(
+        default=None,
+        description="COS-196: прогон (runs.id), исполняющий сборку",
+    )
+    evidence_refs: List[str] = Field(
+        default_factory=list,
+        description="COS-196: id durable-записей Evidence Ledger по прогону сборки",
     )
     build_logs: Optional[str] = Field(
         default="",

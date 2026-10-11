@@ -16,7 +16,8 @@ server/router/api.go + server/api/pipeline.go тега v3.5.0):
     было опасно и честно запрещено сервером.
   - логи — GET /api/repos/{repo_id}/logs/{number}/{stepId}, где stepId —
     DB id шага из workflow-дерева пайплайна (GET pipelines/{number}
-    возвращает workflows[].steps[]).
+    возвращает workflows[].children[]; ``steps`` — legacy-форма).
+    Строки лога приходят в ``data`` (base64), ``line`` — номер строки.
   - submit — POST /api/repos/{repo_id}/pipelines с JSON-телом
     PipelineOptions {branch, variables}; query-параметр branch из
     прототипа сервером игнорируется.
@@ -26,6 +27,7 @@ server/router/api.go + server/api/pipeline.go тега v3.5.0):
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import threading
@@ -41,6 +43,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 30
 _LOOKUP_TTL_SEC = 300.0
+
+# SAST-STEP-1 (live-гонка): WP пишет log_entries шага асинхронно — строки
+# могут появиться ПОСЛЕ смены статуса пайплайна (замер на стенде: маркер
+# отчёта лёг в БД в ту же секунду, что и terminal, но уже после нашего
+# чтения → ложный alert «отчёт не найден»). Добор пустых логов терминальных
+# шагов включается явно (settle_empty_s), чтобы не менять legacy-семантику.
+_TERMINAL_STEP_STATES = frozenset({"success", "failure", "error", "killed"})
+_EMPTY_LOG_SETTLE_ATTEMPTS = 3
 
 # COS-127: repo.config_file — глобальная настройка репозитория; свап
 # выбранного конфига сериализуем в процессе API (cosmo-api — один инстанс).
@@ -188,11 +198,26 @@ class WoodpeckerAdapter(ExecutionAdapter):
         разворачивается в канонический ``docker build`` (под qualified-тегом)
         + ``docker push`` по тегу (no-``latest``); manifest-digest снимается
         с ответа push → маркер ``<name>:<version>@sha256:<digest>``.
+
+        COS-194: нерезолвнутая ссылка (не-dict ref либо ``unresolved_refs`` от
+        резолвера) не выдумывает шаг и не роняет генерацию — неполнота явно
+        фиксируется секцией ``x-audit-incomplete`` (ref + причина).
         """
         bricks = batch.get("bricks", [])
+        unresolved: list[dict[str, Any]] = [
+            dict(u) for u in (batch.get("unresolved_refs") or [])
+            if isinstance(u, dict)
+        ]
         pipeline: dict[str, Any] = {"when": {"event": ["manual"]}, "steps": {}}
 
         for i, brick in enumerate(bricks):
+            if not isinstance(brick, dict):
+                # COS-194: ссылка не разрешена — честный маркер, без шага-фантома.
+                unresolved.append({
+                    "ref": str(brick),
+                    "reason": "brick definition not resolved (raw ref in audit batch)",
+                })
+                continue
             step_name = brick.get("name", f"step-{i}")
             definition = brick.get("definition", {})
             step_type = definition.get("type")
@@ -210,7 +235,15 @@ class WoodpeckerAdapter(ExecutionAdapter):
             env = definition.get("inputs", {})
             if env:
                 step_config["environment"] = env
+            # SAST-STEP-1: образы с собственным entrypoint (напр. sonar-scanner-cli)
+            # требуют явного сброса, чтобы `commands` исполнялись шеллом шага.
+            entrypoint = definition.get("entrypoint")
+            if entrypoint is not None:
+                step_config["entrypoint"] = entrypoint
             pipeline["steps"][step_name] = step_config
+
+        if unresolved:
+            pipeline["x-audit-incomplete"] = unresolved
 
         return yaml.dump(pipeline, default_flow_style=False, allow_unicode=True)
 
@@ -229,7 +262,7 @@ class WoodpeckerAdapter(ExecutionAdapter):
         )
         from orchestrator.cosmo.adapters.registry_gap import enforce_gap_push
 
-        spec = DockerBuildSpec(**definition)
+        spec = DockerBuildSpec.from_definition(definition)
         # COS-163: docker_build — push в registry зоны. В GAP-режиме внешний
         # registry (docker.io/ghcr.io/quay.io) → честная ошибка на генерации,
         # а не молчаливый пайплайн, падающий в никуда при исполнении.
@@ -333,10 +366,16 @@ class WoodpeckerAdapter(ExecutionAdapter):
         return str(self.get_pipeline(handle).get("status", "pending"))
 
     def _flatten_steps(self, detail: dict) -> list[dict]:
-        """Развёрнутый список шагов из workflows-дерева (v3.5)."""
+        """Развёрнутый список шагов из workflows-дерева (v3.5).
+
+        Живой WP API отдаёт шаги как ``workflows[].children`` (Go-модель v3
+        ``Workflow.Children``); ``steps`` — legacy-форма (моки/старые ответы).
+        Дрифт пойман live-смоком COS-188: без fallback деривация чанков и
+        collect_all_logs молча видели 0 шагов на реальном пайплайне.
+        """
         steps: list[dict] = []
         for wf in detail.get("workflows") or []:
-            for st in wf.get("steps") or []:
+            for st in wf.get("steps") or wf.get("children") or []:
                 steps.append({
                     "id": st.get("id"),
                     "pid": st.get("pid"),
@@ -375,22 +414,87 @@ class WoodpeckerAdapter(ExecutionAdapter):
         lines: list[str] = []
         for entry in data:
             if isinstance(entry, dict):
-                lines.append(str(entry.get("line", entry.get("message", ""))))
+                raw = entry.get("data")
+                if raw is not None:
+                    # v3.5: строка лога — base64 в ``data``; ``line`` — номер.
+                    # Контракт-дрифт найден live-смоком COS-188 (было: числа).
+                    try:
+                        lines.append(
+                            base64.b64decode(raw).decode("utf-8", "replace"))
+                    except Exception:  # noqa: BLE001 — не base64 → как есть
+                        lines.append(str(raw))
+                else:
+                    lines.append(str(entry.get("line", entry.get("message", ""))))
             else:
                 lines.append(str(entry))
         return lines
 
-    def collect_all_logs(self, handle: dict) -> dict[str, list[str]]:
+    def collect_all_logs(self, handle: dict, settle_empty_s: float = 0.0,
+                         settle_attempts: int = _EMPTY_LOG_SETTLE_ATTEMPTS,
+                         ) -> dict[str, list[str]]:
         """COS-097: логи всех шагов пайплайна {step_name: [lines]}.
 
         Используется evidence-путём: SHA-256 digest собирается из
         реального прогона, а не выдумывается.
+
+        SAST-STEP-1: ``settle_empty_s > 0`` включает bounded-добор для
+        терминальных шагов с пустыми логами — WP флешит log_entries
+        асинхронно, и чтение ровно в момент terminal могло застать шаг
+        пустым (→ ложный alert «отчёт не найден»). По умолчанию ожидание
+        выключено: legacy-вызовы сохраняют прежнюю семантику, живой
+        evidence-путь (executor) включает добор явно.
+
+        COS-196: тот же флеш-лаг режет и НЕПУСТЫЕ логи — хвост шага
+        (digest-маркер печатается последним) мог ещё не долиться в момент
+        terminal-полла. Bounded добор до стабилизации размера; данные —
+        только реальные (ожидание, не выдумка).
         """
         detail = self.get_pipeline(handle)
         out: dict[str, list[str]] = {}
         for step in self._flatten_steps(detail):
-            out[str(step["name"])] = self._fetch_step_logs(handle, step)
+            name = str(step["name"])
+            lines = self._fetch_step_logs(handle, step)
+            terminal = str(step.get("state") or "") in _TERMINAL_STEP_STATES
+            if terminal and settle_empty_s > 0:
+                if not lines:
+                    attempts = max(1, int(settle_attempts))
+                    for attempt in range(2, attempts + 1):
+                        time.sleep(settle_empty_s)
+                        lines = self._fetch_step_logs(handle, step)
+                        if lines:
+                            logger.info(
+                                "Woodpecker logs settled for pipeline #%s step %r "
+                                "(attempt %d)", handle.get("number"), name, attempt)
+                            break
+                else:
+                    lines = self._settle_growing_logs(
+                        handle, step, lines, settle_empty_s, settle_attempts)
+            out[name] = lines
         return out
+
+    def _settle_growing_logs(self, handle: dict, step: dict,
+                             lines: list[str], pause_s: float,
+                             attempts: int) -> list[str]:
+        """COS-196: bounded добор растущих логов терминального шага.
+
+        WP флешит лог-чанки асинхронно; пока размер растёт — перечитываем
+        (до ``attempts`` раз), две подряд равных выборки считаем стабильными.
+        """
+        stable = 0
+        for _ in range(max(1, int(attempts))):
+            time.sleep(pause_s)
+            fresh = self._fetch_step_logs(handle, step)
+            if len(fresh) > len(lines):
+                logger.info(
+                    "Woodpecker logs grew for pipeline #%s step %r (%d→%d lines)",
+                    handle.get("number"), step.get("name"), len(lines), len(fresh))
+                lines = fresh
+                stable = 0
+            else:
+                stable += 1
+                if stable >= 2:
+                    break
+        return lines
 
     def get_step_logs_by_id(self, handle: dict, step_id: int) -> list[str]:
         """COS-112: логи шага по Woodpecker step ID (не индексу).

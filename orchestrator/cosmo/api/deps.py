@@ -44,7 +44,12 @@ _vault_client: "VaultClient | None" = None  # type: ignore[name-defined]  # noqa
 
 
 def init_vault() -> "VaultClient":  # type: ignore[name-defined]  # noqa: F821
-    """Вызывается lifespan'ом перед yield."""
+    """Вызывается lifespan'ом перед yield.
+
+    COS-178: auth — best-effort. Недоступный/sealed vault НЕ роняет старт:
+    клиент остаётся в deps, а lazy-auth (``VaultClient._ensure_token``) догонит
+    сессию при первом запросе. Surface отдаёт честный 503, пока vault не готов.
+    """
     from orchestrator.cosmo.infra.vault import VaultClient
 
     global _vault_client
@@ -54,7 +59,11 @@ def init_vault() -> "VaultClient":  # type: ignore[name-defined]  # noqa: F821
 
 
 def get_vault() -> "VaultClient":  # type: ignore[name-defined]  # noqa: F821
-    """FastAPI dependency: ОТКАЗЫВАЕТ на 503, если Vault не инициализирован."""
+    """FastAPI dependency: 503, если Vault-клиент не создан стартом.
+
+    Готовность самого vault проверяется на поверхности: read/write кидают
+    VaultError/VaultUnavailableError → роуты отдают 503 (COS-178).
+    """
     if _vault_client is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

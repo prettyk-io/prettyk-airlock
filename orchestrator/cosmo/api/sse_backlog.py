@@ -240,6 +240,38 @@ def replay(
         return ReplayResult(records=records, gap=gap)
 
 
+def read_window(kind: str, key: str) -> Optional[list[EventRecord]]:
+    """Всё удержанное окно stream'а (хронологически), для resume-позиции.
+
+    ``replay`` отдаёт только записи после after_id; производным стримам
+    (логи COS-109) для продолжения без дублей нужно всё окно целиком —
+    из него восстанавливается, сколько событий клиент уже получил.
+    Возвращает None при недоступности хранилища (caller → честная
+    деградация: resync, не тишина); пустой список — окно пусто.
+    """
+    stream = _stream_key(kind, key)
+    client = _get_valkey()
+    if client is not None:
+        try:
+            entries = client.xrange(stream, min="-", max="+")
+        except Exception:  # noqa: BLE001 — valkey сбой → честная деградация
+            logger.warning("[SSE:BACKLOG] valkey window read failed — caller must resync")
+            return None
+        out: list[EventRecord] = []
+        for eid, fields in entries:
+            f = {_dec(k): _dec(v) for k, v in fields.items()}
+            out.append(EventRecord(id=_dec(eid), event_type=f["t"], data=f["d"]))
+        return out
+    with _ring_lock:
+        ring = _rings.get(stream)
+        if not ring:
+            return []
+        return [
+            EventRecord(id=eid, event_type=f["t"], data=f["d"])
+            for eid, f in list(ring)
+        ]
+
+
 def _replay_valkey(client: Any, stream: str, after_id: str, limit: int) -> ReplayResult:
     entries = client.xrange(stream, min="-", max="+")
     norm: list[tuple[str, dict[str, str]]] = []

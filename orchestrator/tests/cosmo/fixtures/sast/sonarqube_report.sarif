@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SonarQube",
+          "version": "26.8.0",
+          "rules": [
+            {
+              "id": "python:S3649",
+              "shortDescription": { "text": "Database queries should not be vulnerable to injection attacks" },
+              "properties": {
+                "security-severity": "9.8",
+                "tags": ["external/cwe/cwe-89"]
+              }
+            },
+            {
+              "id": "javascript:S5131",
+              "shortDescription": { "text": "Endpoints should not be vulnerable to reflected XSS attacks" },
+              "properties": {
+                "severity": "CRITICAL",
+                "security-severity": "5.0",
+                "tags": ["external/cwe/cwe-79"]
+              }
+            },
+            {
+              "id": "javascript:S1481",
+              "shortDescription": { "text": "Unused local variables should be removed" }
+            },
+            {
+              "id": "python:S1172",
+              "shortDescription": { "text": "Unused function parameters should be removed" },
+              "properties": {
+                "security-severity": "1.6",
+                "tags": ["cwe-200"]
+              }
+            }
+          ]
+        }
+      },
+      "invocations": [
+        { "endTimeUtc": "2026-09-25T12:00:00Z" }
+      ],
+      "results": [
+        {
+          "ruleId": "python:S3649",
+          "level": "error",
+          "message": { "text": "Make sure using a dynamically formatted SQL query is safe here." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "src/db.py" },
+                "region": { "startLine": 42 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "javascript:S5131",
+          "level": "warning",
+          "message": { "text": "Reflected user input is written to the response without sanitization." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "src/api.py" },
+                "region": { "startLine": 17 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "javascript:S1481",
+          "level": "error",
+          "message": { "text": "Remove the unused local variable 'tmp'." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "web/app.js" },
+                "region": { "startLine": 5 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "python:S1172",
+          "level": "note",
+          "message": { "text": "Remove the unused function parameter 'ctx'." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "src/util.py" },
+                "region": { "startLine": 99 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "python:S3649",
+          "level": "error",
+          "message": { "text": "Make sure using a dynamically formatted SQL query is safe here." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "src/db.py" },
+                "region": { "startLine": 42 }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -130,7 +130,8 @@ async def create_brick(
         name=body.name,
         type=body.type,
         source=body.source,
-        definition_json=body.definition.model_dump(),
+        # COS-196: None-поля (generic-дефиниция без docker_build) не пишутся.
+        definition_json=body.definition.model_dump(exclude_none=True),
         depends_on=body.depends_on,
         gates=body.gates,
     )
@@ -184,7 +185,8 @@ async def update_brick(
     if body.source is not None:
         b.source = body.source
     if body.definition is not None:
-        b.definition_json = body.definition.model_dump()
+        # COS-196: None-поля не пишутся (см. create_brick).
+        b.definition_json = body.definition.model_dump(exclude_none=True)
     if body.depends_on is not None:
         b.depends_on = body.depends_on
     if body.gates is not None:

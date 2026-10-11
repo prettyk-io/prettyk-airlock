@@ -209,6 +209,46 @@ class TestPipelineYaml:
         assert parsed is not None
         assert "steps" in parsed
 
+    def test_string_ref_marked_incomplete_not_crash(self):
+        """COS-194: нерезолвнутая ID-строка не роняет аудит — неполнота помечена."""
+        adapter = WoodpeckerAdapter("http://woodpecker:8000", "token")
+        parsed = yaml.safe_load(
+            adapter.generate_pipeline_yaml({"bricks": ["sast-sonarqube"]})
+        )
+        assert parsed["steps"] == {}
+        incomplete = parsed["x-audit-incomplete"]
+        assert incomplete[0]["ref"] == "sast-sonarqube"
+        assert "not resolved" in incomplete[0]["reason"]
+
+    def test_unresolved_refs_passthrough_with_reason(self):
+        """COS-194: причина неполноты от резолвера доходит до аудита как есть."""
+        adapter = WoodpeckerAdapter("http://woodpecker:8000", "token")
+        batch = {
+            "bricks": [
+                {"name": "Sonar SAST",
+                 "definition": {"image": "sonarsource/sonar-scanner-cli:latest"}},
+            ],
+            "unresolved_refs": [
+                {"ref": "ghost-brick", "reason": "brick not found in catalog"},
+            ],
+        }
+        parsed = yaml.safe_load(adapter.generate_pipeline_yaml(batch))
+        assert "Sonar SAST" in parsed["steps"]
+        assert parsed["x-audit-incomplete"] == [
+            {"ref": "ghost-brick", "reason": "brick not found in catalog"},
+        ]
+
+    def test_resolved_bricks_no_incomplete_section(self):
+        """COS-194 happy: все ссылки разрешены — шаги на месте, маркера нет."""
+        adapter = WoodpeckerAdapter("http://woodpecker:8000", "token")
+        batch = {"bricks": [{
+            "name": "Sonar SAST",
+            "definition": {"image": "sonarsource/sonar-scanner-cli:latest"},
+        }]}
+        parsed = yaml.safe_load(adapter.generate_pipeline_yaml(batch))
+        assert list(parsed["steps"]) == ["Sonar SAST"]
+        assert "x-audit-incomplete" not in parsed
+
 
 class TestEnvVarFallback:
     def test_default_url(self, monkeypatch):
@@ -323,6 +363,46 @@ class TestV35Contract:
         assert any(url.endswith("/logs/7/601") for url in log_urls)
         assert any(url.endswith("/logs/7/602") for url in log_urls)
 
+    def test_logs_resolve_children_contract(self):
+        """COS-188: живой v3.5 отдаёт шаги в workflows[].children (не steps).
+
+        Контракт-дрифт: без fallback деривация шагов/логов молча давала 0.
+        """
+        adapter, _ = _make_adapter({
+            ("GET", "/api/repos/42/pipelines/7"): FakeResponse(200, {
+                "id": 9001, "number": 7, "status": "success",
+                "workflows": [
+                    {"id": 500, "pid": 1, "name": "wf-main", "state": "success",
+                     "children": [
+                         {"id": 701, "pid": 2, "name": "clone", "state": "success"},
+                         {"id": 702, "pid": 3, "name": "prepare", "state": "success"},
+                     ]},
+                ],
+            }),
+            ("GET", "/api/repos/42/logs/7/702"): FakeResponse(200, [
+                {"line": "cosmo-fixture prepare", "time": 1},
+            ]),
+        })
+        handle = {"repo_id": 42, "number": 7}
+        flat = adapter._flatten_steps(adapter.get_pipeline(handle))
+        assert [s["name"] for s in flat] == ["clone", "prepare"]
+        assert adapter.get_logs(handle, step=1) == ["cosmo-fixture prepare"]
+
+    def test_logs_decode_base64_data_contract(self):
+        """COS-188: живой v3.5 отдаёт строки логов в data (base64); line — номер."""
+        import base64 as _b64
+        adapter, _ = _make_adapter({
+            ("GET", "/api/repos/42/pipelines/7"): _pipeline_response(status="success"),
+            ("GET", "/api/repos/42/logs/7/601"): FakeResponse(200, [
+                {"id": 1, "step_id": 601, "line": 0,
+                 "data": _b64.b64encode(b'+ echo "fixture line"').decode(), "type": 0},
+                {"id": 2, "step_id": 601, "line": 1,
+                 "data": _b64.b64encode(b"fixture line").decode(), "type": 0},
+            ]),
+        })
+        logs = adapter.get_logs({"repo_id": 42, "number": 7}, step=0)
+        assert logs == ['+ echo "fixture line"', "fixture line"]
+
     def test_logs_404_is_empty_not_error(self):
         """Логи шага ещё не записаны/удалены retention — честно пусто."""
         adapter, _ = _make_adapter({
@@ -332,6 +412,101 @@ class TestV35Contract:
         })
         logs = adapter.collect_all_logs({"repo_id": 42, "number": 7})
         assert logs == {"clone": [], "scan": []}
+
+    def test_collect_all_logs_settles_async_log_flush(self):
+        """SAST-STEP-1: добор пустых терминальных логов (live-гонка флеша).
+
+        Живой кейс: log_entries отчёт-шага записались в ту же секунду, что
+        и terminal-статус, но уже ПОСЛЕ чтения → маркер терялся (ложный
+        alert). settle_empty_s включает bounded refetch.
+        """
+        import base64 as _b64
+        calls = {"scan": 0}
+
+        def scan_logs():
+            calls["scan"] += 1
+            if calls["scan"] == 1:
+                return FakeResponse(404)  # строки ещё не записаны
+            return FakeResponse(200, [
+                {"data": _b64.b64encode(
+                    b"[prettyk-sast-report] sha256=deadbeef").decode()},
+            ])
+
+        adapter, _ = _make_adapter({
+            ("GET", "/api/repos/42/pipelines/7"): _pipeline_response(status="success"),
+            ("GET", "/api/repos/42/logs/7/601"): FakeResponse(200, [{"line": "cloned"}]),
+            ("GET", "/api/repos/42/logs/7/602"): scan_logs,
+        })
+        logs = adapter.collect_all_logs({"repo_id": 42, "number": 7},
+                                        settle_empty_s=0.01)
+        assert logs["clone"] == ["cloned"]
+        assert logs["scan"] == ["[prettyk-sast-report] sha256=deadbeef"]
+        assert calls["scan"] == 2  # первый fetch пуст → добор
+
+    def test_collect_all_logs_settle_skips_running_step(self):
+        """Running-шаг: пустые логи — норма, добора нет (settle не блокирует)."""
+        calls = {"scan": 0}
+
+        def scan_logs():
+            calls["scan"] += 1
+            return FakeResponse(404)
+
+        adapter, _ = _make_adapter({
+            ("GET", "/api/repos/42/pipelines/7"): _pipeline_response(status="running"),
+            ("GET", "/api/repos/42/logs/7/601"): FakeResponse(404),
+            ("GET", "/api/repos/42/logs/7/602"): scan_logs,
+        })
+        logs = adapter.collect_all_logs({"repo_id": 42, "number": 7},
+                                        settle_empty_s=0.05)
+        assert logs == {"clone": [], "scan": []}
+        assert calls["scan"] == 1
+
+    def test_collect_all_logs_settle_off_by_default(self):
+        """Default (settle_empty_s=0) — прежняя семантика: один fetch."""
+        calls = {"scan": 0}
+
+        def scan_logs():
+            calls["scan"] += 1
+            return FakeResponse(404)
+
+        adapter, _ = _make_adapter({
+            ("GET", "/api/repos/42/pipelines/7"): _pipeline_response(status="success"),
+            ("GET", "/api/repos/42/logs/7/601"): FakeResponse(404),
+            ("GET", "/api/repos/42/logs/7/602"): scan_logs,
+        })
+        logs = adapter.collect_all_logs({"repo_id": 42, "number": 7})
+        assert logs == {"clone": [], "scan": []}
+        assert calls["scan"] == 1
+
+    def test_collect_all_logs_settles_partial_growth(self):
+        """COS-196: хвост логов терминального шага доливается асинхронно.
+
+        Live-кейс: логи шага пришли НЕПУСТЫМИ, но без последних строк
+        (digest-маркер печатается в самом конце) — старый добор ждал только
+        пустые логи и терял маркер. Growing-settle доводит до стабильного
+        размера, оставаясь bounded.
+        """
+        marker = "build-demo:1.0.0@sha256:" + "ab" * 32
+        calls = {"scan": 0}
+
+        def scan_logs():
+            calls["scan"] += 1
+            if calls["scan"] == 1:
+                return FakeResponse(200, [{"line": "building"}, {"line": "pushing"}])
+            return FakeResponse(200, [
+                {"line": "building"}, {"line": "pushing"}, {"line": marker},
+            ])
+
+        adapter, _ = _make_adapter({
+            ("GET", "/api/repos/42/pipelines/7"): _pipeline_response(status="success"),
+            ("GET", "/api/repos/42/logs/7/601"): FakeResponse(200, [{"line": "cloned"}]),
+            ("GET", "/api/repos/42/logs/7/602"): scan_logs,
+        })
+        logs = adapter.collect_all_logs({"repo_id": 42, "number": 7},
+                                        settle_empty_s=0.01)
+        assert logs["clone"] == ["cloned"]
+        assert logs["scan"][-1] == marker
+        assert calls["scan"] >= 2  # хвост добран, не потерян
 
     def test_submit_permission_error_is_explicit(self):
         """403/401 на submit → явный PermissionError (честный honest error)."""

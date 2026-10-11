@@ -187,8 +187,10 @@ class TestRunNotFound:
             gen = _run_logs_stream("bad-run-id", req)
             events = _collect_events(gen, max_events=5)
 
-        assert len(events) == 1
-        ev_type, data = events[0]
+        assert len(events) == 2
+        # COS-180: первым идёт stream_backlog-флаг (без id), затем ошибка
+        assert events[0][0] == "stream_backlog"
+        ev_type, data = events[1]
         assert ev_type == "error"
         assert data["error"] == "run_not_found"
 
@@ -213,8 +215,10 @@ class TestRunAlreadyFinished:
             gen = _run_logs_stream("run-test-1", req)
             events = _collect_events(gen, max_events=5)
 
-        assert len(events) == 1
-        ev_type, data = events[0]
+        assert len(events) == 2
+        # COS-180: первым идёт stream_backlog-флаг (без id)
+        assert events[0][0] == "stream_backlog"
+        ev_type, data = events[1]
         assert ev_type == "run_finish"
         assert data["run_id"] == "run-test-1"
         assert data["status"] == "passed"
@@ -232,8 +236,10 @@ class TestNoHandleYet:
             gen = _run_logs_stream("run-test-1", req)
             events = _collect_events(gen, max_events=10)
 
-        # Only keepalive comments, no step events
-        non_keepalive = [(t, d) for t, d in events if t not in ("message",)]
+        # Only keepalive comments (и backlog-флаг COS-180), no step events
+        non_keepalive = [
+            (t, d) for t, d in events if t not in ("message", "stream_backlog")
+        ]
         assert len(non_keepalive) == 0
 
 
@@ -496,8 +502,12 @@ class TestClientDisconnect:
                 asyncio.wait_for(_drive(), timeout=3.0),
             )
 
-        # No step events emitted (disconnect before first tick)
-        non_comment = [e for e in events if "comment" not in e]
+        # No step events emitted (disconnect before first tick);
+        # COS-180: единственное непустое событие — backlog-флаг
+        non_comment = [
+            e for e in events
+            if "comment" not in e and e.get("event") != "stream_backlog"
+        ]
         assert len(non_comment) == 0
         # Adapter.close() was called
         ma.close.assert_called()

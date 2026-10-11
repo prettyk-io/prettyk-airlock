@@ -6,7 +6,7 @@ BrickOverride — переопределение параметров для к�
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 StrictModel = ConfigDict(extra="ignore")
@@ -23,9 +23,9 @@ class BrickDefinition(BaseModel):
         description="CI-исполнитель",
     )
     image: str = Field(
-        ...,
-        min_length=1,
-        description="Docker-образ (например sonarsource/sonar-scanner-cli:latest)",
+        default="",
+        description="Docker-образ (например sonarsource/sonar-scanner-cli:latest); "
+                    "docker_build-специализация несёт образ шага сама (docker:24-cli)",
     )
     timeout_s: int = Field(
         default=3600,
@@ -40,6 +40,32 @@ class BrickDefinition(BaseModel):
         default_factory=dict,
         description="Выходные артефакты (пути, форматы)",
     )
+
+    # COS-196: docker_build-специализация кирпича (канон COS-162) — раньше
+    # API-схема её не несла (extras игнорировались), и каталог наполнялся
+    # только прямым upsert'ом. Теперь дефиниция проходит API-путь целиком.
+    type: Optional[str] = Field(
+        default=None,
+        description="Специализация шага (docker_build — build + push по канону COS-162)",
+    )
+    image_name: Optional[str] = Field(
+        default=None, description="Имя образа docker_build-шага (slug)")
+    version: Optional[str] = Field(
+        default=None, description="Версия образа docker_build-шага (строгий semver)")
+    dockerfile: Optional[str] = Field(
+        default=None, description="Путь к Dockerfile (docker_build)")
+    context: Optional[str] = Field(
+        default=None, description="Build-контекст (docker_build)")
+    registry: Optional[str] = Field(
+        default=None, description="Endpoint registry зоны, host:port (docker_build)")
+    repository: Optional[str] = Field(
+        default=None, description="Repository в registry (docker_build)")
+    namespace: Optional[str] = Field(
+        default=None, description="Namespace/зона registry (docker_build)")
+    target: Optional[str] = Field(
+        default=None, description="Build stage (docker_build)")
+    platform: Optional[str] = Field(
+        default=None, description="Платформа сборки (docker_build)")
 
 
 class PipelineBrick(BaseModel):

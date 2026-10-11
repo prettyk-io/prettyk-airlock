@@ -103,8 +103,11 @@ class HandleStoreBridge:
 
     def mark_terminal(self, batch_id: str, status: str, *,
                       reason: Optional[str] = None,
-                      degraded: bool = False) -> None:
-        self._run(self._mark_terminal_async(batch_id, status, reason, degraded))
+                      degraded: bool = False,
+                      run_id: str = "",
+                      plan_id: str = "") -> None:
+        self._run(self._mark_terminal_async(
+            batch_id, status, reason, degraded, run_id, plan_id))
 
     def record_unknown(self, batch_id: str, raw_status: str) -> int:
         return self._run(self._record_unknown_async(batch_id, raw_status))
@@ -163,13 +166,26 @@ class HandleStoreBridge:
 
     async def _mark_terminal_async(self, batch_id: str, status: str,
                                    reason: Optional[str],
-                                   degraded: bool) -> None:
+                                   degraded: bool,
+                                   run_id: str = "",
+                                   plan_id: str = "") -> None:
         async with self._sf() as s:
-            await s.execute(
+            res = await s.execute(
                 update(ExecutionHandleRow)
                 .where(ExecutionHandleRow.batch_id == batch_id)
                 .values(last_status=status, reason=reason, degraded=degraded)
             )
+            # COS-196: ручки может не быть (submit упал до upsert) — тогда
+            # честный терминальный след дозаписывается, а не теряется.
+            if res.rowcount == 0 and run_id:
+                s.add(ExecutionHandleRow(
+                    batch_id=batch_id,
+                    run_id=run_id,
+                    plan_id=plan_id or "",
+                    last_status=status,
+                    reason=reason,
+                    degraded=degraded,
+                ))
             await s.commit()
 
     async def _record_unknown_async(self, batch_id: str, raw_status: str) -> int:
@@ -492,6 +508,9 @@ class ExecutionService:
                 # COS-164: runtime-hook — захват digest docker_build в durable
                 # ArtifactRecord (не ручной, из реальных логов прогона).
                 await self._capture_artifact_records(s, run_id, batch, logs)
+                # SAST-STEP-1: runtime-hook — durable-захват отчёта source-SAST
+                # (маркер отчёта в логах шага; как COS-164, не ручной).
+                await self._capture_sast_reports(s, run_id, batch, logs)
                 await s.commit()
         logger.info("COS-097 evidence sealed: run=%s batch=%s digest=%s",
                     run_id, batch_id, digest[:16])
@@ -510,14 +529,19 @@ class ExecutionService:
         канонического digest-маркера — честный alert-след (не выдуманный
         digest), прогон не откатывается: свидетельство собрано, артефакт
         просто не зафиксирован.
+
+        COS-196: живой компилятор хранит в ``bricks_refs`` ID-строки —
+        резолвим их в каталоге до capture (иначе docker_build-спека не
+        выводится и digest реального прогона не закрепляется durable-записью).
         """
-        bricks = batch.bricks_refs or []
-        if not bricks:
+        refs = batch.bricks_refs or []
+        if not refs:
             return
         from orchestrator.cosmo.control_plane.artifact_capture import (
             MissingDockerBuildDigestError,
             capture_artifact_records,
         )
+        bricks = await self._resolve_brick_refs(s, refs)
         try:
             entry_ids = await capture_artifact_records(
                 s, run_id=run_id, batch_id=batch.id, bricks=bricks, logs=logs,
@@ -551,6 +575,146 @@ class ExecutionService:
             content_hash=hashlib.sha256(payload).hexdigest(),
             provenance_json={
                 "source": "cosmo-artifact-record-missing",
+                "reason": reason,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        await commit_evidence_entry(s, alert)
+
+    @staticmethod
+    async def _resolve_brick_refs(s: Any, refs: list[Any]) -> list[dict[str, Any]]:
+        """SAST-STEP-1: bricks_refs (dict-и ИЛИ id-строки) → dicts {name,type,definition}.
+
+        ``batches.bricks_refs`` в живом компиляторе хранит СПИСОК ID (строки);
+        build-детали лежат в каталоге ``pipeline_bricks``. Дикт-формы (legacy/
+        unit-путь) проходят как есть.
+        """
+        from orchestrator.cosmo.db.models import PipelineBrick as BrickModel
+
+        out: list[dict[str, Any]] = []
+        for ref in refs:
+            if isinstance(ref, dict):
+                out.append(ref)
+                continue
+            row = await s.get(BrickModel, str(ref))
+            if row is None:
+                out.append({"name": str(ref), "type": "", "definition": {}})
+                continue
+            definition = row.definition_json if isinstance(row.definition_json, dict) else {}
+            brick_type = getattr(row.type, "value", row.type)
+            out.append({
+                "name": str(row.name or ref),
+                "type": str(brick_type or ""),
+                "definition": definition,
+            })
+        return out
+
+    async def _capture_sast_reports(
+        self,
+        s: Any,
+        run_id: str,
+        batch: Any,
+        logs: dict[str, list[str]],
+    ) -> None:
+        """SAST-STEP-1: durable-захват отчёта source-SAST (runtime-hook).
+
+        no-op для batch'ей без sast-кирпича. Для sast-кирпича без канонического
+        маркера отчёта (шаг упал/не дошёл) — честный alert-след (отчёт не
+        выдумывается) и **degraded-терминация** (SAST-GATE-3): прогон не может
+        закончиться тихим PASS, finalize отдаст `failed` с причиной.
+        """
+        refs = batch.bricks_refs or []
+        if not refs:
+            return
+        from orchestrator.cosmo.control_plane.sast_capture import (
+            InvalidSastReportError,
+            MissingSastReportError,
+            capture_sast_reports,
+            sast_report_bricks,
+        )
+        bricks = await self._resolve_brick_refs(s, refs)
+        if not sast_report_bricks(bricks):
+            return
+        try:
+            entry_ids = await capture_sast_reports(
+                s, run_id=run_id, batch_id=batch.id, bricks=bricks, logs=logs,
+            )
+        except (MissingSastReportError, InvalidSastReportError) as exc:
+            logger.error("SAST-GATE-3 report capture failed: %s", exc)
+            mark = getattr(self._executor, "mark_degraded", None)
+            if callable(mark):
+                mark(run_id, f"source-SAST report not captured: {exc}")
+            await self._write_missing_sast_report_alert(
+                s, run_id=run_id, batch_id=batch.id, reason=str(exc),
+            )
+            return
+        if entry_ids:
+            refs_now = list(batch.evidence_refs or [])
+            refs_now.extend(entry_ids)
+            batch.evidence_refs = refs_now
+            logger.info(
+                "SAST-STEP-1 report sealed: run=%s batch=%s entries=%s",
+                run_id, batch.id, entry_ids,
+            )
+            # SAST-GATE-3: авто-ingest отчёта в findings прогона (мост COS-101) —
+            # findings доходят до гейт-вердикта финализации без внешнего шага.
+            await self._ingest_sast_findings(run_id, logs)
+
+    async def _ingest_sast_findings(self, run_id: str, logs: dict[str, list[str]]) -> None:
+        """SAST-GATE-3: захваченный отчёт → findings прогона (живой мост COS-101).
+
+        Идемпотентно (дедуп ``path+rule+line``). Ошибка конвертации/моста не
+        маскируется: degraded → терминальный `failed` (без тихого PASS).
+        """
+        from orchestrator.cosmo.domain.sast_report import find_sast_report_marker
+
+        marker = find_sast_report_marker(logs)
+        if marker is None:
+            return
+        try:
+            from orchestrator.cosmo.control_plane.sast_ingest import (
+                convert_sonar_issues,
+                ingest_findings_to_run,
+                ingest_sarif_to_run,
+            )
+
+            if marker.format == "sarif":
+                result = await ingest_sarif_to_run(self._sf, run_id, marker.payload)
+            else:
+                data = json.loads(marker.payload.decode("utf-8"))
+                issues = data.get("issues") if isinstance(data, dict) else data
+                findings = convert_sonar_issues(issues or [])
+                result = await ingest_findings_to_run(self._sf, run_id, findings)
+            logger.info(
+                "SAST-GATE-3 findings ingest: run=%s parsed=%d attached=%d "
+                "duplicates=%d total=%d",
+                run_id, result.parsed, result.attached, result.duplicates, result.total,
+            )
+        except Exception as exc:  # noqa: BLE001 — честная деградация, не тихий PASS
+            logger.error("SAST-GATE-3 findings ingest failed for run %s: %s",
+                         run_id, exc)
+            mark = getattr(self._executor, "mark_degraded", None)
+            if callable(mark):
+                mark(run_id, f"source-SAST findings ingest failed: {exc}")
+
+    async def _write_missing_sast_report_alert(
+        self, s: Any, *, run_id: str, batch_id: str, reason: str,
+    ) -> None:
+        """SAST-STEP-1: честный alert о sast-шаге без маркера отчёта."""
+        from orchestrator.cosmo.ledger.evidence_writer import commit_evidence_entry
+
+        payload = json.dumps(
+            {"degraded": False, "reason": reason, "source": "cosmo-sast-report-missing"},
+            sort_keys=True, ensure_ascii=False,
+        ).encode("utf-8")
+        alert = EvidenceLedgerEntry(
+            run_id=run_id,
+            batch_id=batch_id,
+            type="alert",
+            content_ref="woodpecker://sast-report-missing",
+            content_hash=hashlib.sha256(payload).hexdigest(),
+            provenance_json={
+                "source": "cosmo-sast-report-missing",
                 "reason": reason,
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -591,8 +755,12 @@ class ExecutionService:
         self._gate_engine = engine
         self._findings_provider = provider
 
-    async def _gate_blocked(self, run_id: str, plan_id: str) -> bool:
+    async def _gate_blocked(self, run_id: str, plan_id: str) -> tuple[bool, dict[str, str]]:
         """Оценить плановые gates против реальных findings прогона.
+
+        Возвращает ``(blocked, decisions)``: решения нужны для durable-следа
+        (evidence type=decision) и проводки наружу (SAST-GATE-3) — клиент не
+        пересчитывает политику.
 
         Fail-open: ошибка bridge не блокирует прогон (parity COS-055 —
         ошибка gate engine в RCP не блокирует run). Только явный
@@ -601,7 +769,7 @@ class ExecutionService:
         engine = self._gate_engine
         provider = self._findings_provider
         if engine is None or provider is None:
-            return False
+            return False, {}
         try:
             findings = provider(run_id)
             if asyncio.iscoroutine(findings):
@@ -612,11 +780,11 @@ class ExecutionService:
             if blocked:
                 logger.warning("COS-101: gate block for run %s: %s",
                                run_id, decisions)
-            return blocked
+            return blocked, dict(decisions or {})
         except Exception as exc:  # noqa: BLE001 — fail-open по контракту
             logger.warning("COS-101 gate bridge failed for run %s: %s",
                            run_id, exc)
-            return False
+            return False, {}
 
     # ── finalize: честный run-статус из живых статусов ──
 
@@ -645,12 +813,14 @@ class ExecutionService:
                 run.started_at = now
 
             gate_blocked = False
+            gate_decisions: dict[str, str] = {}
             if all_passed and not degraded_reason:
                 # COS-101: все batch'и прошли — security gates оцениваются
                 # против РЕАЛЬНЫХ findings прогона. Block → blocked
                 # (parity RCP COS-055: gate может заблокировать успешный
-                # прогон, напр. Critical finding).
-                gate_blocked = await self._gate_blocked(run_id, run_plan_id)
+                # прогон, напр. Critical finding). SAST-GATE-3: решения
+                # сохраняются для durable-следа и проводки наружу.
+                gate_blocked, gate_decisions = await self._gate_blocked(run_id, run_plan_id)
 
             if degraded_reason:
                 run.status = "failed"
@@ -678,14 +848,22 @@ class ExecutionService:
         logger.info("COS-097 run %s finalized: %s (degraded=%s)",
                     run_id, final_status, bool(degraded_reason))
 
-        # Честный durable-след degraded + уведомления (best-effort).
+        # Честный durable-след degraded + решение гейта + уведомления (best-effort).
         if degraded_reason:
             try:
                 await self.write_degraded_evidence(run_id, degraded_reason, {})
             except Exception as exc:
                 logger.error("Degraded evidence failed for run %s: %s",
                              run_id, exc)
+        if gate_blocked:
+            try:
+                await self.write_gate_decision_evidence(run_id, run_plan_id, gate_decisions)
+            except Exception as exc:
+                logger.error("Gate decision evidence failed for run %s: %s",
+                             run_id, exc)
 
+        notify_reason = degraded_reason or (
+            "gate_blocked" if gate_blocked else ("" if all_passed else "batch_failed"))
         try:
             from orchestrator.cosmo.notifications.integration import notify_run_status_safe
             notify_run_status_safe(
@@ -694,9 +872,42 @@ class ExecutionService:
                 status=notify_status,
                 plan_id=run_plan_id,
                 initiator="execution-service",
+                reason=notify_reason,
+                gate_decisions=gate_decisions if gate_blocked else None,
             )
         except Exception as exc:
             logger.warning("Notify failed for run %s: %s", run_id, exc)
+
+    async def write_gate_decision_evidence(
+        self, run_id: str, plan_id: str, decisions: dict[str, str],
+    ) -> str:
+        """SAST-GATE-3: durable-решение гейта в tamper-evident ledger.
+
+        ``type="decision"`` — «что решено и почему» доступно внешнему контуру
+        и оператору без пересчёта политики на клиенте.
+        """
+        payload = json.dumps(
+            {"source": "cosmo-gate", "plan_id": plan_id, "decisions": decisions},
+            sort_keys=True, ensure_ascii=False,
+        ).encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        entry = EvidenceLedgerEntry(
+            run_id=run_id,
+            batch_id=None,
+            type="decision",
+            content_ref="cosmo://gate-decisions",
+            content_hash=digest,
+            provenance_json={
+                "source": "cosmo-gate",
+                "plan_id": plan_id,
+                "decisions": decisions,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        from orchestrator.cosmo.ledger.evidence_writer import commit_evidence_entry
+        async with self._sf() as s:
+            entry_hash = await commit_evidence_entry(s, entry)
+        return entry_hash
 
     # ── introspection (tests/health) ──
 

@@ -288,16 +288,71 @@ _ACTIVE_STEP_STATES = frozenset({"running", "pending"})
 # Woodpecker step states considered terminal
 _TERMINAL_STEP_STATES = frozenset({"success", "failure", "killed", "skipped", "error", "declined"})
 
+# COS-180: backlog-пространство лог-стрима (key = run_id). Отдельный kind —
+# иначе replay логов смешался бы с run-событиями на общем ключе.
+_LOG_BACKLOG_KIND = "runlog"
+
+# События лог-стрима, попадающие в backlog и несущие SSE id.
+_LOG_ID_EVENTS = frozenset({"step_start", "log_chunk", "step_finish", "run_finish"})
+
+
+def _seed_log_cursors(
+    step_cursors: dict[tuple[str, str], tuple[str, int]],
+    records: list[sse_backlog.EventRecord],
+) -> None:
+    """COS-180: восстановить позицию клиента из удержанного окна backlog.
+
+    Реконнект не должен повторно отдавать уже доставленные строки лога:
+    для каждого (batch, step) считаем сумму строк во всех чанках окна
+    (acked + missed), состояние шага берём из последней записи окна.
+    Дальше live-loop догоняет только строки, которых в окне ещё не было.
+
+    Честная граница: если store успел вытеснить записи ДО last-event-id
+    (TTL/MAXLEN), счётчик занижен — часть логов может прийти повторно;
+    потерь при этом нет, а непрерывность вне окна не подтверждается (gap).
+    """
+    per_state: dict[tuple[str, str], str] = {}
+    per_lines: dict[tuple[str, str], int] = {}
+    for rec in records:
+        if rec.event_type not in _LOG_ID_EVENTS:
+            continue
+        try:
+            payload = json.loads(rec.data or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        key = (str(payload.get("batch_id") or ""), str(payload.get("step_name") or ""))
+        if key == ("", ""):
+            continue
+        if rec.event_type == "log_chunk":
+            lines = payload.get("lines")
+            if isinstance(lines, list):
+                per_lines[key] = per_lines.get(key, 0) + len(lines)
+            per_state.setdefault(key, "running")
+        elif rec.event_type == "step_start":
+            per_state[key] = "running"
+        elif rec.event_type == "step_finish":
+            per_state[key] = str(payload.get("state") or "success")
+    for key, state in per_state.items():
+        step_cursors[key] = (state, per_lines.get(key, 0))
+
 
 async def _run_logs_stream(
     run_id: str, request: Request, last_event_id: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
-    """COS-109: SSE multiplexer — live Woodpecker step logs for Web IDE drawer.
+    """COS-109 + COS-180: SSE multiplexer — live Woodpecker step logs for Web IDE drawer.
 
     Polls Woodpecker API for each batch's pipeline: detects step transitions
     (step_start / step_finish) and streams new log chunks (log_chunk) with
     xterm.js-compatible formatting. Emits run_finish when all pipelines
     reach terminal state, then closes.
+
+    COS-180: каждое data-событие публикуется в backlog (kind ``runlog``,
+    key = run_id) и несёт SSE ``id`` (инвариант COS-088). Реконнект с
+    last_event_id: недоставленные события реплеятся из окна backlog, оно же
+    восстанавливает курсоры (batch, step) — уже доставленные строки логов
+    повторно не отдаются. Gap/недоступность backlog → ``resync`` (не тишина).
     """
     # ── DB handles: resolve Woodpecker pipeline handles for this run ──
     from orchestrator.cosmo.adapters.execution_woodpecker import WoodpeckerAdapter
@@ -311,6 +366,9 @@ async def _run_logs_stream(
     # Known batch_ids to detect new batches
     known_batches: set[str] = set()
 
+    # COS-088/180: наблюдаемый флаг режима backlog
+    yield _backlog_flag_event(sse_backlog.backlog_mode())
+
     try:
         # ── Validate run exists ──
         sm = get_sessionmaker()
@@ -321,12 +379,40 @@ async def _run_logs_stream(
             yield {"event": "error", "data": json.dumps({"error": "run_not_found", "run_id": run_id})}
             return
 
+        # ── COS-180: resume — replay недоставленных + позиция курсоров ──
+        # Выполняется ДО терминальной отсечки: пропущенный финал доставляется
+        # даже если прогон уже закрыт.
+        run_finish_in_backlog = False
+        if last_event_id:
+            window = sse_backlog.read_window(_LOG_BACKLOG_KIND, run_id)
+            if window is None:
+                yield {"event": "resync", "data": json.dumps({
+                    "run_id": run_id, "reason": "backlog_unavailable"})}
+            else:
+                idx = next(
+                    (i for i, rec in enumerate(window) if rec.id == last_event_id),
+                    -1,
+                )
+                if idx < 0:
+                    # Непрерывность не подтверждена (TTL-вытеснение/триминг/
+                    # рестарт в memory-режиме) → resync, не тишина.
+                    yield {"event": "resync", "data": json.dumps({
+                        "run_id": run_id, "reason": "gap"})}
+                else:
+                    run_finish_in_backlog = any(
+                        rec.event_type == "run_finish" for rec in window
+                    )
+                    for rec in window[idx + 1:]:
+                        yield {"event": rec.event_type, "data": rec.data, "id": rec.id}
+                    _seed_log_cursors(step_cursors, window)
+
         # ── If run is already terminal, emit run_finish and close ──
         if run_row.status in ("passed", "failed", "blocked"):
-            yield {
-                "event": "run_finish",
-                "data": json.dumps({"run_id": run_id, "status": run_row.status}),
-            }
+            if not run_finish_in_backlog:
+                yield _backlog_item(
+                    _LOG_BACKLOG_KIND, run_id, "run_finish",
+                    json.dumps({"run_id": run_id, "status": run_row.status}),
+                )
             return
 
         adapter = WoodpeckerAdapter()
@@ -402,15 +488,15 @@ async def _run_logs_stream(
                         emit_start = True
 
                     if emit_start:
-                        yield {
-                            "event": "step_start",
-                            "data": json.dumps({
+                        yield _backlog_item(
+                            _LOG_BACKLOG_KIND, run_id, "step_start",
+                            json.dumps({
                                 "run_id": run_id,
                                 "batch_id": bid,
                                 "step_name": step_name,
                                 "step_id": step.get("id"),
                             }),
-                        }
+                        )
                         had_events = True
                         last_keepalive = now
 
@@ -428,15 +514,15 @@ async def _run_logs_stream(
                             all_lines = []
                         if len(all_lines) > lines_seen:
                             new_lines = all_lines[lines_seen:]
-                            yield {
-                                "event": "log_chunk",
-                                "data": json.dumps({
+                            yield _backlog_item(
+                                _LOG_BACKLOG_KIND, run_id, "log_chunk",
+                                json.dumps({
                                     "run_id": run_id,
                                     "batch_id": bid,
                                     "step_name": step_name,
                                     "lines": new_lines,
                                 }),
-                            }
+                            )
                             had_events = True
                             last_keepalive = now
                             lines_seen = len(all_lines)
@@ -448,16 +534,16 @@ async def _run_logs_stream(
                                 0 if step_state == "success"
                                 else (1 if step_state == "failure" else None)
                             )
-                            yield {
-                                "event": "step_finish",
-                                "data": json.dumps({
+                            yield _backlog_item(
+                                _LOG_BACKLOG_KIND, run_id, "step_finish",
+                                json.dumps({
                                     "run_id": run_id,
                                     "batch_id": bid,
                                     "step_name": step_name,
                                     "exit_code": exit_code,
                                     "state": step_state,
                                 }),
-                            }
+                            )
                             had_events = True
                             last_keepalive = now
 
@@ -476,10 +562,10 @@ async def _run_logs_stream(
                     run_final = await db.execute(select(Run).where(Run.id == run_id))
                     run_final = run_final.scalar_one_or_none()
                 final_status = run_final.status if run_final else "unknown"
-                yield {
-                    "event": "run_finish",
-                    "data": json.dumps({"run_id": run_id, "status": final_status}),
-                }
+                yield _backlog_item(
+                    _LOG_BACKLOG_KIND, run_id, "run_finish",
+                    json.dumps({"run_id": run_id, "status": final_status}),
+                )
                 return
 
     except asyncio.CancelledError:
@@ -497,10 +583,13 @@ async def _run_logs_stream(
 async def stream_run_logs(
     run_id: str, request: Request, ticket: str = "", last_event_id: str = "",
 ):
-    """COS-109: SSE stream of Woodpecker step logs (step_start, log_chunk, step_finish, run_finish).
+    """COS-109 + COS-180: SSE stream of Woodpecker step logs (step_start, log_chunk, step_finish, run_finish).
 
     Клиент Web IDE получает живой лог шага за шагом. При завершении прогона
     соединение закрывается. Формат чанков совместим с xterm.js.
+    COS-180: события несут SSE ``id``; reconnect с ``last_event_id`` (query
+    сильнее заголовка Last-Event-ID) получает недоставленное из backlog без
+    дублей уже отданных строк лога.
 
     Ticket-аутентификация — аналог COS-079 для существующих SSE-эндпоинтов.
     """

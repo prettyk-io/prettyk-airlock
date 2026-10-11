@@ -1,19 +1,19 @@
-"""
+﻿"""
 SAN-012 + SAN-013: Tests for Builds and Deployments First-Class Entities and API.
 
-Проверяет:
-  1. Pydantic v2 модели Build и Deployment (валидация полей, статусы, свойства).
-  2. REST API эндпоинты сборок (Builds):
+РџСЂРѕРІРµСЂСЏРµС‚:
+  1. Pydantic v2 РјРѕРґРµР»Рё Build Рё Deployment (РІР°Р»РёРґР°С†РёСЏ РїРѕР»РµР№, СЃС‚Р°С‚СѓСЃС‹, СЃРІРѕР№СЃС‚РІР°).
+  2. REST API СЌРЅРґРїРѕРёРЅС‚С‹ СЃР±РѕСЂРѕРє (Builds):
      - GET /api/v1/apps/{app_id}/builds
      - POST /api/v1/apps/{app_id}/builds
      - GET /api/v1/builds/{build_id}
      - POST /api/v1/builds/{build_id}/abort
-  3. REST API эндпоинты развертываний (Deployments):
+  3. REST API СЌРЅРґРїРѕРёРЅС‚С‹ СЂР°Р·РІРµСЂС‚С‹РІР°РЅРёР№ (Deployments):
      - GET /api/v1/apps/{app_id}/deploys
      - POST /api/v1/apps/{app_id}/deploys
      - GET /api/v1/deploys/{id}
      - POST /api/v1/deploys/{id}/rollback
-  4. Изоляцию мультитенантности и проверки 404/400.
+  4. РР·РѕР»СЏС†РёСЋ РјСѓР»СЊС‚РёС‚РµРЅР°РЅС‚РЅРѕСЃС‚Рё Рё РїСЂРѕРІРµСЂРєРё 404/400.
 """
 import datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -25,9 +25,9 @@ from cosmo.domain.deployment_model import Deployment, DeploymentSegment, Deploym
 from cosmo.domain.rbac import CBRRole, PrincipalContext, Role
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 # 1. Pydantic Models Unit Tests
-# ═══════════════════════════════════════════════════════════════════════
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 
 def test_build_model_properties_and_status():
     now = datetime.datetime.utcnow()
@@ -76,9 +76,9 @@ def test_deployment_model_properties():
     assert dep.segment == "bare"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 # 2. Builds API Route Handlers Tests
-# ═══════════════════════════════════════════════════════════════════════
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 
 @pytest.mark.asyncio
 async def test_trigger_and_list_app_builds():
@@ -88,15 +88,43 @@ async def test_trigger_and_list_app_builds():
         list_app_builds,
         trigger_app_build,
     )
-    from orchestrator.cosmo.db.models import Application as ApplicationModel, Build as BuildModel
+    from orchestrator.cosmo.db.models import (
+        Application as ApplicationModel,
+        Batch as BatchModel,
+        Build as BuildModel,
+        PipelinePlan as PlanModel,
+    )
 
     mock_db = AsyncMock()
     mock_app = MagicMock(spec=ApplicationModel)
     mock_app.id = "app-auth"
     mock_app.name = "auth-service"
     mock_app.domain_id = "dom-kits"
+    mock_app.pipeline_plan_id = "plan-auth"
 
-    mock_db.get = AsyncMock(return_value=mock_app)
+    mock_plan = MagicMock(spec=PlanModel)
+    mock_plan.id = "plan-auth"
+
+    async def _get(model_cls, pk):
+        if model_cls == ApplicationModel:
+            return mock_app
+        if model_cls == PlanModel:
+            return mock_plan
+        return None
+
+    mock_db.get = AsyncMock(side_effect=_get)
+
+    # execute: (1) batches РїР»Р°РЅР° в†’ РѕРґРёРЅ build-Р±Р°С‚С‡; (2) repo binding в†’ None.
+    batch_res = MagicMock()
+    batch_res.all.return_value = [("batch-auth-build", "pending")]
+    binding_res = MagicMock()
+    binding_res.scalars.return_value.first.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[batch_res, binding_res])
+
+    # COS-196: Р¶РёРІРѕР№ execution-РєРѕРЅС‚СѓСЂ РґРѕСЃС‚СѓРїРµРЅ (РёРЅР°С‡Рµ С‡РµСЃС‚РЅС‹Р№ 503).
+    exec_service = AsyncMock()
+    mock_request = MagicMock()
+    mock_request.app.state.execution_service = exec_service
 
     principal = PrincipalContext(
         user_id="dev_user",
@@ -105,7 +133,7 @@ async def test_trigger_and_list_app_builds():
         is_authenticated=True,
     )
 
-    # 1. Trigger Build
+    # 1. Trigger Build вЂ” Р·Р° С‚СЂРёРіРіРµСЂРѕРј СЂРµР°Р»СЊРЅС‹Р№ РїСЂРѕРіРѕРЅ (runs-РєРѕРЅС‚СѓСЂ, COS-196)
     req = TriggerBuildRequest(
         commit_sha="a1b2c3d4e5f6",
         branch="feature/payments",
@@ -115,6 +143,7 @@ async def test_trigger_and_list_app_builds():
     created = await trigger_app_build(
         app_id="app-auth",
         body=req,
+        request=mock_request,
         principal=principal,
         db=mock_db,
     )
@@ -124,12 +153,16 @@ async def test_trigger_and_list_app_builds():
     assert created.commit_sha == "a1b2c3d4e5f6"
     assert created.branch == "feature/payments"
     assert created.status == "running"
+    assert created.run_id and created.run_id.startswith("run-bld-")
+    assert created.meta["dockerfile"] == "Dockerfile.hardened"
+    exec_service.submit_run.assert_awaited_once_with(created.run_id)
 
-    # 2. List Builds Mock
+    # 2. List Builds Mock (meta Р±РµР· run_id в†’ СЂРµРєРѕРЅСЃРёР»СЊ РЅРµ С‚СЂРѕРіР°РµС‚)
     mock_bm = MagicMock(spec=BuildModel)
     mock_bm.id = created.id
     mock_bm.app_id = "app-auth"
     mock_bm.domain_id = "dom-kits"
+    mock_bm.title = created.title
     mock_bm.commit_sha = "a1b2c3d4e5f6"
     mock_bm.branch = "feature/payments"
     mock_bm.status = "running"
@@ -151,6 +184,7 @@ async def test_trigger_and_list_app_builds():
     )
     assert len(builds_list) == 1
     assert builds_list[0].id == created.id
+    assert builds_list[0].title == created.title
 
 
 @pytest.mark.asyncio
@@ -163,6 +197,7 @@ async def test_abort_build_endpoint():
     mock_bm.id = "bld-to-abort"
     mock_bm.app_id = "app-auth"
     mock_bm.domain_id = "dom-kits"
+    mock_bm.title = "Build app-auth@1234567"
     mock_bm.status = "running"
     mock_bm.build_logs = "Initial logs"
     mock_bm.commit_sha = "1234567"
@@ -175,6 +210,9 @@ async def test_abort_build_endpoint():
 
     mock_db.get = AsyncMock(return_value=mock_bm)
 
+    mock_request = MagicMock()
+    mock_request.app.state.execution_service = None
+
     principal = PrincipalContext(
         user_id="dev_user",
         domain_id="dom-kits",
@@ -184,6 +222,7 @@ async def test_abort_build_endpoint():
 
     aborted = await abort_build(
         build_id="bld-to-abort",
+        request=mock_request,
         principal=principal,
         db=mock_db,
     )
@@ -191,9 +230,9 @@ async def test_abort_build_endpoint():
     assert mock_bm.status == "aborted"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 # 3. Deployments API Route Handlers Tests
-# ═══════════════════════════════════════════════════════════════════════
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 
 @pytest.mark.asyncio
 async def test_create_and_rollback_deployment():
@@ -232,7 +271,7 @@ async def test_create_and_rollback_deployment():
         is_authenticated=True,
     )
 
-    # 1. Create Deployment in ЗТ (Testing Zone)
+    # 1. Create Deployment in Р—Рў (Testing Zone)
     dep_req = CreateDeploymentRequest(
         build_id="bld-billing-01",
         target_zone="zt",
@@ -250,7 +289,9 @@ async def test_create_and_rollback_deployment():
     assert created_dep.app_id == "app-billing"
     assert created_dep.target_zone == "zt"
     assert created_dep.segment == "integration"
-    assert created_dep.status == "success"
+    assert created_dep.status == "declarative"
+    assert created_dep.finished_at is None  # РЅРµ РІС‹РґР°С‘Рј РјРіРЅРѕРІРµРЅРЅС‹Р№ success/РІС‹РґСѓРјР°РЅРЅС‹Р№ С„РёРЅРёС€
+    assert created_dep.custom_url is None   # endpoint РЅРµ РІС‹РґСѓРјС‹РІР°РµС‚СЃСЏ
     assert created_dep.operator_id == "ops_lead"
 
     # 2. Rollback Deployment Mock

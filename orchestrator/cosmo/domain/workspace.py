@@ -377,10 +377,13 @@ class WorkspaceFileChange(_WorkspaceDTO):
 
     create/update — content обязателен (строка, возможно пустая);
     delete — content должен быть None (контент не передаётся).
+    base_blob_sha (COS-185) — optional файловая база клиента: при конфликте
+    уезжает в typed 409 WORKSPACE_CONFLICT как expected_sha файлового уровня.
     """
     path: str
     content: Optional[str] = None
     action: WorkspaceFileChangeAction
+    base_blob_sha: Optional[str] = Field(alias="baseBlobSha", default=None)
 
     @field_validator("path")
     @classmethod
@@ -388,6 +391,13 @@ class WorkspaceFileChange(_WorkspaceDTO):
         if v == "":
             _reject(v, "path (empty)")
         return validate_tree_path(v)
+
+    @field_validator("base_blob_sha")
+    @classmethod
+    def _base_sha_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        return validate_head_sha(v)
 
     @model_validator(mode="after")
     def _content_matches_action(self) -> "WorkspaceFileChange":
@@ -407,6 +417,9 @@ class WorkspaceCommitRequest(_WorkspaceDTO):
     author_name: Optional[str] = Field(alias="authorName", default=None)
     author_email: Optional[str] = Field(alias="authorEmail", default=None)
     file_changes: List[WorkspaceFileChange] = Field(alias="fileChanges", min_length=1)
+    # COS-181: явная optimistic concurrency по голове ветки (полный sha или
+    # >=7-hex префикс). Расхождение → typed 409 WORKSPACE_CONFLICT до записей.
+    expected_head_sha: Optional[str] = Field(alias="expectedHeadSha", default=None)
 
     @field_validator("repo")
     @classmethod
@@ -417,6 +430,13 @@ class WorkspaceCommitRequest(_WorkspaceDTO):
     @classmethod
     def _branch_ok(cls, v: str) -> str:
         return validate_branch(v)
+
+    @field_validator("expected_head_sha")
+    @classmethod
+    def _sha_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        return validate_head_sha(v)
 
 
 class WorkspaceCommitResponse(_WorkspaceDTO):

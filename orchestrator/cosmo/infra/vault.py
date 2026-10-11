@@ -58,6 +58,14 @@ class VaultNotConfigured(VaultError):
     """Vault не сконфигурирован (COSMO_ENV != test и нет AppRole-энв)."""
 
 
+class VaultUnavailableError(VaultError):
+    """COS-178: Vault недоступен или запечатан (sealed).
+
+    Surface (login/JWKS/…) обязана отдать честный 503, не 500:
+    sealed — это неготовность платформы, а не ошибка запроса.
+    """
+
+
 # ── Клиент ─────────────────────────────────────────────────────────────
 
 
@@ -129,6 +137,17 @@ class VaultClient:
                 timeout=15,
             )
             r.raise_for_status()
+        except requests.HTTPError as exc:
+            # COS-178: sealed/unavailable vault отвечает 503 — это не «плохие
+            # креды», а неготовность платформы; surface отдаст честный 503.
+            if getattr(exc, "response", None) is not None and exc.response.status_code == 503:
+                raise VaultUnavailableError(
+                    f"Vault sealed or unavailable at {self.addr} (HTTP 503)"
+                ) from exc
+            raise VaultAuthError(
+                f"AppRole login failed for role {role_id[:8]}… "
+                f"at {self.addr}: {exc}"
+            ) from exc
         except requests.RequestException as exc:
             raise VaultAuthError(
                 f"AppRole login failed for role {role_id[:8]}… "
@@ -150,6 +169,22 @@ class VaultClient:
             raise VaultAuthError("not authenticated — call authenticate() first")
         return {"X-Vault-Token": self._token}
 
+    def _ensure_token(self) -> None:
+        """COS-178: lazy-auth — если токен не выставлен (vault был недоступен
+        на старте API и ожил позже), аутентифицироваться здесь и сейчас."""
+        if not self._token:
+            self.authenticate()
+
+    @staticmethod
+    def _check_response(r: requests.Response, what: str) -> None:
+        """COS-178: 503 (sealed/unavailable) → VaultUnavailableError, прочее → VaultError."""
+        if r.status_code == 503:
+            raise VaultUnavailableError(f"{what}: vault sealed or unavailable (HTTP 503)")
+        try:
+            r.raise_for_status()
+        except requests.HTTPError as exc:
+            raise VaultError(f"{what} failed: HTTP {r.status_code}") from exc
+
     # ── Secret I/O ────────────────────────────────────────────────────
 
     def _secret_path(self, name: str) -> str:
@@ -169,6 +204,7 @@ class VaultClient:
             VaultError — другие ошибки.
         """
         path = self._secret_path(name)
+        self._ensure_token()  # COS-178: lazy-auth (vault мог ожить после старта API)
         try:
             r = self._session.get(f"{self.addr}/v1/{path}", headers=self._headers, timeout=15)
         except requests.RequestException as exc:
@@ -182,16 +218,19 @@ class VaultClient:
             try:
                 self.authenticate()
                 r = self._session.get(f"{self.addr}/v1/{path}", headers=self._headers, timeout=15)
+            except VaultUnavailableError:
+                raise
             except Exception as exc2:
                 raise VaultAuthError(f"Vault re-auth failed after 401: {exc2}") from exc2
 
-        r.raise_for_status()
+        self._check_response(r, f"Vault read {path}")
         data = r.json().get("data", {}).get("data", {})
         return data
 
     def write_secret(self, name: str, data: dict[str, Any]) -> None:
         """Пишет kv-v2 секрет secret/cosmo/<name>."""
         path = self._secret_path(name)
+        self._ensure_token()  # COS-178: lazy-auth
         try:
             r = self._session.post(
                 f"{self.addr}/v1/{path}",
@@ -209,7 +248,7 @@ class VaultClient:
                 f"{self.addr}/v1/{path}", headers=self._headers, json={"data": data}, timeout=15,
             )
 
-        r.raise_for_status()
+        self._check_response(r, f"Vault write {path}")
         logger.info("Vault secret %s written", name)
 
     # ── Health ────────────────────────────────────────────────────────

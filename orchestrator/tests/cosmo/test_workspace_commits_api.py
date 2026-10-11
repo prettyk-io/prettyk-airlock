@@ -332,7 +332,11 @@ class TestAtomicCommitRoute:
             "fileChanges": [{"path": "x.py", "content": "y", "action": "create"}],
         }, headers={"X-Cosmo-Domain": meta["domain"]})
         assert res.status_code == 409, res.text
-        assert "create conflict" in res.json()["detail"]
+        err = res.json()["error"]
+        assert err["code"] == "WORKSPACE_CONFLICT"
+        assert err["details"]["kind"] == "exists"
+        assert err["details"]["paths"] == ["x.py"]
+        assert err["details"]["actual_sha"] == SHA
         assert self._adapter.commit_calls == []
 
     @pytest.mark.asyncio
@@ -343,7 +347,10 @@ class TestAtomicCommitRoute:
             "fileChanges": [{"path": "gone.py", "content": "v2", "action": "update"}],
         }, headers={"X-Cosmo-Domain": meta["domain"]})
         assert res.status_code == 409, res.text
-        assert "does not exist" in res.json()["detail"]
+        err = res.json()["error"]
+        assert err["code"] == "WORKSPACE_CONFLICT"
+        assert err["details"]["kind"] == "missing"
+        assert err["details"]["paths"] == ["gone.py"]
 
     @pytest.mark.asyncio
     async def test_delete_missing_409(self, pg_client: AsyncClient):
@@ -353,6 +360,10 @@ class TestAtomicCommitRoute:
             "fileChanges": [{"path": "gone.py", "action": "delete"}],
         }, headers={"X-Cosmo-Domain": meta["domain"]})
         assert res.status_code == 409, res.text
+        err = res.json()["error"]
+        assert err["code"] == "WORKSPACE_CONFLICT"
+        assert err["details"]["kind"] == "missing"
+        assert err["details"]["paths"] == ["gone.py"]
 
     @pytest.mark.asyncio
     async def test_adapter_conflict_maps_409(self, pg_client: AsyncClient):
@@ -363,7 +374,11 @@ class TestAtomicCommitRoute:
             "fileChanges": [{"path": "n.py", "content": "x", "action": "create"}],
         }, headers={"X-Cosmo-Domain": meta["domain"]})
         assert res.status_code == 409, res.text
-        assert "commit conflict" in res.json()["detail"]
+        err = res.json()["error"]
+        assert err["code"] == "WORKSPACE_CONFLICT"
+        assert err["details"]["kind"] == "concurrent"
+        assert "commit conflict" in err["message"]
+        assert err["details"]["actual_sha"] == SHA  # свежая голова (mock)
 
     @pytest.mark.asyncio
     async def test_branch_missing_404(self, pg_client: AsyncClient):

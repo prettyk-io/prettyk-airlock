@@ -47,13 +47,22 @@ def docker_build_specs(bricks: list[dict[str, Any]]) -> list[DockerBuildSpec]:
 
     ``bricks_refs`` хранит список кирпичей ``{name, definition}``; берём только
     те, у которых ``definition.type == "docker_build"``.
+
+    SAST-STEP-1 (найдено живым прогоном): живой компилятор кладёт в
+    ``bricks_refs`` СПИСОК ID (строки) — не-dict элементы пропускаем (спецификацию
+    из id не вывести; их тип резолвится отдельно), иначе capture-хук падает
+    AttributeError'ом и следующие хуки не исполняются.
     """
     specs: list[DockerBuildSpec] = []
     for brick in bricks or []:
+        if not isinstance(brick, dict):
+            continue
         definition = brick.get("definition") or {}
         if definition.get("type") != "docker_build":
             continue
-        specs.append(DockerBuildSpec(**definition))
+        # COS-196: definition может нести и generic-поля (API-путь каталога) —
+        # спека собирается строго из docker_build-полей.
+        specs.append(DockerBuildSpec.from_definition(definition))
     return specs
 
 

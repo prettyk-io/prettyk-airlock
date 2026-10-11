@@ -724,10 +724,14 @@ def _duration_ms(started: Any, finished: Any) -> int | None:
 
 
 def _step_summaries(detail: dict) -> list[WorkspaceRunStepSummary]:
-    """workflows[].steps[] (v3.5) → плоский список WorkspaceRunStepSummary."""
+    """workflows[].children[] (v3.5; legacy ``steps``) → плоский список.
+
+    Живой WP отдаёт шаги в ``children`` (COS-188 контракт-дрифт); fallback на
+    ``steps`` сохранён для моков/старых ответов, иначе run history видит 0 шагов.
+    """
     out: list[WorkspaceRunStepSummary] = []
     for wf in detail.get("workflows") or []:
-        for st in wf.get("steps") or []:
+        for st in wf.get("steps") or wf.get("children") or []:
             name = st.get("name") or f"workflow-{wf.get('name')}/step"
             raw_exit = st.get("exit_code")
             out.append(WorkspaceRunStepSummary(
@@ -1521,6 +1525,39 @@ async def workspace_commits_list(
 # ─ COS-124: Atomic multi-file commit ────────────────────────────────────
 
 
+def _workspace_conflict(
+    *,
+    kind: str,
+    message: str,
+    expected_sha: str | None = None,
+    actual_sha: str | None = None,
+    paths: list[str] | None = None,
+) -> HTTPException:
+    """COS-181: typed 409 WORKSPACE_CONFLICT (единый error-контракт COS-058).
+
+    Тело: {"error": {"code": "WORKSPACE_CONFLICT", "message": ..., "details":
+    {"kind": "concurrent|exists|missing", "expected_sha", "actual_sha",
+    "paths": [...]}}} — machine-readable для IDE merge-loop (IDE-CORE-005:
+    typed 409 + actual/expected SHA + conflicting paths); kind совпадает со
+    словарём клиентского WorkspaceConflictKind.
+    """
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": {
+                "code": "WORKSPACE_CONFLICT",
+                "message": message,
+                "details": {
+                    "kind": kind,
+                    "expected_sha": expected_sha,
+                    "actual_sha": actual_sha,
+                    "paths": list(paths or []),
+                },
+            }
+        },
+    )
+
+
 @router.post(
     "/workspace/commits",
     response_model=WorkspaceCommitResponse,
@@ -1532,15 +1569,18 @@ async def workspace_commits_create(
     db: AsyncSession = Depends(get_db),
     principal: PrincipalContext = Depends(require_principal()),
 ) -> WorkspaceCommitResponse:
-    """Атомарный multi-file коммит (COS-124).
+    """Атомарный multi-file коммит (COS-124 + COS-181).
 
     Порядок:
       1. Pre-flight quality gate: секреты/запрещённые паттерны → 422 с
          violations, коммит в forge не летит;
       2. Ghost-check binding приложения → 404;
       3. Ветка должна существовать → 404;
+      3b. expected_head_sha (COS-181): расхождение с головой ветки →
+         typed 409 WORKSPACE_CONFLICT до любых чтений/записей файлов;
       4. CAS-состояние файлов: create только для отсутствующих, update/delete
-         только для существующих → 409 (конкурентный коммит);
+         только для существующих → typed 409 WORKSPACE_CONFLICT
+         (kind exists|missing, conflicting paths);
       5. Bulk Contents API одной транзакцией → sha/htmlUrl/authoredAt/filesChanged.
     """
     # 1. Pre-flight gate (только реально записываемое содержимое).
@@ -1591,6 +1631,24 @@ async def workspace_commits_create(
     except Exception as exc:  # noqa: BLE001
         raise forge_http_error(exc, f"branch {body.branch} of {body.repo}") from exc
 
+    # 3b. COS-181: explicit optimistic concurrency ДО любых чтений/записей.
+    # expected_head_sha (полный sha или >=7-hex префикс, как CAS-сверка)
+    # разошёлся с головой ветки → typed 409 до работы с файлами.
+    if body.expected_head_sha:
+        exp = body.expected_head_sha.lower()
+        actual = (parent.sha or "").lower()
+        if actual and exp not in (actual, actual[: len(exp)]):
+            raise _workspace_conflict(
+                kind="concurrent",
+                message=(
+                    f"branch head moved in {body.repo}@{body.branch}: expected "
+                    f"{body.expected_head_sha}, actual {parent.sha} "
+                    f"(refresh workspace and retry)"
+                ),
+                expected_sha=body.expected_head_sha,
+                actual_sha=parent.sha,
+            )
+
     # 4. CAS-состояние каждого файла → сборка операций с blob sha.
     def _safe_current_sha(path: str) -> str | None:
         try:
@@ -1606,10 +1664,15 @@ async def workspace_commits_create(
 
         if ch.action == "create":
             if current:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"create conflict on {ch.path}: file already exists "
-                           f"at {body.branch} (concurrent commit; refresh workspace)",
+                raise _workspace_conflict(
+                    kind="exists",
+                    message=(
+                        f"create conflict on {ch.path}: file already exists at "
+                        f"{body.branch} (concurrent commit; refresh workspace)"
+                    ),
+                    expected_sha=ch.base_blob_sha,
+                    actual_sha=current,
+                    paths=[ch.path],
                 )
             operations.append({
                 "path": ch.path, "content": ch.content, "action": "create",
@@ -1617,10 +1680,14 @@ async def workspace_commits_create(
             continue
 
         if not current:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"{ch.action} conflict on {ch.path}: file does not exist "
-                       f"at {body.branch} (concurrent commit; refresh workspace)",
+            raise _workspace_conflict(
+                kind="missing",
+                message=(
+                    f"{ch.action} conflict on {ch.path}: file does not exist at "
+                    f"{body.branch} (concurrent commit; refresh workspace)"
+                ),
+                expected_sha=ch.base_blob_sha,
+                paths=[ch.path],
             )
         operations.append({
             "path": ch.path,
@@ -1639,9 +1706,18 @@ async def workspace_commits_create(
     except HTTPException:
         raise
     except GiteaConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"commit conflict on {body.repo}@{body.branch}: {exc}",
+        # Голова ветки на момент конфликта: свежий (best-effort) — для честного
+        # actual_sha в typed 409; недоступность forge не маскирует конфликт.
+        actual_sha = None
+        try:
+            actual_sha = adapter.get_commit(owner, name, body.branch).sha or None
+        except Exception:  # noqa: BLE001
+            actual_sha = None
+        raise _workspace_conflict(
+            kind="concurrent",
+            message=f"commit conflict on {body.repo}@{body.branch}: {exc}",
+            expected_sha=body.expected_head_sha,
+            actual_sha=actual_sha,
         ) from exc
     except Exception as exc:  # noqa: BLE001
         raise forge_http_error(exc, f"commit to {body.repo}@{body.branch}") from exc

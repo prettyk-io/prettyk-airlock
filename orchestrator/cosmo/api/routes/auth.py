@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from orchestrator.cosmo.api import deps
-from orchestrator.cosmo.infra.vault import VaultClient, VaultLookupError
+from orchestrator.cosmo.infra.vault import VaultClient, VaultError, VaultLookupError
 from orchestrator.cosmo.security import credentials
 from orchestrator.cosmo.security.jwt_issuer import (
     IssuerConfig,
@@ -66,12 +66,55 @@ def _read_auth(vault: VaultClient) -> dict:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="auth secret not bootstrapped (secret/cosmo/auth not seeded)",
         ) from exc
+    except VaultError as exc:
+        # COS-178: sealed/unavailable vault — честный 503, не 500.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"vault unavailable: {exc}",
+        ) from exc
     if not isinstance(data, dict) or not data.get("email") or not data.get("password_hash"):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="auth secret not bootstrapped (email/password_hash missing)",
         )
     return data
+
+
+def _auth_users(data: dict) -> list[dict]:
+    """Кандидаты-пользователи: основная запись + optional ``users`` (COS-187).
+
+    Второй seeded-пользователь живёт в ``users`` (свой email/sub/roles);
+    идемпотентный сид пишет его туда. Невалидные записи (без email/hash)
+    молча пропускаются — fail-closed: такая запись никогда не залогинится.
+    """
+    users: list[dict] = []
+    primary_email = str(data.get("email") or "").strip()
+    primary_hash = str(data.get("password_hash") or "")
+    if primary_email and primary_hash:
+        users.append({
+            "email": primary_email,
+            "password_hash": primary_hash,
+            "sub": str(data.get("sub") or primary_email).strip(),
+            "roles": [str(r) for r in data.get("roles")] if isinstance(data.get("roles"), list) else [],
+            "is_admin": bool(data.get("is_admin", False)),
+        })
+    extra = data.get("users")
+    if isinstance(extra, list):
+        for item in extra:
+            if not isinstance(item, dict):
+                continue
+            u_email = str(item.get("email") or "").strip()
+            u_hash = str(item.get("password_hash") or "")
+            if not u_email or not u_hash:
+                continue
+            users.append({
+                "email": u_email,
+                "password_hash": u_hash,
+                "sub": str(item.get("sub") or u_email).strip(),
+                "roles": [str(r) for r in item.get("roles")] if isinstance(item.get("roles"), list) else [],
+                "is_admin": bool(item.get("is_admin", False)),
+            })
+    return users
 
 
 def _load_issuer_config(vault: VaultClient) -> IssuerConfig:
@@ -82,6 +125,12 @@ def _load_issuer_config(vault: VaultClient) -> IssuerConfig:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"JWT issuer not configured: {exc}",
+        ) from exc
+    except VaultError as exc:
+        # COS-178: sealed/unavailable vault — честный 503, не 500.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"vault unavailable: {exc}",
         ) from exc
 
 
@@ -96,24 +145,37 @@ async def login(
     payload: LoginRequest,
     vault: VaultClient = Depends(deps.get_vault),
 ) -> LoginResponse:
-    """Self-managed логин: проверка креденшелов → подписанный RS256 access-токен."""
+    """Self-managed логин: проверка креденшелов → подписанный RS256 access-токен.
+
+    COS-187: поддерживается несколько пользователей — основная запись +
+    optional ``users``-список в ``secret/cosmo/auth``. Email ищется точным
+    совпадением; пароль всегда сверяется с PBKDF2-хэшем (для отсутствующего
+    email — с хэшем первой записи, чтобы не давать timing-оракул на перебор
+    адресов).
+    """
     auth = _read_auth(vault)
+    users = _auth_users(auth)
+    if not users:  # pragma: no cover — _read_auth уже гарантирует primary-запись
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="auth secret not bootstrapped (no usable user records)",
+        )
 
-    email = str(auth.get("email") or "").strip()
-    password_hash = str(auth.get("password_hash") or "")
-
-    # Constant-time сравнение там, где нельзя хэш-сверкой (email — exact match).
-    email_ok = payload.email.strip() == email
-    password_ok = credentials.verify_password(payload.password, password_hash)
-    if not (email_ok and password_ok):
+    requested_email = payload.email.strip()
+    matched = next((u for u in users if u["email"] == requested_email), None)
+    password_ok = credentials.verify_password(
+        payload.password, (matched or users[0])["password_hash"]
+    )
+    if matched is None or not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="401_UNAUTHORIZED: invalid credentials",
         )
 
-    sub = str(auth.get("sub") or email).strip()
-    roles = [str(r) for r in auth.get("roles")] if isinstance(auth.get("roles"), list) else []
-    is_admin = bool(auth.get("is_admin", False))
+    email = matched["email"]
+    sub = matched["sub"]
+    roles = matched["roles"]
+    is_admin = matched["is_admin"]
 
     cfg = _load_issuer_config(vault)
     token = mint_access_token(

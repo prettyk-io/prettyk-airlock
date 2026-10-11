@@ -205,7 +205,9 @@ async def lifespan(app):
             health.get("version", "?"),
         )
     except Exception as exc:
-        logger.warning("Vault bootstrap skipped (surface will 503): %s", exc)
+        # COS-178: не глотаем и не роняем старт — фиксируем факт; lazy-auth
+        # догонит vault при первом запросе, surface отдаёт честный 503.
+        logger.warning("Vault auth deferred at startup (lazy-auth, surface will 503 until ready): %s", exc)
 
     yield
 

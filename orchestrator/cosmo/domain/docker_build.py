@@ -35,6 +35,13 @@ class DockerBuildError(ValueError):
     """Нарушение контракта docker_build-шага."""
 
 
+#: Поля, которые docker_build-спека несёт в ``definition`` кирпича.
+_DOCKER_BUILD_FIELDS = frozenset({
+    "type", "image_name", "version", "dockerfile", "context",
+    "registry", "repository", "namespace", "target", "platform",
+})
+
+
 class DockerBuildSpec(BaseModel):
     """Спецификация первого-классного docker build шага.
 
@@ -77,6 +84,20 @@ class DockerBuildSpec(BaseModel):
         if not SEMVER_RE.match(value):
             raise ValueError("version must be a strict semver")
         return value
+
+    @classmethod
+    def from_definition(cls, definition: dict) -> "DockerBuildSpec":
+        """COS-196: спека из ``definition`` кирпича каталога.
+
+        API-путь каталога несёт в definition и generic-поля (executor/image/
+        timeout_s/inputs/outputs) — здесь берутся строго docker_build-поля;
+        ``extra=forbid`` остаётся контрактом спеки (неизвестные ключи не
+        проходят), фильтрация — на границе definition → spec.
+        """
+        return cls(**{
+            key: value for key, value in (definition or {}).items()
+            if key in _DOCKER_BUILD_FIELDS
+        })
 
 
 @dataclass

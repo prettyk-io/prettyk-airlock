@@ -24,12 +24,14 @@ logger = logging.getLogger("cosmoport.notifications")
 
 NotificationSeverity = Literal["critical", "high", "medium", "low", "info"]
 NotificationType = Literal["gate_blocked", "gate_passed", "run_failed", "run_succeeded",
-                              "transfer_completed", "transfer_failed", "status_change",
-                              "batch_failed", "deploy_started", "release_approved"]
+                              "run_blocked", "transfer_completed", "transfer_failed",
+                              "status_change", "batch_failed", "deploy_started",
+                              "release_approved"]
 
 _notif_severity_map: dict[NotificationType, NotificationSeverity] = {
     "gate_blocked": "critical",
     "run_failed": "high",
+    "run_blocked": "high",
     "batch_failed": "high",
     "gate_passed": "info",
     "run_succeeded": "info",

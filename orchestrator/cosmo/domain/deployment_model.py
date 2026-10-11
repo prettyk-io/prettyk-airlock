@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 StrictModel = ConfigDict(extra="ignore")
 
-DeploymentStatus = Literal["pending", "running", "success", "failed", "deleted", "rollback"]
+DeploymentStatus = Literal["pending", "running", "success", "failed", "deleted", "rollback", "declarative"]
 DeploymentSegment = Literal["bare", "integration"]
 DeploymentZone = Literal["zr", "zt", "zpe"]
 

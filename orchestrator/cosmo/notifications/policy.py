@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 EVENT_TYPES_V1: frozenset[str] = frozenset({
     "run_failed",
     "run_succeeded",
+    "run_blocked",     # SAST-GATE-3: терминальный blocked (gate/сканер) с причиной
     "batch_failed",
     "gate_blocked",
     "gate_passed",
@@ -40,6 +41,7 @@ SEVERITIES_V1: frozenset[str] = frozenset({"critical", "high", "medium", "low", 
 DEFAULT_SEVERITY: Dict[str, str] = {
     "gate_blocked": "critical",
     "run_failed": "high",
+    "run_blocked": "high",   # SAST-GATE-3: терминальное решение с причиной
     "batch_failed": "high",
     "transfer_failed": "high",
     "gate_passed": "info",

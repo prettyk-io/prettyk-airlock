@@ -22,6 +22,11 @@ COS-097 (live cycle, demo without fakes):
   - Repo resolution per-run: resolve_repo callback (binding приложения,
     COS-096) с fallback на конструкторные repo_owner/repo_name.
 
+COS-194 (аудит SAST-прогона):
+  - bricks_refs живого компилятора — ID-строки; audit-YAML резолвит их из
+    каталога pipeline_bricks (шаги на месте, без ложного warning'а), а
+    нерезолвнутые ссылки помечает секцией x-audit-incomplete с причиной.
+
 Архитектура:
   - BatchExecutor: управление жизненным циклом batch-пайплайнов
   - PipelineHandle: handle на Woodpecker pipeline (batch → job mapping)
@@ -31,6 +36,7 @@ COS-097 (live cycle, demo without fakes):
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -133,6 +139,7 @@ class BatchExecutor:
         resolve_repo: RepoResolver | None = None,
         evidence_sink: EvidenceSink | None = None,
         degraded_threshold: int = DEFAULT_DEGRADED_THRESHOLD,
+        evidence_log_settle_s: float | None = None,
     ) -> None:
         self._adapter = adapter
         self._db_session_factory = db_session_factory
@@ -146,6 +153,11 @@ class BatchExecutor:
         self._resolve_repo = resolve_repo
         self._evidence_sink = evidence_sink
         self._degraded_threshold = max(1, int(degraded_threshold))
+        # SAST-STEP-1: bounded добор логов терминальных шагов (WP флешит
+        # log_entries асинхронно). 0 — выключить; env — стенд-тюнинг.
+        self._evidence_log_settle_s = float(
+            evidence_log_settle_s if evidence_log_settle_s is not None
+            else os.getenv("COSMO_EVIDENCE_LOG_SETTLE_S", "") or 2.0)
         self._degraded_reasons: dict[str, str] = {}   # run_id → reason
 
         self._lock = threading.RLock()
@@ -173,6 +185,7 @@ class BatchExecutor:
         batch_orms = self._query_batches(plan_id)
 
         submitted: list[str] = []
+        failed_submits: list[str] = []
         for orm in batch_orms:
             batch_id = orm["id"]
             batch_type = orm.get("type", "build")
@@ -188,11 +201,25 @@ class BatchExecutor:
                 logger.info("Batch %s already in-flight — resubmit skipped", batch_id)
                 continue
 
-            # Сгенерировать YAML (для аудита)
+            # Сгенерировать YAML (для аудита). COS-194: bricks_refs живого
+            # компилятора хранит ID-строки — резолвим их в каталоге; неполнота
+            # помечается явно (ref + причина), шаги не выдумываются.
             try:
-                yaml_config = self._adapter.generate_pipeline_yaml(orm)
-                logger.debug("Pipeline YAML for batch %s (%s): %d chars",
-                            batch_id, batch_type, len(yaml_config))
+                audit_bricks, unresolved = self._resolve_audit_bricks(
+                    orm.get("bricks") or [])
+                audit_batch = dict(orm)
+                audit_batch["bricks"] = audit_bricks
+                if unresolved:
+                    audit_batch["unresolved_refs"] = unresolved
+                yaml_config = self._adapter.generate_pipeline_yaml(audit_batch)
+                logger.debug("Pipeline YAML for batch %s (%s): %d chars, %d step(s)",
+                            batch_id, batch_type, len(yaml_config), len(audit_bricks))
+                if unresolved:
+                    logger.warning(
+                        "Audit YAML incomplete for batch %s: %s",
+                        batch_id,
+                        "; ".join(f"{u['ref']}: {u['reason']}" for u in unresolved),
+                    )
             except Exception as exc:
                 logger.warning("YAML generation failed for batch %s: %s", batch_id, exc)
 
@@ -214,15 +241,30 @@ class BatchExecutor:
                     handle = self._adapter.submit_run(owner, name, branch)
                 except Exception as exc:
                     logger.error("Submit failed for batch %s: %s", batch_id, exc)
-                    # COS-097: честный durable-след — пайплайн НЕ запущен.
+                    # COS-097/COS-196: честный durable-след — пайплайн НЕ
+                    # запущен. Ручка может отсутствовать (upsert не дошёл) —
+                    # mark_terminal дозаписывает строку, след не теряется.
                     if self._store is not None:
                         try:
                             self._store.mark_terminal(
                                 batch_id, "submit_failed",
-                                reason=f"submit failed: {exc}")
+                                reason=f"submit failed: {exc}",
+                                run_id=run_id, plan_id=plan_id)
                         except Exception as store_exc:
                             logger.error("Store mark_terminal failed for %s: %s",
                                          batch_id, store_exc)
+                    # COS-196: провал submit — терминальный факт и в PG, и в
+                    # run'е: «вечный running» исключён, причина уходит в
+                    # degraded-след финализации.
+                    try:
+                        self._update_batch_pg_terminal(batch_id, "failed")
+                    except Exception as pg_exc:
+                        logger.error("PG terminal update failed for %s: %s",
+                                     batch_id, pg_exc)
+                    self.mark_degraded(
+                        run_id,
+                        f"pipeline submit failed for batch {batch_id}: {exc}")
+                    failed_submits.append(batch_id)
                     continue
 
             ph = PipelineHandle(
@@ -249,6 +291,16 @@ class BatchExecutor:
             submitted.append(batch_id)
             logger.info("Batch %s (%s) submitted as pipeline #%s (repo %s/%s)",
                         batch_id, batch_type, handle.get("number"), owner, name)
+
+        # COS-196: провал submit'а не оставляет run в «вечном running» —
+        # все batch'и плана учтены (submitted — в _active, failed — terminal),
+        # и run обязан дойти до терминала, даже если вести его больше некому.
+        if failed_submits and run_id:
+            with self._lock:
+                self._run_batches.setdefault(run_id, set()).update(
+                    orm["id"] for orm in batch_orms)
+                self._run_plans[run_id] = plan_id
+            self._check_run_terminal(run_id)
 
         return submitted
 
@@ -372,9 +424,21 @@ class BatchExecutor:
             return self._degraded_reasons.get(run_id)
 
     def pop_degraded_reason(self, run_id: str) -> Optional[str]:
-        """COS-097: honest degraded-причина run'а (consume-once)."""
+        """COS-097: honest degraded-след run'а (consume-once)."""
         with self._lock:
             return self._degraded_reasons.pop(run_id, None)
+
+    def mark_degraded(self, run_id: str, reason: str) -> None:
+        """SAST-GATE-3: честная деградация прогона из runtime-hook'ов.
+
+        Ставит причину, которую finalize_run потребит как degraded →
+        терминальный `failed` (без тихого PASS). Идемпотентно: первая
+        причина сохраняется (последующие не перетирают).
+        """
+        if not run_id:
+            return
+        with self._lock:
+            self._degraded_reasons.setdefault(run_id, reason)
 
     def cancel_batches(self, run: Any) -> list[str]:
         """Отменить все активные pipeline'ы для run'а."""
@@ -550,7 +614,8 @@ class BatchExecutor:
         но виден в логах и durable-следе (record_evidence_error).
         """
         try:
-            logs = self._adapter.collect_all_logs(ph.handle)
+            logs = self._adapter.collect_all_logs(
+                ph.handle, settle_empty_s=self._evidence_log_settle_s)
             meta = {
                 "raw_status": raw_status,
                 "repo_owner": ph.handle.get("repo_owner", ""),
@@ -607,6 +672,75 @@ class BatchExecutor:
             ]
         finally:
             s.close()
+
+    def _resolve_audit_bricks(
+        self, bricks: list[Any],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        """COS-194: bricks_refs (ID-строки ИЛИ dict) → audit-форма для YAML.
+
+        Живой компилятор хранит в ``batches.bricks_refs`` СПИСОК ID (строки);
+        дефиниции лежат в каталоге ``pipeline_bricks``. Dict-формы (legacy/unit)
+        проходят как есть. Нерезолвнутые ссылки не выдумываются: возвращаются
+        с причиной, чтобы аудит честно помечал неполноту, а не молчал.
+
+        Returns: ``(resolved, unresolved)``; unresolved — ``[{ref, reason}]``.
+        """
+        resolved: list[dict[str, Any]] = []
+        unresolved: list[dict[str, str]] = []
+        if not bricks:
+            return resolved, unresolved
+
+        needs_catalog = any(not isinstance(b, dict) for b in bricks)
+        session = None
+        if needs_catalog and self._db_session_factory is not None:
+            session = self._db_session_factory()
+        try:
+            for ref in bricks:
+                if isinstance(ref, dict):
+                    resolved.append(ref)
+                    continue
+                if session is None:
+                    unresolved.append({
+                        "ref": str(ref),
+                        "reason": "brick catalog unavailable (no DB session)",
+                    })
+                    continue
+                try:
+                    from orchestrator.cosmo.db.models import (
+                        PipelineBrick as BrickORM,
+                    )
+                    row = session.get(BrickORM, str(ref))
+                except Exception as exc:  # noqa: BLE001 — аудит не роняем
+                    try:
+                        session.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    unresolved.append({
+                        "ref": str(ref),
+                        "reason": f"catalog lookup failed: {exc}",
+                    })
+                    continue
+                if row is None:
+                    unresolved.append({
+                        "ref": str(ref),
+                        "reason": "brick not found in catalog",
+                    })
+                    continue
+                definition = (
+                    row.definition_json if isinstance(row.definition_json, dict) else {}
+                )
+                brick: dict[str, Any] = {
+                    "name": str(row.name or ref),
+                    "definition": definition,
+                }
+                depends_on = getattr(row, "depends_on", None)
+                if isinstance(depends_on, list) and depends_on:
+                    brick["depends_on"] = [str(d) for d in depends_on]
+                resolved.append(brick)
+        finally:
+            if session is not None:
+                session.close()
+        return resolved, unresolved
 
     def _update_batch_pg(self, batch_id: str, status: str) -> None:
         if self._db_session_factory is None:
